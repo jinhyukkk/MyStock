@@ -9,7 +9,7 @@ export interface SignalRow {
   close: number | null; change_pct: number | null;
   swing_score: number; swing_grade: string;
   longterm_score: number; longterm_grade: string;
-  grade_changed: boolean; is_holding: boolean;
+  grade_changed: boolean; is_holding: boolean; in_watchlist: boolean;
   context_note: string | null; summary: string | null;
 }
 export interface RuleAlert { symbol: string; name: string; rule_type: string; value: number; message: string }

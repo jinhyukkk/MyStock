@@ -6,11 +6,21 @@ import pandas as pd
 from app import db, fetchers, indicators, portfolio, scoring, sentiment
 
 
+def _active_tickers(conn):
+    """워치리스트에 있거나 현재 보유 중인 종목 (보유 종목 + 관심 종목)."""
+    holdings = _holdings_map(conn)
+    watch = {t["symbol"]: t for t in db.list_tickers(conn, watchlist_only=True)}
+    for t in db.list_tickers(conn):
+        if t["symbol"] in holdings:
+            watch.setdefault(t["symbol"], t)
+    return list(watch.values())
+
+
 def refresh_all(conn) -> dict:
     senti = sentiment.fetch_sentiment()
     db.set_meta(conn, "sentiment", json.dumps(senti))
     failed_tickers = []
-    for t in db.list_tickers(conn):
+    for t in _active_tickers(conn):
         try:
             df = fetchers.fetch_ohlcv(t["symbol"], t["market"],
                                       yf_symbol=t["yf_symbol"], days=400)
@@ -103,8 +113,9 @@ def get_sentiment_view(conn) -> dict:
 def get_dashboard(conn) -> dict:
     senti = get_sentiment_view(conn)
     holdings = _holdings_map(conn)
+    active = _active_tickers(conn)
     prices, signals = {}, []
-    for t in db.list_tickers(conn):
+    for t in active:
         close, change = _latest_close_and_change(conn, t["symbol"])
         if close is not None:
             prices[t["symbol"]] = close
@@ -121,11 +132,12 @@ def get_dashboard(conn) -> dict:
             "longterm_grade": scoring.grade(sig["longterm_score"]),
             "grade_changed": prev_grade is not None and prev_grade != sig["grade"],
             "is_holding": t["symbol"] in holdings,
+            "in_watchlist": bool(t["in_watchlist"]),
             "context_note": details.get("context_note"),
             "summary": details.get("summary"),
         })
     signals.sort(key=lambda s: -abs(s["swing_score"]))
-    tickers_map = {t["symbol"]: dict(t) for t in db.list_tickers(conn)}
+    tickers_map = {t["symbol"]: dict(t) for t in active}
     pf = portfolio.build_portfolio(holdings, prices, tickers_map, senti.get("usdkrw"))
     avg_prices = {s: h["avg_price"] for s, h in holdings.items()}
     return {

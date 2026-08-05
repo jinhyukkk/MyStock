@@ -32,6 +32,33 @@ def test_watchlist_flow(client):
     assert d["sentiment"]["cnn_fg"] == 60
     assert client.delete("/api/watchlist/005930").status_code == 200
 
+def test_removed_ticker_disappears_from_dashboard(client):
+    client.post("/api/watchlist", json={"symbol": "005930", "name": "삼성전자",
+                                        "market": "KR", "is_etf": 0,
+                                        "yf_symbol": "005930.KS", "currency": "KRW"})
+    client.post("/api/refresh")
+    d = client.get("/api/dashboard").json()
+    assert len(d["signals"]) == 1
+    assert client.delete("/api/watchlist/005930").status_code == 200
+    d2 = client.get("/api/dashboard").json()
+    assert len(d2["signals"]) == 0
+
+
+def test_held_ticker_stays_after_watchlist_removal(client):
+    client.post("/api/watchlist", json={"symbol": "005930", "name": "삼성전자",
+                                        "market": "KR", "is_etf": 0,
+                                        "yf_symbol": "005930.KS", "currency": "KRW"})
+    client.post("/api/refresh")
+    client.post("/api/trades", json={"symbol": "005930", "side": "BUY",
+                                     "quantity": 10, "price": 70000,
+                                     "trade_date": "2026-01-05"})
+    client.delete("/api/watchlist/005930")
+    d = client.get("/api/dashboard").json()
+    assert len(d["signals"]) == 1
+    assert d["signals"][0]["is_holding"] is True
+    assert d["signals"][0]["in_watchlist"] is False
+
+
 def test_search(client):
     out = client.get("/api/search", params={"q": "삼성"}).json()
     assert out[0]["symbol"] == "005930"

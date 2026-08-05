@@ -53,6 +53,49 @@ def test_rule_alerts(conn):
     assert len(d["rule_alerts"]) == 1
     assert d["rule_alerts"][0]["rule_type"] == "TARGET"
 
+def test_signal_includes_in_watchlist_flag(conn):
+    service.refresh_all(conn)
+    d = service.get_dashboard(conn)
+    for s in d["signals"]:
+        assert "in_watchlist" in s
+    assert all(s["in_watchlist"] for s in d["signals"])
+
+
+def test_removed_ticker_drops_from_dashboard(conn):
+    service.refresh_all(conn)
+    db.remove_from_watchlist(conn, "AAPL")
+    d = service.get_dashboard(conn)
+    symbols = [s["symbol"] for s in d["signals"]]
+    assert "AAPL" not in symbols
+    assert "005930" in symbols
+
+
+def test_removed_ticker_not_polled_on_refresh(conn, monkeypatch):
+    service.refresh_all(conn)
+    db.remove_from_watchlist(conn, "AAPL")
+    calls = []
+    orig = fetchers.fetch_ohlcv
+
+    def track(symbol, market, **k):
+        calls.append(symbol)
+        return orig(symbol, market, **k)
+
+    monkeypatch.setattr(fetchers, "fetch_ohlcv", track)
+    service.refresh_all(conn)
+    assert "AAPL" not in calls
+    assert "005930" in calls
+
+
+def test_held_but_removed_ticker_still_in_dashboard(conn):
+    service.refresh_all(conn)
+    db.remove_from_watchlist(conn, "AAPL")
+    db.insert_trade(conn, "AAPL", "BUY", 1, 100, "2026-01-01")
+    d = service.get_dashboard(conn)
+    aapl = next(s for s in d["signals"] if s["symbol"] == "AAPL")
+    assert aapl["is_holding"] is True
+    assert aapl["in_watchlist"] is False
+
+
 def test_ticker_detail(conn):
     service.refresh_all(conn)
     detail = service.get_ticker_detail(conn, "005930")

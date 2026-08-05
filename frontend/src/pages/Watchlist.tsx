@@ -52,7 +52,7 @@ export default function Watchlist() {
         <table>
           <thead><tr><th>종목</th><th>스윙</th><th>중장기</th><th></th></tr></thead>
           <tbody>
-            {dash?.signals.map(s => (
+            {dash?.signals.filter(s => s.in_watchlist).map(s => (
               <tr key={s.symbol}>
                 <td><Link to={`/ticker/${s.symbol}`}><strong>{s.name}</strong>
                   <span style={{ color: 'var(--text-dim)', fontSize: 12 }}> {s.symbol}</span></Link></td>
