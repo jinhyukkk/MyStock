@@ -1,0 +1,10 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pandas>=2.0
+finance-datareader>=0.9.50
+yfinance>=0.2.40
+requests>=2.31
+
+[dev]
+pytest>=8.0
+httpx>=0.27

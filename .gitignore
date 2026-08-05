@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+backend/mystock.db
+frontend/node_modules/
+frontend/dist/
+.pytest_cache/
