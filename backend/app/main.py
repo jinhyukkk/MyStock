@@ -30,6 +30,22 @@ def create_app(db_path: str | None = None, refresh_on_start: bool = True) -> Fas
 
     app = FastAPI(title="MyStock", lifespan=lifespan)
     app.include_router(router)
+
+    from pathlib import Path
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
+    dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
+    if dist.exists():
+        app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
+
+        @app.get("/{path:path}")
+        def spa(path: str):
+            file = dist / path
+            if path and file.is_file():
+                return FileResponse(file)
+            return FileResponse(dist / "index.html")
+
     return app
 
 
