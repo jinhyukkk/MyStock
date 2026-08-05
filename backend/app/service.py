@@ -146,7 +146,7 @@ def get_ticker_detail(conn, symbol) -> dict | None:
     candles = []
     if not df.empty:
         enriched = indicators.compute_indicators(df).tail(200)
-        enriched = enriched.where(pd.notna(enriched), None)
+        enriched = enriched.astype(object).where(pd.notna(enriched), None)
         for idx, row in enriched.iterrows():
             candles.append({"date": idx.strftime("%Y-%m-%d"), **{
                 k: (round(row[k], 4) if row[k] is not None else None)
