@@ -1,0 +1,64 @@
+import json
+import pytest
+from app import db, service, fetchers, sentiment
+
+FAKE_SENTI = {"vix": 20.0, "vkospi": None, "cnn_fg": 40, "crypto_fg": 55,
+              "usdkrw": 1300.0, "failed": ["vkospi"]}
+
+@pytest.fixture
+def conn(tmp_path, ohlcv_up, monkeypatch):
+    c = db.get_conn(str(tmp_path / "t.db"))
+    db.upsert_ticker(c, "005930", "KR", "삼성전자", in_watchlist=1, yf_symbol="005930.KS")
+    db.upsert_ticker(c, "AAPL", "US", "Apple", in_watchlist=1, yf_symbol="AAPL", currency="USD")
+    monkeypatch.setattr(fetchers, "fetch_ohlcv", lambda *a, **k: ohlcv_up)
+    monkeypatch.setattr(fetchers, "fetch_fundamentals", lambda *a, **k: {"per": 15.0})
+    monkeypatch.setattr(sentiment, "fetch_sentiment", lambda: dict(FAKE_SENTI))
+    yield c
+    c.close()
+
+def test_refresh_all_stores_signals(conn):
+    out = service.refresh_all(conn)
+    assert out["refreshed"] is True
+    assert db.get_latest_signal(conn, "005930") is not None
+    assert db.get_meta(conn, "last_refresh")
+    assert json.loads(db.get_meta(conn, "sentiment"))["cnn_fg"] == 40
+
+def test_refresh_survives_single_ticker_failure(conn, monkeypatch):
+    orig = fetchers.fetch_ohlcv
+    monkeypatch.setattr(fetchers, "fetch_ohlcv",
+        lambda symbol, market, **k: (_ for _ in ()).throw(RuntimeError("down"))
+        if symbol == "AAPL" else orig(symbol, market, **k))
+    out = service.refresh_all(conn)
+    assert "AAPL" in out["failed_tickers"]
+    assert db.get_latest_signal(conn, "005930") is not None
+
+def test_dashboard_shape(conn):
+    service.refresh_all(conn)
+    d = service.get_dashboard(conn)
+    assert d["sentiment"]["cnn_fg_label"] == "공포"
+    assert len(d["signals"]) == 2
+    s = d["signals"][0]
+    for key in ["symbol", "name", "market", "close", "change_pct", "swing_score",
+                "swing_grade", "longterm_score", "longterm_grade",
+                "grade_changed", "is_holding"]:
+        assert key in s
+    assert d["last_refresh"]
+
+def test_rule_alerts(conn):
+    service.refresh_all(conn)
+    close = db.load_prices(conn, "005930").iloc[-1]["close"]
+    db.insert_rule(conn, "005930", "TARGET", close * 0.9)   # 이미 도달
+    db.insert_rule(conn, "005930", "STOP", close * 0.5)     # 미도달
+    d = service.get_dashboard(conn)
+    assert len(d["rule_alerts"]) == 1
+    assert d["rule_alerts"][0]["rule_type"] == "TARGET"
+
+def test_ticker_detail(conn):
+    service.refresh_all(conn)
+    detail = service.get_ticker_detail(conn, "005930")
+    assert detail["name"] == "삼성전자"
+    assert len(detail["candles"]) <= 200
+    assert {"date", "open", "close", "sma20", "rsi", "macd"} <= set(detail["candles"][-1])
+    assert detail["signal"]["swing_grade"]
+    assert detail["fundamentals"] == {"per": 15.0}
+    assert service.get_ticker_detail(conn, "NOPE") is None
