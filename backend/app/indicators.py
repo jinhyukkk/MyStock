@@ -10,7 +10,11 @@ def rsi(s: pd.Series, period: int = 14) -> pd.Series:
     gain = delta.clip(lower=0).ewm(alpha=1 / period, min_periods=period).mean()
     loss = (-delta.clip(upper=0)).ewm(alpha=1 / period, min_periods=period).mean()
     rs = gain / loss.replace(0, 1e-10)
-    return 100 - 100 / (1 + rs)
+    out = 100 - 100 / (1 + rs)
+    # Handle flat series: when both gain and loss are ~0, RSI should be neutral (50)
+    mask = (gain < 1e-12) & (loss < 1e-12)
+    out[mask & out.notna()] = 50.0
+    return out
 
 
 def macd(s: pd.Series, fast=12, slow=26, signal=9) -> pd.DataFrame:

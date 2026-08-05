@@ -18,6 +18,10 @@ def test_rsi_range(ohlcv_up):
     r = ind.rsi(ohlcv_up["close"]).dropna()
     assert ((r >= 0) & (r <= 100)).all()
 
+def test_rsi_flat_series_is_neutral():
+    flat = pd.Series([100.0] * 30)
+    assert ind.rsi(flat).iloc[-1] == 50.0
+
 def test_macd_shape(ohlcv_up):
     out = ind.macd(ohlcv_up["close"])
     assert list(out.columns) == ["macd", "macd_signal", "macd_hist"]
