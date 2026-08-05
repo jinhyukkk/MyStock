@@ -60,7 +60,7 @@ def fetch_fundamentals(yf_symbol: str) -> dict | None:
         return {
             "per": info.get("trailingPE"),
             "pbr": info.get("priceToBook"),
-            "dividend_yield": round(dy, 2) if dy else None,
+            "dividend_yield": round(dy, 2) if dy is not None else None,
             "market_cap": info.get("marketCap"),
         }
     except Exception:

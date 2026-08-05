@@ -29,6 +29,66 @@ def test_fetch_ohlcv_unknown_market():
     with pytest.raises(ValueError):
         fetchers.fetch_ohlcv("X", "LONDON")
 
+def test_fetch_ohlcv_crypto_pages_when_days_gt_200(monkeypatch):
+    page1 = [
+        {"candle_date_time_kst": "2025-06-10T09:00:00", "candle_date_time_utc": "2025-06-10T00:00:00",
+         "opening_price": 100.0, "high_price": 110.0, "low_price": 90.0, "trade_price": 105.0,
+         "candle_acc_trade_volume": 10.0},
+        {"candle_date_time_kst": "2025-06-09T09:00:00", "candle_date_time_utc": "2025-06-09T00:00:00",
+         "opening_price": 99.0, "high_price": 108.0, "low_price": 89.0, "trade_price": 104.0,
+         "candle_acc_trade_volume": 9.0},
+    ]
+    page2 = [
+        {"candle_date_time_kst": "2025-06-01T09:00:00", "candle_date_time_utc": "2025-06-01T00:00:00",
+         "opening_price": 80.0, "high_price": 85.0, "low_price": 75.0, "trade_price": 82.0,
+         "candle_acc_trade_volume": 5.0},
+        {"candle_date_time_kst": "2025-05-31T09:00:00", "candle_date_time_utc": "2025-05-31T00:00:00",
+         "opening_price": 78.0, "high_price": 83.0, "low_price": 74.0, "trade_price": 80.0,
+         "candle_acc_trade_volume": 4.0},
+    ]
+
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return list(self._payload)
+
+    def fake_get(url, params=None, timeout=None):
+        calls.append(params)
+        if params is not None and "to" in params:
+            return FakeResponse(page2)
+        return FakeResponse(page1)
+
+    monkeypatch.setattr(fetchers.requests, "get", fake_get)
+
+    df = fetchers.fetch_ohlcv("KRW-BTC", "CRYPTO", days=250)
+
+    assert len(calls) == 2
+    assert calls[1]["to"] == page1[-1]["candle_date_time_utc"]
+    assert len(df) == len(page1) + len(page2)
+
+def test_fetch_fundamentals_zero_dividend_yield_is_not_none(monkeypatch):
+    import sys
+    import types
+
+    class FakeTicker:
+        def __init__(self, symbol):
+            self.info = {"trailingPE": 10.0, "priceToBook": 1.0,
+                        "dividendYield": 0.0, "marketCap": 123}
+
+    fake_yf = types.ModuleType("yfinance")
+    fake_yf.Ticker = FakeTicker
+    monkeypatch.setitem(sys.modules, "yfinance", fake_yf)
+
+    result = fetchers.fetch_fundamentals("AAPL")
+    assert result["dividend_yield"] == 0.0
+
 @pytest.mark.smoke
 def test_smoke_fetch_kr():
     df = fetchers.fetch_ohlcv("005930", "KR", days=30)
