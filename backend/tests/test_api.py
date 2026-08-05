@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 from app import db, fetchers, sentiment
-from app.main import create_app
+from app.main import create_app, _safe_static_path
 
 FAKE_SENTI = {"vix": 18.0, "vkospi": None, "cnn_fg": 60, "crypto_fg": 50,
               "usdkrw": 1300.0, "failed": []}
@@ -69,3 +69,30 @@ def test_ticker_detail_ok(client):
     detail = client.get("/api/tickers/005930").json()
     assert detail["signal"]["swing_grade"]
     assert len(detail["candles"]) > 0
+
+
+@pytest.fixture
+def fake_dist(tmp_path):
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<html>spa-index</html>")
+    (dist / "assets" / "app.js").write_text("console.log(1)")
+    secret = tmp_path / "secret.txt"
+    secret.write_text("top-secret, must never be served")
+    return dist
+
+
+def test_safe_static_path_blocks_traversal(fake_dist):
+    assert _safe_static_path(fake_dist, "../secret.txt") is None
+    assert _safe_static_path(fake_dist, "../../etc/passwd") is None
+    assert _safe_static_path(fake_dist, "..%2f..%2fsecret.txt") is None
+
+
+def test_safe_static_path_rejects_missing_or_empty(fake_dist):
+    assert _safe_static_path(fake_dist, "") is None
+    assert _safe_static_path(fake_dist, "nope.html") is None
+
+
+def test_safe_static_path_allows_real_file(fake_dist):
+    result = _safe_static_path(fake_dist, "assets/app.js")
+    assert result == (fake_dist / "assets" / "app.js").resolve()
