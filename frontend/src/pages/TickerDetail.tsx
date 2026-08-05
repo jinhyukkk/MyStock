@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { createChart, CandlestickSeries, LineSeries, LineStyle, type IChartApi } from 'lightweight-charts'
+import { createChart, CandlestickSeries, LineSeries, HistogramSeries, LineStyle, type IChartApi } from 'lightweight-charts'
 import { del, get, post } from '../api'
 import type { TickerDetail as Detail } from '../types'
 import SignalBadge from '../components/SignalBadge'
@@ -13,13 +13,16 @@ const CHART_OPTS = {
 } as const
 
 function useCandleChart(detail: Detail | null) {
-  const ref = useRef<HTMLDivElement>(null)
+  const mainRef = useRef<HTMLDivElement>(null)
+  const rsiRef = useRef<HTMLDivElement>(null)
+  const macdRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    if (!detail || !ref.current) return
+    if (!detail || !mainRef.current || !rsiRef.current || !macdRef.current) return
     const charts: IChartApi[] = []
-    const main = createChart(ref.current, { ...CHART_OPTS, height: 360 })
-    charts.push(main)
     const candles = detail.candles
+
+    const main = createChart(mainRef.current, { ...CHART_OPTS, height: 360 })
+    charts.push(main)
     main.addSeries(CandlestickSeries, {
       upColor: '#2ecc71', downColor: '#ff5252',
       wickUpColor: '#2ecc71', wickDownColor: '#ff5252', borderVisible: false,
@@ -39,9 +42,34 @@ function useCandleChart(detail: Detail | null) {
           .map(c => ({ time: c.date, value: c[key] as number })))
     }
     main.timeScale().fitContent()
+
+    const rsiChart = createChart(rsiRef.current, { ...CHART_OPTS, height: 120 })
+    charts.push(rsiChart)
+    const rsiSeries = rsiChart.addSeries(LineSeries, { color: '#f7c948', lineWidth: 1 as 1 })
+    rsiSeries.setData(candles.filter(c => c.rsi !== null)
+      .map(c => ({ time: c.date, value: c.rsi as number })))
+    for (const price of [70, 30]) {
+      rsiSeries.createPriceLine({ price, color: '#3a4356', lineStyle: LineStyle.Dashed, lineWidth: 1 })
+    }
+    rsiChart.timeScale().fitContent()
+
+    const macdChart = createChart(macdRef.current, { ...CHART_OPTS, height: 120 })
+    charts.push(macdChart)
+    macdChart.addSeries(HistogramSeries, {})
+      .setData(candles.filter(c => c.macd_hist !== null)
+        .map(c => ({ time: c.date, value: c.macd_hist as number,
+          color: (c.macd_hist as number) >= 0 ? 'rgba(46,204,113,.5)' : 'rgba(255,82,82,.5)' })))
+    macdChart.addSeries(LineSeries, { color: '#4f8ef7', lineWidth: 1 as 1 })
+      .setData(candles.filter(c => c.macd !== null)
+        .map(c => ({ time: c.date, value: c.macd as number })))
+    macdChart.addSeries(LineSeries, { color: '#ff8a65', lineWidth: 1 as 1 })
+      .setData(candles.filter(c => c.macd_signal !== null)
+        .map(c => ({ time: c.date, value: c.macd_signal as number })))
+    macdChart.timeScale().fitContent()
+
     return () => charts.forEach(c => c.remove())
   }, [detail])
-  return ref
+  return { mainRef, rsiRef, macdRef }
 }
 
 export default function TickerDetail() {
@@ -50,7 +78,7 @@ export default function TickerDetail() {
   const [error, setError] = useState<string | null>(null)
   const [ruleType, setRuleType] = useState('TARGET')
   const [ruleValue, setRuleValue] = useState('')
-  const chartRef = useCandleChart(detail)
+  const { mainRef, rsiRef, macdRef } = useCandleChart(detail)
 
   const load = () => get<Detail>(`/api/tickers/${symbol}`)
     .then(setDetail).catch(e => setError(String(e)))
@@ -94,7 +122,13 @@ export default function TickerDetail() {
       {sig?.context_note && <div className="card" style={{ color: 'var(--accent)' }}>
         💡 {sig.context_note}</div>}
 
-      <div className="card"><div ref={chartRef} /></div>
+      <div className="card">
+        <div ref={mainRef} />
+        <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 12 }}>RSI (14)</div>
+        <div ref={rsiRef} />
+        <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 12 }}>MACD (12,26,9)</div>
+        <div ref={macdRef} />
+      </div>
 
       {sig && <div className="card">
         <strong>시그널 근거</strong>
