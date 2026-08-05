@@ -11,6 +11,11 @@ def _fetch_yf_last(ticker: str) -> float:
     return float(hist["Close"].dropna().iloc[-1])
 
 
+def _fetch_vkospi() -> float:
+    import FinanceDataReader as fdr
+    return float(fdr.DataReader("VKOSPI").iloc[-1]["Close"])
+
+
 def fetch_sentiment() -> dict:
     out = {"vix": None, "vkospi": None, "cnn_fg": None, "crypto_fg": None,
            "usdkrw": None, "failed": []}
@@ -23,8 +28,7 @@ def fetch_sentiment() -> dict:
     except Exception:
         out["failed"].append("usdkrw")
     try:
-        import FinanceDataReader as fdr
-        out["vkospi"] = float(fdr.DataReader("VKOSPI").iloc[-1]["Close"])
+        out["vkospi"] = _fetch_vkospi()
     except Exception:
         out["failed"].append("vkospi")
     try:

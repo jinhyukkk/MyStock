@@ -41,6 +41,13 @@ def test_fetch_sentiment_survives_all_failures(monkeypatch):
     def boom(*a, **k): raise requests.ConnectionError("down")
     monkeypatch.setattr(requests, "get", boom)
     monkeypatch.setattr(sentiment, "_fetch_yf_last", lambda t: (_ for _ in ()).throw(RuntimeError))
+    monkeypatch.setattr(sentiment, "_fetch_vkospi", lambda: (_ for _ in ()).throw(RuntimeError))
     out = sentiment.fetch_sentiment()
     assert out["vix"] is None and out["cnn_fg"] is None
     assert len(out["failed"]) >= 3
+
+
+def test_adjust_extreme_fear_note_for_nonpositive_base():
+    senti = {"vix": None, "vkospi": None, "cnn_fg": 10, "crypto_fg": None, "failed": []}
+    adjusted, note = sentiment.adjust_score(-30, "US", senti)
+    assert note == "시장 극단적 공포 구간"
