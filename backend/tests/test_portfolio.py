@@ -35,3 +35,10 @@ def test_build_portfolio_missing_price():
     tickers = {"A": {"name": "가", "market": "KR", "currency": "KRW"}}
     out = portfolio.build_portfolio(holdings, {}, tickers, usdkrw=None)
     assert out["holdings"][0]["close"] is None  # 가격 없어도 죽지 않음
+
+
+def test_build_portfolio_default_fx_when_usdkrw_none():
+    holdings = {"AAPL": {"quantity": 10, "avg_price": 100.0}}
+    tickers = {"AAPL": {"name": "Apple", "market": "US", "currency": "USD"}}
+    out = portfolio.build_portfolio(holdings, {"AAPL": 150.0}, tickers, usdkrw=None)
+    assert out["totals"]["total_value_krw"] == 150.0 * 10 * 1400.0
