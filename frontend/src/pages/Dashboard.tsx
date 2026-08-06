@@ -91,30 +91,32 @@ export default function Dashboard() {
             워치리스트에 종목을 추가하면 시그널이 표시됩니다.</div>}
         <table>
           <thead><tr>
-            <th>종목</th><th>현재가</th><th>등락</th><th>스윙</th><th>스윙 점수</th>
-            <th>중장기</th><th>중장기 점수</th>
+            <th>종목</th><th>현재가</th><th>등락</th><th>스윙</th><th>중장기</th>
           </tr></thead>
           <tbody>
-            {data.signals.map(sig => (
+            {data.signals.map(sig => {
+              const summary = `${sig.summary ?? ''}${sig.context_note ? ` · ${sig.context_note}` : ''}`
+              return (
               <tr key={sig.symbol}>
                 <td>
                   <Link to={`/ticker/${sig.symbol}`}>
                     <strong>{sig.name}</strong>
                     {sig.is_holding && <span style={{ color: 'var(--accent)', fontSize: 11 }}> 보유</span>}
                     {sig.grade_changed && <span style={{ color: 'var(--buy-strong)', fontSize: 11 }}> 등급변경</span>}
-                    <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>
-                      {sig.summary}{sig.context_note ? ` · ${sig.context_note}` : ''}</div>
+                    <div className="signal-summary" title={summary}>{summary}</div>
                   </Link>
                 </td>
                 <td>{fmt(sig.close, sig.currency)}</td>
                 <td className={(sig.change_pct ?? 0) >= 0 ? 'pos' : 'neg'}>
                   {sig.change_pct === null ? '—' : `${sig.change_pct >= 0 ? '+' : ''}${sig.change_pct}%`}</td>
-                <td><SignalBadge grade={sig.swing_grade} /></td>
-                <td><ScoreBar score={sig.swing_score} /></td>
-                <td><SignalBadge grade={sig.longterm_grade} /></td>
-                <td><ScoreBar score={sig.longterm_score} /></td>
+                <td><div className="signal-cell">
+                  <SignalBadge grade={sig.swing_grade} /><ScoreBar score={sig.swing_score} />
+                </div></td>
+                <td><div className="signal-cell">
+                  <SignalBadge grade={sig.longterm_grade} /><ScoreBar score={sig.longterm_score} />
+                </div></td>
               </tr>
-            ))}
+            )})}
           </tbody>
         </table>
       </div>
