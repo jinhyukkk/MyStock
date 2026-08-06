@@ -7,16 +7,13 @@ const tabs = [
 export default function Layout() {
   return (
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: '20px 16px 60px' }}>
-      <header style={{ display: 'flex', alignItems: 'center', gap: 24, marginBottom: 20 }}>
-        <h1 style={{ fontSize: 20 }}>MyStock</h1>
+      <header className="topbar">
+        <h1 className="logo">MyStock</h1>
         <nav style={{ display: 'flex', gap: 4 }}>
           {tabs.map(t => (
             <NavLink key={t.to} to={t.to} end={t.to === '/'}
-              style={({ isActive }) => ({
-                padding: '6px 14px', borderRadius: 6,
-                color: isActive ? 'var(--text)' : 'var(--text-dim)',
-                background: isActive ? 'var(--bg-card)' : 'transparent',
-              })}>{t.label}</NavLink>
+              className={({ isActive }) => isActive ? 'tab active' : 'tab'}>
+              {t.label}</NavLink>
           ))}
         </nav>
       </header>

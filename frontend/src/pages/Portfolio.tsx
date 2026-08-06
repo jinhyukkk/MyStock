@@ -31,7 +31,15 @@ export default function Portfolio() {
     } catch (e) { setMsg(String(e)) }
   }
 
-  if (!pf) return <div className="card">불러오는 중…</div>
+  if (!pf) return (
+    <div className="grid">
+      <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
+        <div className="card skeleton" style={{ minHeight: 180 }} />
+        <div className="card skeleton" style={{ minHeight: 180 }} />
+      </div>
+      <div className="card skeleton" style={{ minHeight: 200 }} />
+    </div>
+  )
   const t = pf.totals
   return (
     <div className="grid">

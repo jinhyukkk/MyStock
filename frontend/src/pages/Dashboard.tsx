@@ -27,7 +27,15 @@ export default function Dashboard() {
   }
 
   if (error) return <div className="card">불러오기 실패: {error}</div>
-  if (!data) return <div className="card">불러오는 중…</div>
+  if (!data) return (
+    <div className="grid">
+      <div className="grid" style={{ gridTemplateColumns: '2fr 1fr' }}>
+        <div className="card skeleton" style={{ minHeight: 130 }} />
+        <div className="card skeleton" style={{ minHeight: 130 }} />
+      </div>
+      <div className="card skeleton" style={{ minHeight: 240 }} />
+    </div>
+  )
   const { sentiment: s, portfolio_summary: pf } = data
   const pnlCls = pf.total_pnl_krw >= 0 ? 'pos' : 'neg'
 

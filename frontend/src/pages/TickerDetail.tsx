@@ -85,7 +85,12 @@ export default function TickerDetail() {
   useEffect(() => { load() }, [symbol])
 
   if (error) return <div className="card">불러오기 실패: {error}</div>
-  if (!detail) return <div className="card">불러오는 중…</div>
+  if (!detail) return (
+    <div className="grid">
+      <div className="card skeleton" style={{ minHeight: 120 }} />
+      <div className="card skeleton" style={{ minHeight: 320 }} />
+    </div>
+  )
   const sig = detail.signal
   const last = detail.candles.at(-1)
 
