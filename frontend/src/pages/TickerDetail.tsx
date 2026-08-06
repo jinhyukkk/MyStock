@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { createChart, CandlestickSeries, LineSeries, HistogramSeries, LineStyle, type IChartApi } from 'lightweight-charts'
 import { del, get, post } from '../api'
-import type { TickerDetail as Detail } from '../types'
+import type { Backtest, TickerDetail as Detail } from '../types'
 import SignalBadge from '../components/SignalBadge'
 import ScoreBar from '../components/ScoreBar'
 
@@ -75,6 +75,7 @@ function useCandleChart(detail: Detail | null) {
 export default function TickerDetail() {
   const { symbol } = useParams()
   const [detail, setDetail] = useState<Detail | null>(null)
+  const [backtest, setBacktest] = useState<Backtest | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [ruleType, setRuleType] = useState('TARGET')
   const [ruleValue, setRuleValue] = useState('')
@@ -82,7 +83,11 @@ export default function TickerDetail() {
 
   const load = () => get<Detail>(`/api/tickers/${symbol}`)
     .then(setDetail).catch(e => setError(String(e)))
-  useEffect(() => { load() }, [symbol])
+  useEffect(() => {
+    load()
+    setBacktest(null)
+    get<Backtest>(`/api/tickers/${symbol}/backtest`).then(setBacktest).catch(() => {})
+  }, [symbol])
 
   if (error) return <div className="card">불러오기 실패: {error}</div>
   if (!detail) return (
@@ -106,7 +111,8 @@ export default function TickerDetail() {
                                      alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h2>{detail.name} <span style={{ color: 'var(--text-dim)', fontSize: 14 }}>
-            {detail.symbol} · {detail.market}{detail.is_etf ? ' · ETF' : ''}</span></h2>
+            {detail.symbol} · {detail.market}{detail.is_etf ? ' · ETF' : ''}
+            {sig?.regime_label ? ` · ${sig.regime_label}` : ''}</span></h2>
           {last && <div style={{ fontSize: 22, fontWeight: 700 }}>
             {last.close.toLocaleString('ko-KR')}</div>}
         </div>
@@ -147,6 +153,59 @@ export default function TickerDetail() {
                 <td>{s.scope === 'swing' ? '스윙' : '중장기'}</td>
                 <td><ScoreBar score={s.score} /></td>
                 <td style={{ textAlign: 'left' }}>{s.reason}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>}
+
+      {detail.risk && <div className="card">
+        <strong>리스크 관리 (ATR 기반)</strong>
+        <div style={{ display: 'flex', gap: 32, marginTop: 10, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>ATR (14일)</div>
+            <div style={{ fontWeight: 700 }}>{detail.risk.atr.toLocaleString('ko-KR')}
+              <span style={{ color: 'var(--text-dim)', fontSize: 12 }}> ({detail.risk.atr_pct}%)</span></div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>제안 손절가 (2×ATR)</div>
+            <div style={{ fontWeight: 700, color: 'var(--sell, #ff5252)' }}>
+              {detail.risk.stop_price.toLocaleString('ko-KR')}
+              <span style={{ fontSize: 12 }}> ({detail.risk.stop_pct}%)</span></div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>최대 낙폭 (400일)</div>
+            <div style={{ fontWeight: 700 }}>{detail.risk.mdd_pct}%</div>
+          </div>
+          {detail.risk.position_size_1pct !== null && <div>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>계좌 1% 리스크 수량</div>
+            <div style={{ fontWeight: 700 }}>{detail.risk.position_size_1pct.toLocaleString('ko-KR')}
+              <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+                {' '}(리스크 ₩{detail.risk.risk_budget_krw?.toLocaleString('ko-KR')})</span></div>
+          </div>}
+        </div>
+        <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 8 }}>
+          2×ATR 손절 기준, 계좌 총액의 1%만 잃는 수량. 진입 전 손절가를 먼저 정하세요.</div>
+      </div>}
+
+      {backtest && <div className="card">
+        <strong>시그널 백테스트</strong>
+        <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+          {' '}{backtest.start} ~ {backtest.end} · 표본 {backtest.samples}일 · 현재 스코어링 로직을 과거에 적용한 결과 (수수료·슬리피지 미반영)</span>
+        <table style={{ marginTop: 8 }}>
+          <thead><tr><th>등급</th><th>신호 일수</th><th>5일 평균</th><th>5일 승률</th>
+            <th>20일 평균</th><th>20일 승률</th></tr></thead>
+          <tbody>
+            {backtest.grades.map(g => (
+              <tr key={g.grade}>
+                <td><SignalBadge grade={g.grade} /></td>
+                <td>{g.n}</td>
+                <td className={(g.avg_fwd5 ?? 0) >= 0 ? 'pos' : 'neg'}>
+                  {g.avg_fwd5 === null ? '—' : `${g.avg_fwd5 >= 0 ? '+' : ''}${g.avg_fwd5}%`}</td>
+                <td>{g.win5 === null ? '—' : `${g.win5}%`}</td>
+                <td className={(g.avg_fwd20 ?? 0) >= 0 ? 'pos' : 'neg'}>
+                  {g.avg_fwd20 === null ? '—' : `${g.avg_fwd20 >= 0 ? '+' : ''}${g.avg_fwd20}%`}</td>
+                <td>{g.win20 === null ? '—' : `${g.win20}%`}</td>
               </tr>
             ))}
           </tbody>

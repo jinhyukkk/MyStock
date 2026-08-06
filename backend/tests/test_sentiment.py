@@ -10,30 +10,27 @@ def test_fg_label():
     assert sentiment.fg_label(None) == "정보 없음"
 
 
-def test_adjust_extreme_fear_boosts_buy():
+def test_note_extreme_fear_with_buy_signal():
     senti = {"vix": 35.0, "vkospi": None, "cnn_fg": 15, "crypto_fg": None, "failed": []}
-    adjusted, note = sentiment.adjust_score(40, "US", senti)
-    assert adjusted > 40           # 공포 = 역발상 가산
+    note = sentiment.context_note(40, "US", senti)
     assert "공포" in note and "VIX" in note
 
 
-def test_adjust_extreme_greed_dampens_buy():
+def test_note_extreme_greed_with_buy_signal():
     senti = {"vix": 12.0, "vkospi": None, "cnn_fg": 85, "crypto_fg": None, "failed": []}
-    adjusted, note = sentiment.adjust_score(40, "US", senti)
-    assert adjusted < 40
+    note = sentiment.context_note(40, "US", senti)
     assert "과열" in note
 
 
-def test_adjust_crypto_uses_crypto_fg():
+def test_note_crypto_uses_crypto_fg():
     senti = {"vix": None, "vkospi": None, "cnn_fg": None, "crypto_fg": 20, "failed": []}
-    adjusted, note = sentiment.adjust_score(0, "CRYPTO", senti)
-    assert adjusted == 6.0         # (50-20)/5
+    note = sentiment.context_note(0, "CRYPTO", senti)
+    assert note == "시장 극단적 공포 구간"
 
 
-def test_adjust_missing_sources_no_change():
+def test_note_missing_sources_none():
     senti = {"vix": None, "vkospi": None, "cnn_fg": None, "crypto_fg": None, "failed": ["cnn"]}
-    adjusted, note = sentiment.adjust_score(40, "US", senti)
-    assert adjusted == 40 and note is None
+    assert sentiment.context_note(40, "US", senti) is None
 
 
 def test_fetch_sentiment_survives_all_failures(monkeypatch):
@@ -47,7 +44,6 @@ def test_fetch_sentiment_survives_all_failures(monkeypatch):
     assert len(out["failed"]) >= 3
 
 
-def test_adjust_extreme_fear_note_for_nonpositive_base():
+def test_note_extreme_fear_for_nonpositive_base():
     senti = {"vix": None, "vkospi": None, "cnn_fg": 10, "crypto_fg": None, "failed": []}
-    adjusted, note = sentiment.adjust_score(-30, "US", senti)
-    assert note == "시장 극단적 공포 구간"
+    assert sentiment.context_note(-30, "US", senti) == "시장 극단적 공포 구간"

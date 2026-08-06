@@ -3,7 +3,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from app import db, fetchers, indicators, portfolio, scoring, sentiment
+from app import backtest, db, fetchers, indicators, portfolio, scoring, sentiment
 
 
 def _active_tickers(conn):
@@ -43,11 +43,8 @@ def _compute_and_store_signal(conn, ticker_row, senti):
         return
     enriched = indicators.compute_indicators(df)
     result = scoring.score_ticker(enriched)
-    adj_swing, note = sentiment.adjust_score(
+    result["context_note"] = sentiment.context_note(
         result["swing_score"], ticker_row["market"], senti)
-    result["swing_score"] = adj_swing
-    result["swing_grade"] = scoring.grade(adj_swing)
-    result["context_note"] = note
     date_str = df.index[-1].strftime("%Y-%m-%d")
     db.save_signal(conn, ticker_row["symbol"], date_str,
                    result["swing_score"], result["longterm_score"],
@@ -150,14 +147,75 @@ def get_dashboard(conn) -> dict:
     }
 
 
+def get_portfolio_view(conn) -> dict:
+    holdings = _holdings_map(conn)
+    prices = {}
+    for s in holdings:
+        close, _ = _latest_close_and_change(conn, s)
+        if close is not None:
+            prices[s] = close
+    tickers_map = {t["symbol"]: dict(t) for t in db.list_tickers(conn)}
+    fx = get_sentiment_view(conn).get("usdkrw")
+    pf = portfolio.build_portfolio(holdings, prices, tickers_map, fx)
+    trades = [dict(r) for r in db.list_trades(conn)]
+    realized = portfolio.realized_pnl(trades)
+    pf["realized"] = {"entries": realized[::-1][:50],
+                      "stats": portfolio.realized_stats(realized, tickers_map, fx)}
+    return pf
+
+
+def _risk_block(conn, enriched: pd.DataFrame, currency: str) -> dict | None:
+    """ATR 기반 손절 제안 + 계좌 1% 리스크 포지션 사이징 + 종목 MDD."""
+    last = enriched.iloc[-1]
+    atr = last.get("atr14")
+    if atr is None or pd.isna(atr) or not atr:
+        return None
+    close = float(last["close"])
+    atr = float(atr)
+    stop = close - 2 * atr
+    senti = get_sentiment_view(conn)
+    fx = (senti.get("usdkrw") or portfolio.DEFAULT_USDKRW) if currency == "USD" else 1.0
+    total = get_portfolio_view(conn)["totals"]["total_value_krw"]
+    risk_krw = total * 0.01
+    return {
+        "atr": round(atr, 4),
+        "atr_pct": round(atr / close * 100, 2),
+        "stop_price": round(stop, 4),
+        "stop_pct": round((stop / close - 1) * 100, 2),
+        "mdd_pct": round(indicators.max_drawdown_pct(enriched["close"]), 2),
+        # 계좌 총액의 1%만 잃도록 2×ATR 손절 기준 수량 (총액 없으면 None)
+        "position_size_1pct": round(risk_krw / (2 * atr * fx), 4) if total > 0 else None,
+        "risk_budget_krw": round(risk_krw, 0) if total > 0 else None,
+    }
+
+
+def get_backtest(conn, symbol) -> dict | None:
+    df = db.load_prices(conn, symbol)
+    if df.empty:
+        return None
+    last_date = df.index[-1].strftime("%Y-%m-%d")
+    cached = db.get_meta(conn, f"backtest:{symbol}")
+    if cached:
+        obj = json.loads(cached)
+        if obj.get("end") == last_date:
+            return obj
+    result = backtest.backtest_ticker(df)
+    if result:
+        db.set_meta(conn, f"backtest:{symbol}", json.dumps(result, ensure_ascii=False))
+    return result
+
+
 def get_ticker_detail(conn, symbol) -> dict | None:
     t = db.get_ticker(conn, symbol)
     if not t:
         return None
     df = db.load_prices(conn, symbol)
     candles = []
+    risk = None
     if not df.empty:
-        enriched = indicators.compute_indicators(df).tail(200)
+        full = indicators.compute_indicators(df)
+        risk = _risk_block(conn, full, t["currency"])
+        enriched = full.tail(200)
         enriched = enriched.astype(object).where(pd.notna(enriched), None)
         for idx, row in enriched.iterrows():
             candles.append({"date": idx.strftime("%Y-%m-%d"), **{
@@ -172,7 +230,7 @@ def get_ticker_detail(conn, symbol) -> dict | None:
         "symbol": symbol, "name": t["name"], "market": t["market"],
         "currency": t["currency"], "is_etf": t["is_etf"],
         "fundamentals": json.loads(fund_raw) if fund_raw else None,
-        "signal": signal, "candles": candles,
+        "signal": signal, "candles": candles, "risk": risk,
         "history": [{"date": r["date"], "swing_score": r["swing_score"],
                      "longterm_score": r["longterm_score"], "grade": r["grade"]}
                     for r in db.load_signal_history(conn, symbol)],

@@ -32,9 +32,13 @@ export interface TickerDetail {
   fundamentals: { per: number | null; pbr: number | null;
     dividend_yield: number | null; market_cap: number | null } | null;
   signal: { swing_score: number; swing_grade: string; longterm_score: number;
-    longterm_grade: string; indicator_scores: IndicatorScore[];
+    longterm_grade: string; regime?: string; regime_label?: string;
+    indicator_scores: IndicatorScore[];
     summary: string; context_note: string | null } | null;
   candles: Candle[];
+  risk: { atr: number; atr_pct: number; stop_price: number; stop_pct: number;
+    mdd_pct: number; position_size_1pct: number | null;
+    risk_budget_krw: number | null } | null;
   history: { date: string; swing_score: number; longterm_score: number; grade: string }[];
   rules: { id: number; symbol: string; rule_type: string; value: number }[];
 }
@@ -43,11 +47,28 @@ export interface Holding {
   quantity: number; avg_price: number; close: number | null;
   value: number | null; pnl: number | null; pnl_pct: number | null;
 }
+export interface RealizedEntry {
+  symbol: string; trade_date: string; quantity: number;
+  buy_price: number; sell_price: number; pnl: number; pnl_pct: number;
+}
+export interface RealizedStats {
+  count: number; total_pnl_krw: number; win_rate: number | null;
+  avg_win_pct: number | null; avg_loss_pct: number | null; payoff_ratio: number | null;
+}
 export interface Portfolio {
   holdings: Holding[];
   totals: { total_value_krw: number; total_cost_krw: number;
     total_pnl_krw: number; total_pnl_pct: number };
   allocation: { label: string; value_krw: number }[];
+  realized: { entries: RealizedEntry[]; stats: RealizedStats };
+}
+export interface BacktestGrade {
+  grade: string; n: number;
+  avg_fwd5: number | null; win5: number | null;
+  avg_fwd20: number | null; win20: number | null;
+}
+export interface Backtest {
+  samples: number; start: string; end: string; grades: BacktestGrade[];
 }
 export interface SearchResult {
   symbol: string; name: string; market: string; is_etf: number;

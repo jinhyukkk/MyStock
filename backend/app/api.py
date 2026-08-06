@@ -61,6 +61,17 @@ def ticker_detail(symbol: str, request: Request):
     return out
 
 
+@router.get("/tickers/{symbol}/backtest")
+def ticker_backtest(symbol: str, request: Request):
+    conn = _conn(request)
+    if not db.get_ticker(conn, symbol):
+        raise HTTPException(404, "ticker not found")
+    out = service.get_backtest(conn, symbol)
+    if out is None:
+        raise HTTPException(404, "가격 데이터 부족 — 새로고침 후 다시 시도")
+    return out
+
+
 @router.post("/watchlist")
 def add_watch(item: WatchItem, request: Request):
     conn = _conn(request)
@@ -98,18 +109,7 @@ def remove_trade(trade_id: int, request: Request):
 
 @router.get("/portfolio")
 def get_portfolio(request: Request):
-    conn = _conn(request)
-    from app.service import _holdings_map, _latest_close_and_change, get_sentiment_view
-    holdings = _holdings_map(conn)
-    prices = {}
-    for s in holdings:
-        close, _ = _latest_close_and_change(conn, s)
-        if close is not None:
-            prices[s] = close
-    tickers_map = {t["symbol"]: dict(t) for t in db.list_tickers(conn)}
-    from app import portfolio as pf
-    return pf.build_portfolio(holdings, prices, tickers_map,
-                              get_sentiment_view(conn).get("usdkrw"))
+    return service.get_portfolio_view(_conn(request))
 
 
 @router.get("/rules")

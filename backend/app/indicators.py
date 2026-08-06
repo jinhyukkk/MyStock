@@ -38,6 +38,17 @@ def stochastic(high, low, close, k_period=14, d_period=3, smooth=3) -> pd.DataFr
     return pd.DataFrame({"stoch_k": k, "stoch_d": d})
 
 
+def atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
+    prev = close.shift(1)
+    tr = pd.concat([high - low, (high - prev).abs(), (low - prev).abs()], axis=1).max(axis=1)
+    return tr.ewm(alpha=1 / period, min_periods=period).mean()
+
+
+def max_drawdown_pct(close: pd.Series) -> float:
+    """기간 내 최대 낙폭(%). 항상 0 이하."""
+    return float(((close / close.cummax()) - 1).min() * 100)
+
+
 def volume_ratio(volume: pd.Series, window=20) -> pd.Series:
     return volume / volume.shift(1).rolling(window).mean()
 
@@ -58,6 +69,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out = out.join(macd(df["close"]))
     out = out.join(bollinger(df["close"]))
     out = out.join(stochastic(df["high"], df["low"], df["close"]))
+    out["atr14"] = atr(df["high"], df["low"], df["close"])
     out["vol_ratio"] = volume_ratio(df["volume"])
     out["pos_52w"] = pos_52w(df["close"])
     return out

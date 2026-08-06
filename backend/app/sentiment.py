@@ -55,12 +55,12 @@ def fg_label(v) -> str:
     return "극단적 탐욕"
 
 
-def adjust_score(base: float, market: str, senti: dict):
+def context_note(base: float, market: str, senti: dict) -> str | None:
+    """시장 심리 참고 문구. 점수는 건드리지 않는다 — 검증 안 된 선형 보정으로
+    지표 점수를 왜곡하는 것보다 맥락 표기가 정직하다."""
     fg = senti.get("crypto_fg") if market == "CRYPTO" else senti.get("cnn_fg")
     notes = []
-    adjusted = base
     if fg is not None:
-        adjusted = max(-100.0, min(100.0, base + (50 - fg) / 5))
         if fg < 25 and base > 0:
             notes.append("시장 극단적 공포 — 역발상 매수 참고")
         elif fg < 25:
@@ -72,4 +72,4 @@ def adjust_score(base: float, market: str, senti: dict):
     vix = senti.get("vix")
     if market in ("US", "KR") and vix is not None and vix >= 30:
         notes.append(f"변동성(VIX {vix:.0f}) 높음 — 신중")
-    return round(adjusted, 1), (" · ".join(notes) or None)
+    return " · ".join(notes) or None

@@ -98,15 +98,43 @@ def _score_trend_slope(df):
     return 0, "120일선 횡보 — 장기 추세 중립"
 
 
+REGIME_LABELS = {"up": "상승 추세", "down": "하락 추세", "neutral": "추세 중립"}
+_MEANREV = ("rsi", "bollinger", "stoch")  # 평균회귀 성격 지표
+
+
+def _regime(row) -> str:
+    c, s60, s120 = row["close"], row["sma60"], row["sma120"]
+    if c > s60 > s120: return "up"
+    if c < s60 < s120: return "down"
+    return "neutral"
+
+
+def _apply_regime(parts: dict, regime: str) -> dict:
+    """추세 국면과 역행하는 평균회귀 신호는 반감 — 하락장 과매도 매수(떨어지는 칼),
+    상승장 과매수 매도(추세 이탈)를 그대로 믿지 않는다."""
+    if regime == "neutral":
+        return parts
+    out = dict(parts)
+    for k in _MEANREV:
+        score, reason = out[k]
+        if regime == "down" and score > 0:
+            out[k] = (score / 2, reason + " ⚠ 하락 추세 중 반등 신호 — 신뢰도 반감")
+        elif regime == "up" and score < 0:
+            out[k] = (score / 2, reason + " ⚠ 상승 추세 중 조정 신호 — 신뢰도 반감")
+    return out
+
+
 def score_ticker(df: pd.DataFrame) -> dict:
     if len(df.dropna(subset=["sma120"])) < 10:
         raise ValueError("insufficient data")
     last = df.iloc[-1]
+    regime = _regime(last)
     swing_parts = {
         "rsi": _score_rsi(last), "macd": _score_macd(df),
         "sma_cross": _score_sma_cross(df), "bollinger": _score_bollinger(last),
         "stoch": _score_stoch(last), "volume": _score_volume(df),
     }
+    swing_parts = _apply_regime(swing_parts, regime)
     long_parts = {
         "alignment": _score_alignment(last), "pos_52w": _score_pos_52w(last),
         "trend_slope": _score_trend_slope(df),
@@ -128,5 +156,6 @@ def score_ticker(df: pd.DataFrame) -> dict:
     return {
         "swing_score": round(swing, 1), "longterm_score": round(longterm, 1),
         "swing_grade": grade(swing), "longterm_grade": grade(longterm),
+        "regime": regime, "regime_label": REGIME_LABELS[regime],
         "indicator_scores": indicator_scores, "summary": summary,
     }

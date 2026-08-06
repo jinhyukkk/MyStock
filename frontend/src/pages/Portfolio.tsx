@@ -90,6 +90,52 @@ export default function Portfolio() {
         </table>
       </div>
 
+      {pf.realized && pf.realized.stats.count > 0 && <div className="card">
+        <strong>실현손익 · 매매 복기</strong>
+        <div style={{ display: 'flex', gap: 32, marginTop: 10, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>총 실현손익 (KRW 환산)</div>
+            <div className={pf.realized.stats.total_pnl_krw >= 0 ? 'pos' : 'neg'}
+                 style={{ fontWeight: 700, fontSize: 18 }}>
+              {pf.realized.stats.total_pnl_krw >= 0 ? '+' : ''}₩{fmt(pf.realized.stats.total_pnl_krw)}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>승률</div>
+            <div style={{ fontWeight: 700, fontSize: 18 }}>{pf.realized.stats.win_rate ?? '—'}%
+              <span style={{ color: 'var(--text-dim)', fontSize: 12 }}> ({pf.realized.stats.count}회)</span></div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>평균 수익 / 평균 손실</div>
+            <div style={{ fontWeight: 700, fontSize: 18 }}>
+              <span className="pos">{pf.realized.stats.avg_win_pct !== null ? `+${pf.realized.stats.avg_win_pct}%` : '—'}</span>
+              {' / '}
+              <span className="neg">{pf.realized.stats.avg_loss_pct !== null ? `${pf.realized.stats.avg_loss_pct}%` : '—'}</span></div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>손익비</div>
+            <div style={{ fontWeight: 700, fontSize: 18 }}>{pf.realized.stats.payoff_ratio ?? '—'}</div>
+          </div>
+        </div>
+        <table style={{ marginTop: 12 }}>
+          <thead><tr><th>매도일</th><th>심볼</th><th>수량</th><th>평단</th><th>매도가</th>
+            <th>실현손익</th><th>수익률</th></tr></thead>
+          <tbody>
+            {pf.realized.entries.map((r, i) => (
+              <tr key={i}>
+                <td style={{ textAlign: 'left' }}>{r.trade_date}</td>
+                <td>{r.symbol}</td>
+                <td>{fmt(r.quantity)}</td>
+                <td>{fmt(r.buy_price)}</td>
+                <td>{fmt(r.sell_price)}</td>
+                <td className={r.pnl >= 0 ? 'pos' : 'neg'}>{fmt(r.pnl)}</td>
+                <td className={r.pnl_pct >= 0 ? 'pos' : 'neg'}>
+                  {r.pnl_pct >= 0 ? '+' : ''}{r.pnl_pct}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>}
+
       <div className="card">
         <strong>매매 입력</strong>
         <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>

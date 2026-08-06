@@ -20,6 +20,30 @@ def test_full_sell_removes_holding():
     assert "A" not in h
 
 
+def test_realized_pnl_avg_cost_basis():
+    r = portfolio.realized_pnl([T("A", "BUY", 10, 100), T("A", "BUY", 10, 200),
+                                T("A", "SELL", 5, 300)])
+    assert len(r) == 1
+    assert r[0]["buy_price"] == 150 and r[0]["pnl"] == 750 and r[0]["pnl_pct"] == 100.0
+
+
+def test_realized_pnl_ignores_sell_without_holding():
+    assert portfolio.realized_pnl([T("A", "SELL", 5, 100)]) == []
+
+
+def test_realized_stats():
+    r = [{"symbol": "A", "pnl": 100, "pnl_pct": 10.0},
+         {"symbol": "A", "pnl": -50, "pnl_pct": -5.0}]
+    s = portfolio.realized_stats(r, {"A": {"currency": "KRW"}}, usdkrw=None)
+    assert s["count"] == 2 and s["win_rate"] == 50.0
+    assert s["total_pnl_krw"] == 50 and s["payoff_ratio"] == 2.0
+
+
+def test_realized_stats_empty():
+    s = portfolio.realized_stats([], {}, usdkrw=None)
+    assert s["count"] == 0 and s["win_rate"] is None
+
+
 def test_build_portfolio_usd_conversion():
     holdings = {"AAPL": {"quantity": 10, "avg_price": 100.0}}
     tickers = {"AAPL": {"name": "Apple", "market": "US", "currency": "USD"}}

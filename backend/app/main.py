@@ -9,7 +9,8 @@ from fastapi.staticfiles import StaticFiles
 from app import db, service
 from app.api import router
 
-REFRESH_INTERVAL = 6 * 60 * 60  # 6시간
+# ponytail: 1시간 폴링 — 손절/목표가 알림의 실시간성이 더 필요하면 텔레그램 푸시 추가
+REFRESH_INTERVAL = 60 * 60  # 1시간
 
 
 def _safe_static_path(dist: Path, path: str) -> Path | None:

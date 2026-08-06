@@ -47,10 +47,19 @@ def test_pos_52w(ohlcv_up):
     assert ((p >= 0) & (p <= 1)).all()
     assert p.iloc[-1] > 0.5  # 상승 추세면 상단
 
+def test_atr_positive_and_reasonable(ohlcv_up):
+    a = ind.atr(ohlcv_up["high"], ohlcv_up["low"], ohlcv_up["close"]).dropna()
+    assert (a > 0).all()
+    assert a.iloc[-1] < ohlcv_up["close"].iloc[-1] * 0.2  # ATR이 가격의 20% 미만
+
+def test_max_drawdown_pct():
+    s = pd.Series([100.0, 120.0, 60.0, 90.0])
+    assert ind.max_drawdown_pct(s) == -50.0
+
 def test_compute_indicators_columns(ohlcv_up):
     out = ind.compute_indicators(ohlcv_up)
     for col in ["sma20", "sma60", "sma120", "rsi", "macd", "macd_signal",
                 "macd_hist", "bb_mid", "bb_upper", "bb_lower",
-                "stoch_k", "stoch_d", "vol_ratio", "pos_52w"]:
+                "stoch_k", "stoch_d", "vol_ratio", "pos_52w", "atr14"]:
         assert col in out.columns
     assert len(out) == len(ohlcv_up)
