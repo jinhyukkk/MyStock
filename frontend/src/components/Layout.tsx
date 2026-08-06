@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom'
+import CommandPalette from './CommandPalette'
 
 const tabs = [
   { to: '/', label: '대시보드' }, { to: '/portfolio', label: '포트폴리오' },
@@ -16,7 +17,13 @@ export default function Layout() {
               {t.label}</NavLink>
           ))}
         </nav>
+        <button className="ghost" style={{ marginLeft: 'auto', fontSize: 12 }}
+          onClick={() => window.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }))}>
+          검색 <kbd style={{ fontFamily: 'inherit' }}>Ctrl K</kbd>
+        </button>
       </header>
+      <CommandPalette />
       <Outlet />
       <footer style={{ marginTop: 40, color: 'var(--text-dim)', fontSize: 12,
                        textAlign: 'center' }}>
