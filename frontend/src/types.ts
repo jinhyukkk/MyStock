@@ -11,6 +11,7 @@ export interface SignalRow {
   longterm_score: number; longterm_grade: string;
   grade_changed: boolean; is_holding: boolean; in_watchlist: boolean;
   context_note: string | null; summary: string | null;
+  summary_tags: { label: string; score: number; warn: boolean }[];
 }
 export interface RuleAlert { symbol: string; name: string; rule_type: string; value: number; message: string }
 export interface Dashboard {

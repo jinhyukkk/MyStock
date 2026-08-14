@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import datetime
 
 import requests
@@ -160,6 +161,24 @@ def get_sentiment_view(conn) -> dict:
     return senti
 
 
+def summary_tags(details: dict) -> list[dict]:
+    """저장된 indicator_scores에서 상위 3개 근거를 짧은 태그로 가공.
+    reason 형식 "지표값 — 해석 (부연)" 에서 해석만 남긴다."""
+    tags = []
+    for it in sorted(details.get("indicator_scores", []),
+                     key=lambda x: -abs(x["score"])):
+        if it["score"] == 0 or len(tags) >= 3:
+            continue
+        base, *warn = it["reason"].split(" ⚠ ")
+        if " — " in base:
+            tail = base.split(" — ", 1)[1]
+            # 해석문이 지표명으로 시작하면 접두어 생략 ("장기 추세: 장기 상승 추세" 방지)
+            base = tail if it["name"].split()[0] in tail else f"{it['name']}: {tail}"
+        base = re.sub(r"\s*\([^)]*\)$", "", base)
+        tags.append({"label": base, "score": it["score"], "warn": bool(warn)})
+    return tags
+
+
 def get_dashboard(conn) -> dict:
     senti = get_sentiment_view(conn)
     holdings = _holdings_map(conn)
@@ -185,6 +204,7 @@ def get_dashboard(conn) -> dict:
             "in_watchlist": bool(t["in_watchlist"]),
             "context_note": details.get("context_note"),
             "summary": details.get("summary"),
+            "summary_tags": summary_tags(details),
         })
     signals.sort(key=lambda s: -abs(s["swing_score"]))
     tickers_map = {t["symbol"]: dict(t) for t in active}

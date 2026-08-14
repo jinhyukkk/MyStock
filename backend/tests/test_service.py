@@ -44,6 +44,31 @@ def test_dashboard_shape(conn):
         assert key in s
     assert d["last_refresh"]
 
+def test_summary_tags_shortened_and_ranked():
+    details = {"indicator_scores": [
+        {"name": "RSI", "score": 80, "reason": "RSI 28 — 과매도 구간 (반등 가능성)"},
+        {"name": "MACD", "score": -40,
+         "reason": "MACD 히스토그램 음(-) — 하락 모멘텀 유지 ⚠ 상승 추세 중 조정 신호 — 신뢰도 반감"},
+        {"name": "거래량", "score": 0, "reason": "거래량 평균 수준 (100%)"},
+        {"name": "볼린저밴드", "score": 30, "reason": "볼린저밴드 하단 근접"},
+        {"name": "스토캐스틱", "score": 40, "reason": "스토캐스틱 15 — 과매도권"},
+        {"name": "이평선 배열", "score": 70, "reason": "주가 > 60일선 > 120일선 — 중장기 정배열"},
+    ]}
+    tags = service.summary_tags(details)
+    assert len(tags) == 3  # 0점 제외, |score| 상위 3개만
+    assert tags[0] == {"label": "RSI: 과매도 구간", "score": 80, "warn": False}
+    assert tags[1]["label"] == "이평선 배열: 중장기 정배열"
+    assert tags[2]["warn"] is True  # 국면 반감 경고 분리
+    assert service.summary_tags({}) == []  # 과거 데이터 폴백
+
+
+def test_dashboard_includes_summary_tags(conn):
+    service.refresh_all(conn)
+    d = service.get_dashboard(conn)
+    for s in d["signals"]:
+        assert isinstance(s["summary_tags"], list) and len(s["summary_tags"]) <= 3
+
+
 def test_rule_alerts(conn):
     service.refresh_all(conn)
     close = db.load_prices(conn, "005930").iloc[-1]["close"]

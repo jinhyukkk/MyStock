@@ -95,7 +95,7 @@ export default function Dashboard() {
           </tr></thead>
           <tbody>
             {data.signals.map(sig => {
-              const summary = `${sig.summary ?? ''}${sig.context_note ? ` · ${sig.context_note}` : ''}`
+              const tooltip = `${sig.summary ?? ''}${sig.context_note ? ` · ${sig.context_note}` : ''}`
               return (
               <tr key={sig.symbol}>
                 <td>
@@ -103,7 +103,18 @@ export default function Dashboard() {
                     <strong>{sig.name}</strong>
                     {sig.is_holding && <span style={{ color: 'var(--accent)', fontSize: 11 }}> 보유</span>}
                     {sig.grade_changed && <span style={{ color: 'var(--buy-strong)', fontSize: 11 }}> 등급변경</span>}
-                    <div className="signal-summary" title={summary}>{summary}</div>
+                    <div className="sig-tags" title={tooltip}>
+                      {sig.summary_tags?.length
+                        ? sig.summary_tags.map((t, i) => (
+                            <span key={i} className={
+                              `sig-tag ${t.score > 0 ? 'buy' : 'sell'}${Math.abs(t.score) >= 60 ? ' strong' : ''}`}>
+                              {t.score > 0 ? '▲' : '▼'} {t.label}{t.warn && ' ⚠'}
+                            </span>
+                          ))
+                        : <span className="signal-summary">{sig.summary ?? '뚜렷한 시그널 없음'}</span>}
+                      {sig.context_note &&
+                        <span className="sig-tag note">{sig.context_note}</span>}
+                    </div>
                   </Link>
                 </td>
                 <td>{fmt(sig.close, sig.currency)}</td>
