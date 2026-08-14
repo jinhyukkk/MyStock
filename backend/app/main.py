@@ -1,4 +1,5 @@
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -11,6 +12,23 @@ from app.api import router
 
 # ponytail: 1시간 폴링 — 손절/목표가 알림의 실시간성이 더 필요하면 텔레그램 푸시 추가
 REFRESH_INTERVAL = 60 * 60  # 1시간
+
+ROOT = Path(__file__).parent.parent.parent
+
+
+def _load_env(path: Path) -> None:
+    """루트 .env 로드 (이미 설정된 환경 변수가 우선). python-dotenv 불필요."""
+    if not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+
+
+_load_env(ROOT / ".env")
 
 
 def _safe_static_path(dist: Path, path: str) -> Path | None:
@@ -46,7 +64,7 @@ def create_app(db_path: str | None = None, refresh_on_start: bool = True) -> Fas
     app = FastAPI(title="MyStock", lifespan=lifespan)
     app.include_router(router)
 
-    dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
+    dist = ROOT / "frontend" / "dist"
     if dist.exists():
         app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
 

@@ -1,7 +1,12 @@
+import os
+from datetime import date, timedelta
+
 import requests
 
 CNN_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
 ALT_URL = "https://api.alternative.me/fng/?limit=1"
+# 파생상품지수 일별시세 (VKOSPI 포함) — 무료 키: https://openapi.krx.co.kr
+KRX_VKOSPI_URL = "https://data-dbg.krx.co.kr/svc/apis/idx/drvprod_dd_trd"
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 
 
@@ -12,8 +17,20 @@ def _fetch_yf_last(ticker: str) -> float:
 
 
 def _fetch_vkospi() -> float:
-    import FinanceDataReader as fdr
-    return float(fdr.DataReader("VKOSPI").iloc[-1]["Close"])
+    """KRX 오픈API에서 VKOSPI 종가. 야후·네이버·다음은 VKOSPI 미제공,
+    KRX 정보데이터시스템은 로그인 필수라 오픈API(키 필요)가 유일한 안정 경로."""
+    key = os.environ["KRX_API_KEY"]
+    d = date.today()
+    for _ in range(7):  # 휴장일·미산출일은 하루씩 거슬러 올라간다
+        r = requests.get(KRX_VKOSPI_URL, headers={"AUTH_KEY": key},
+                         params={"basDd": d.strftime("%Y%m%d")}, timeout=10)
+        r.raise_for_status()
+        for row in r.json().get("OutBlock_1") or []:
+            # "변동성" 포함 지수가 6종 이상이라 부분 일치는 위험 — 정확한 이름만
+            if str(row.get("IDX_NM", "")).replace(" ", "") == "코스피200변동성지수":
+                return float(str(row["CLSPRC_IDX"]).replace(",", ""))
+        d -= timedelta(days=1)
+    raise RuntimeError("KRX 응답에 VKOSPI 없음")
 
 
 def fetch_sentiment() -> dict:
@@ -27,10 +44,11 @@ def fetch_sentiment() -> dict:
         out["usdkrw"] = _fetch_yf_last("KRW=X")
     except Exception:
         out["failed"].append("usdkrw")
-    try:
-        out["vkospi"] = _fetch_vkospi()
-    except Exception:
-        out["failed"].append("vkospi")
+    if os.environ.get("KRX_API_KEY"):  # 키 미설정이면 시도·경고 모두 생략
+        try:
+            out["vkospi"] = _fetch_vkospi()
+        except Exception:
+            out["failed"].append("vkospi")
     try:
         r = requests.get(CNN_URL, headers=_HEADERS, timeout=10)
         r.raise_for_status()

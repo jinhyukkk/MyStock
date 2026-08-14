@@ -6,3 +6,4 @@ backend/mystock.db
 frontend/node_modules/
 frontend/dist/
 .pytest_cache/
+.env
