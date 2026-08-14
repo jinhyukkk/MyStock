@@ -53,13 +53,13 @@ export default function Dashboard() {
           </div>
         </div>
         <div className="card">
-          <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>포트폴리오 평가액 (KRW 환산)</div>
-          <div style={{ fontSize: 24, fontWeight: 700 }}>{fmt(pf.total_value_krw)}</div>
+          <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>총자산 (평가액+예수금, KRW 환산)</div>
+          <div style={{ fontSize: 24, fontWeight: 700 }}>{fmt(pf.total_asset_krw)}</div>
           <div className={pnlCls}>
             {pf.total_pnl_krw >= 0 ? '+' : ''}{fmt(pf.total_pnl_krw)} ({pf.total_pnl_pct}%)
           </div>
           <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 4 }}>
-            보유 {pf.holdings_count}종목</div>
+            평가액 {fmt(pf.total_value_krw)} · 현금 {fmt(pf.cash_krw)} ({pf.cash_pct}%) · 보유 {pf.holdings_count}종목</div>
         </div>
       </div>
 
