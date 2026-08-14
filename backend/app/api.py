@@ -1,5 +1,7 @@
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app import db, fetchers, service
 
@@ -17,9 +19,9 @@ class WatchItem(BaseModel):
 
 class TradeIn(BaseModel):
     symbol: str
-    side: str
-    quantity: float
-    price: float
+    side: Literal["BUY", "SELL"]
+    quantity: float = Field(gt=0)
+    price: float = Field(gt=0)
     trade_date: str
 
 
@@ -44,8 +46,8 @@ def dashboard(request: Request):
 
 
 @router.post("/refresh")
-def refresh(request: Request):
-    return service.refresh_all(_conn(request))
+def refresh(request: Request, symbol: str | None = None):
+    return service.refresh_all(_conn(request), symbol)
 
 
 @router.get("/search")

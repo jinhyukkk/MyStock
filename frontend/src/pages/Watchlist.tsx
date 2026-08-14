@@ -9,6 +9,7 @@ export default function Watchlist() {
   const [results, setResults] = useState<SearchResult[]>([])
   const [dash, setDash] = useState<Dashboard | null>(null)
   const [busy, setBusy] = useState(false)
+  const [adding, setAdding] = useState<string | null>(null)  // 추가 진행 중인 심볼
 
   const load = () => get<Dashboard>('/api/dashboard').then(setDash)
   useEffect(() => { load() }, [])
@@ -21,9 +22,13 @@ export default function Watchlist() {
   }
 
   const add = async (r: SearchResult) => {
-    await post('/api/watchlist', r)
-    await post('/api/refresh')     // 새 종목 시세·시그널 즉시 계산
-    setResults([]); setQ(''); load()
+    setAdding(r.symbol)
+    try {
+      await post('/api/watchlist', r)
+      // 새 종목만 갱신 — 전체 갱신은 수 초 걸림
+      await post(`/api/refresh?symbol=${encodeURIComponent(r.symbol)}`)
+      setResults([]); setQ(''); load()
+    } finally { setAdding(null) }
   }
 
   return (
@@ -42,7 +47,8 @@ export default function Watchlist() {
                         padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
             <span>{r.name} <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
               {r.symbol} · {r.market}{r.is_etf ? ' · ETF' : ''}</span></span>
-            <button className="ghost" onClick={() => add(r)}>+ 추가</button>
+            <button className="ghost" onClick={() => add(r)} disabled={adding !== null}>
+              {adding === r.symbol ? '추가 중…' : '+ 추가'}</button>
           </div>
         ))}
       </div>

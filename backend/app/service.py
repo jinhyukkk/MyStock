@@ -16,11 +16,18 @@ def _active_tickers(conn):
     return list(watch.values())
 
 
-def refresh_all(conn) -> dict:
-    senti = sentiment.fetch_sentiment()
-    db.set_meta(conn, "sentiment", json.dumps(senti))
+def refresh_all(conn, symbol: str | None = None) -> dict:
+    """symbol 지정 시 해당 종목만 갱신 — 종목 추가 직후 전체 갱신(수 초) 대신 사용."""
+    if symbol is None:
+        senti = sentiment.fetch_sentiment()
+        db.set_meta(conn, "sentiment", json.dumps(senti))
+        targets = _active_tickers(conn)
+    else:
+        senti = get_sentiment_view(conn)  # 심리지표는 저장분 재사용
+        t = db.get_ticker(conn, symbol)
+        targets = [t] if t else []
     failed_tickers = []
-    for t in _active_tickers(conn):
+    for t in targets:
         try:
             df = fetchers.fetch_ohlcv(t["symbol"], t["market"],
                                       yf_symbol=t["yf_symbol"], days=400)
@@ -32,8 +39,9 @@ def refresh_all(conn) -> dict:
                     db.set_meta(conn, f"fund:{t['symbol']}", json.dumps(fund))
         except Exception:
             failed_tickers.append(t["symbol"])
-    db.set_meta(conn, "last_refresh", datetime.now().isoformat(timespec="seconds"))
-    return {"refreshed": True, "failed_sources": senti["failed"],
+    if symbol is None:  # 단일 갱신은 전체 기준 시각을 건드리지 않는다
+        db.set_meta(conn, "last_refresh", datetime.now().isoformat(timespec="seconds"))
+    return {"refreshed": True, "failed_sources": senti.get("failed", []),
             "failed_tickers": failed_tickers}
 
 
