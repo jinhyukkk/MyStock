@@ -80,8 +80,10 @@ def realized_stats(realized: list, tickers: dict, usdkrw) -> dict:
 
 
 def build_portfolio(holdings: dict, prices: dict, tickers: dict, usdkrw,
-                    cash_krw: float = 0.0) -> dict:
+                    cash_krw: float = 0.0, cash_usd: float = 0.0) -> dict:
     fx = usdkrw or DEFAULT_USDKRW
+    cash_usd_krw = cash_usd * fx
+    cash_total_krw = cash_krw + cash_usd_krw
     rows, alloc = [], {}
     total_value = total_cost = 0.0
     for symbol, h in holdings.items():
@@ -102,18 +104,20 @@ def build_portfolio(holdings: dict, prices: dict, tickers: dict, usdkrw,
                      "market": info.get("market"), "currency": currency,
                      "quantity": h["quantity"], "avg_price": h["avg_price"],
                      "close": close, "value": value, "pnl": pnl, "pnl_pct": pnl_pct})
-    total_asset = total_value + cash_krw
+    total_asset = total_value + cash_total_krw
     totals = {"total_value_krw": round(total_value, 0),
               "total_cost_krw": round(total_cost, 0),
               "total_pnl_krw": round(total_value - total_cost, 0),
               "total_pnl_pct": round((total_value / total_cost - 1) * 100, 2) if total_cost else 0.0,
               "cash_krw": round(cash_krw, 0),
+              "cash_usd": round(cash_usd, 2),
+              "cash_usd_krw": round(cash_usd_krw, 0),
               "total_asset_krw": round(total_asset, 0),
-              "cash_pct": round(cash_krw / total_asset * 100, 1) if total_asset else 0.0}
+              "cash_pct": round(cash_total_krw / total_asset * 100, 1) if total_asset else 0.0}
     allocation = [{"label": k, "value_krw": round(v, 0)} for k, v in
                   sorted(alloc.items(), key=lambda x: -x[1])]
-    if cash_krw > 0:
-        allocation.append({"label": "현금", "value_krw": round(cash_krw, 0)})
+    if cash_total_krw > 0:
+        allocation.append({"label": "현금", "value_krw": round(cash_total_krw, 0)})
     return {"holdings": rows, "totals": totals, "allocation": allocation}
 
 

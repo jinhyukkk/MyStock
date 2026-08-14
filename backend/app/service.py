@@ -100,6 +100,11 @@ def get_cash_krw(conn) -> float:
     return float(raw) if raw else 0.0
 
 
+def get_cash_usd(conn) -> float:
+    raw = db.get_meta(conn, "cash_usd")
+    return float(raw) if raw else 0.0
+
+
 def check_rules(conn, prices: dict, avg_prices: dict) -> list:
     alerts = []
     for r in db.list_rules(conn):
@@ -209,7 +214,7 @@ def get_dashboard(conn) -> dict:
     signals.sort(key=lambda s: -abs(s["swing_score"]))
     tickers_map = {t["symbol"]: dict(t) for t in active}
     pf = portfolio.build_portfolio(holdings, prices, tickers_map, senti.get("usdkrw"),
-                                   cash_krw=get_cash_krw(conn))
+                                   cash_krw=get_cash_krw(conn), cash_usd=get_cash_usd(conn))
     avg_prices = {s: h["avg_price"] for s, h in holdings.items()}
     return {
         "sentiment": senti,
@@ -231,14 +236,16 @@ def get_portfolio_view(conn) -> dict:
     tickers_map = {t["symbol"]: dict(t) for t in db.list_tickers(conn)}
     fx = get_sentiment_view(conn).get("usdkrw")
     pf = portfolio.build_portfolio(holdings, prices, tickers_map, fx,
-                                   cash_krw=get_cash_krw(conn))
+                                   cash_krw=get_cash_krw(conn), cash_usd=get_cash_usd(conn))
     trades = [dict(r) for r in db.list_trades(conn)]
     realized = portfolio.realized_pnl(trades)
     pf["realized"] = {"entries": realized[::-1][:50],
                       "stats": portfolio.realized_stats(realized, tickers_map, fx)}
     closes = {s: db.load_prices(conn, s, limit=250)["close"] for s in holdings}
+    # 계좌 리스크는 환율 고정 근사 — 달러 예수금도 현재 환율로 환산해 고정 현금으로 합산
+    fx_now = fx or portfolio.DEFAULT_USDKRW
     pf["risk"] = portfolio.account_risk(holdings, closes, tickers_map, fx,
-                                        cash_krw=get_cash_krw(conn))
+                                        cash_krw=get_cash_krw(conn) + get_cash_usd(conn) * fx_now)
     return pf
 
 

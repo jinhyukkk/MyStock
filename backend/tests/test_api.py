@@ -123,3 +123,19 @@ def test_safe_static_path_rejects_missing_or_empty(fake_dist):
 def test_safe_static_path_allows_real_file(fake_dist):
     result = _safe_static_path(fake_dist, "assets/app.js")
     assert result == (fake_dist / "assets" / "app.js").resolve()
+
+
+def test_set_cash_with_usd(client):
+    r = client.put("/api/cash", json={"amount": 300000, "amount_usd": 200})
+    assert r.status_code == 200
+    assert r.json() == {"cash_krw": 300000.0, "cash_usd": 200.0}
+    client.post("/api/refresh")  # 센티먼트 갱신 → usdkrw=1300 반영
+    t = client.get("/api/portfolio").json()["totals"]
+    assert t["cash_krw"] == 300000.0 and t["cash_usd"] == 200.0
+    assert t["cash_usd_krw"] == 200 * 1300.0  # FAKE_SENTI usdkrw=1300
+
+
+def test_set_cash_krw_only_keeps_usd(client):
+    client.put("/api/cash", json={"amount": 100, "amount_usd": 50})
+    r = client.put("/api/cash", json={"amount": 999})  # 하위호환: USD 미전송 → 유지
+    assert r.json() == {"cash_krw": 999.0, "cash_usd": 50.0}

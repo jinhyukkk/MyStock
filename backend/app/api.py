@@ -125,12 +125,16 @@ def get_portfolio(request: Request):
 
 class CashIn(BaseModel):
     amount: float = Field(ge=0)
+    amount_usd: float | None = Field(default=None, ge=0)  # 미전송 시 기존 값 유지
 
 
 @router.put("/cash")
 def set_cash(c: CashIn, request: Request):
-    db.set_meta(_conn(request), "cash_krw", str(c.amount))
-    return {"cash_krw": c.amount}
+    conn = _conn(request)
+    db.set_meta(conn, "cash_krw", str(c.amount))
+    if c.amount_usd is not None:
+        db.set_meta(conn, "cash_usd", str(c.amount_usd))
+    return {"cash_krw": c.amount, "cash_usd": service.get_cash_usd(conn)}
 
 
 @router.get("/rules")

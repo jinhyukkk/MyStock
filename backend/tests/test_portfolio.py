@@ -83,6 +83,25 @@ def test_build_portfolio_cash():
     assert {"label": "현금", "value_krw": 500_000.0} in out["allocation"]
 
 
+def test_build_portfolio_cash_usd():
+    holdings = {"AAPL": {"quantity": 10, "avg_price": 100.0}}
+    tickers = {"AAPL": {"name": "Apple", "market": "US", "currency": "USD"}}
+    out = portfolio.build_portfolio(holdings, {"AAPL": 150.0}, tickers,
+                                    usdkrw=1000.0, cash_krw=300_000.0, cash_usd=200.0)
+    t = out["totals"]
+    assert t["cash_usd"] == 200.0
+    assert t["cash_usd_krw"] == 200_000.0
+    assert t["cash_krw"] == 300_000.0
+    assert t["total_asset_krw"] == 2_000_000.0  # 주식 150만 + 현금 50만
+    assert t["cash_pct"] == 25.0
+    assert {"label": "현금", "value_krw": 500_000.0} in out["allocation"]
+
+
+def test_build_portfolio_cash_usd_default_fx():
+    out = portfolio.build_portfolio({}, {}, {}, usdkrw=None, cash_usd=100.0)
+    assert out["totals"]["cash_usd_krw"] == 100.0 * portfolio.DEFAULT_USDKRW
+
+
 def test_account_risk():
     import pandas as pd
     idx = pd.date_range("2026-01-01", periods=60)

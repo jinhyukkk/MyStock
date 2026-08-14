@@ -17,7 +17,8 @@ export interface RuleAlert { symbol: string; name: string; rule_type: string; va
 export interface Dashboard {
   sentiment: Sentiment;
   portfolio_summary: { total_value_krw: number; total_pnl_krw: number;
-    total_pnl_pct: number; holdings_count: number };
+    total_pnl_pct: number; holdings_count: number;
+    cash_krw: number; total_asset_krw: number; cash_pct: number };
   signals: SignalRow[]; rule_alerts: RuleAlert[];
   last_refresh: string | null; failed_sources: string[];
 }
@@ -62,7 +63,8 @@ export interface Portfolio {
   holdings: Holding[];
   totals: { total_value_krw: number; total_cost_krw: number;
     total_pnl_krw: number; total_pnl_pct: number;
-    cash_krw: number; total_asset_krw: number; cash_pct: number };
+    cash_krw: number; cash_usd: number; cash_usd_krw: number;
+    total_asset_krw: number; cash_pct: number };
   allocation: { label: string; value_krw: number }[];
   realized: { entries: RealizedEntry[]; stats: RealizedStats };
   risk: AccountRisk | null;

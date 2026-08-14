@@ -1,10 +1,48 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
 import { del, get, post, put } from '../api'
 import type { Portfolio as PF } from '../types'
 
 const PIE_COLORS = ['#4f8ef7', '#2ecc71', '#f7c948', '#b06ef7', '#ff8a65']
+
+// recharts v3의 PieChart+Legend 조합이 이 프로젝트에서 섹터를 그리지 못하는 문제(빈 <g> 렌더)가 있어
+// 겹침 걱정 없는 순수 SVG 도넛 + 별도 범례 목록으로 대체.
+function AllocationDonut({ allocation }: { allocation: { label: string; value_krw: number }[] }) {
+  const total = allocation.reduce((s, a) => s + a.value_krw, 0)
+  const r = 40, cx = 50, cy = 50, circumference = 2 * Math.PI * r
+  let offset = 0
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 20, height: '100%' }}>
+      <svg viewBox="0 0 100 100" style={{ width: 140, height: 140, flexShrink: 0 }}>
+        {allocation.map((a, i) => {
+          const pct = total ? a.value_krw / total : 0
+          const dash = pct * circumference
+          const el = (
+            <circle key={a.label} r={r} cx={cx} cy={cy} fill="none"
+                    stroke={PIE_COLORS[i % PIE_COLORS.length]} strokeWidth={18}
+                    strokeDasharray={`${dash} ${circumference - dash}`}
+                    strokeDashoffset={-offset * circumference}
+                    transform={`rotate(-90 ${cx} ${cy})`}>
+              <title>{a.label} ₩{fmt(a.value_krw)} ({(pct * 100).toFixed(1)}%)</title>
+            </circle>
+          )
+          offset += pct
+          return el
+        })}
+      </svg>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+        {allocation.map((a, i) => (
+          <div key={a.label} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+            <span style={{ width: 10, height: 10, borderRadius: 2, background: PIE_COLORS[i % PIE_COLORS.length], flexShrink: 0 }} />
+            <span>{a.label}</span>
+            <span style={{ color: 'var(--text-dim)' }}>
+              {total ? (a.value_krw / total * 100).toFixed(1) : 0}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
 const fmt = (n: number | null) => n === null ? '—' : n.toLocaleString('ko-KR', { maximumFractionDigits: 2 })
 const cur = (c: string, n: number | null) => n === null ? '—' : (c === 'USD' ? '$' : '₩') + fmt(n)
 
@@ -19,11 +57,18 @@ export default function Portfolio() {
     trade_date: new Date().toISOString().slice(0, 10), note: '' })
   const [msg, setMsg] = useState<string | null>(null)
   const [cashInput, setCashInput] = useState<string>('')
+  const [cashUsdInput, setCashUsdInput] = useState<string>('')
 
   const saveCash = async () => {
     const amount = Number(cashInput)
     if (!(amount >= 0)) { setMsg('예수금은 0 이상이어야 합니다'); return }
-    try { await put('/api/cash', { amount }); setMsg(null); load() }
+    const body: { amount: number; amount_usd?: number } = { amount }
+    if (cashUsdInput.trim() !== '') {
+      const usd = Number(cashUsdInput)
+      if (!(usd >= 0)) { setMsg('달러 예수금은 0 이상이어야 합니다'); return }
+      body.amount_usd = usd
+    }
+    try { await put('/api/cash', body); setMsg(null); load() }
     catch (e) { setMsg(String(e)) }
   }
 
@@ -64,26 +109,19 @@ export default function Portfolio() {
           <div className={t.total_pnl_krw >= 0 ? 'pos' : 'neg'} style={{ fontSize: 16 }}>
             {t.total_pnl_krw >= 0 ? '+' : ''}₩{fmt(t.total_pnl_krw)} ({t.total_pnl_pct}%)</div>
           <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
-            평가액 ₩{fmt(t.total_value_krw)} · 현금 ₩{fmt(t.cash_krw)} ({t.cash_pct}%)</div>
+            평가액 ₩{fmt(t.total_value_krw)} · 현금 ₩{fmt(t.cash_krw + (t.cash_usd_krw ?? 0))} ({t.cash_pct}%)
+            {(t.cash_usd ?? 0) > 0 && <> — ₩{fmt(t.cash_krw)} + ${fmt(t.cash_usd)}</>}</div>
           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
             <input type="number" placeholder="예수금 (KRW)" value={cashInput}
                    onChange={e => setCashInput(e.target.value)} style={{ width: 150 }} />
+            <input type="number" placeholder="달러 예수금 (USD)" value={cashUsdInput}
+                   onChange={e => setCashUsdInput(e.target.value)} style={{ width: 150 }} />
             <button onClick={saveCash}>저장</button>
           </div>
         </div>
         <div className="card" style={{ height: 180 }}>
           {pf.allocation.length > 0 ? (
-            <ResponsiveContainer>
-              <PieChart>
-                <Pie data={pf.allocation} dataKey="value_krw" nameKey="label"
-                     innerRadius={40} outerRadius={65}>
-                  {pf.allocation.map((_, i) =>
-                    <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
-                </Pie>
-                <Tooltip formatter={(v: any) => `₩${fmt(typeof v === 'number' ? v : null)}`} />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
+            <AllocationDonut allocation={pf.allocation} />
           ) : <div style={{ color: 'var(--text-dim)' }}>보유 종목 없음</div>}
         </div>
       </div>
