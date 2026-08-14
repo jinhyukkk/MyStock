@@ -69,7 +69,8 @@ def test_fetch_ohlcv_crypto_pages_when_days_gt_200(monkeypatch):
 
     df = fetchers.fetch_ohlcv("KRW-BTC", "CRYPTO", days=250)
 
-    assert len(calls) == 2
+    # 2페이지 수집 + 진행 없음 감지로 종료 (마지막 호출은 page2 반복 → 중단)
+    assert len(calls) == 3
     assert calls[1]["to"] == page1[-1]["candle_date_time_utc"]
     assert len(df) == len(page1) + len(page2)
 

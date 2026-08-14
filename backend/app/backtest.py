@@ -10,9 +10,11 @@ from app import indicators, scoring
 
 HORIZONS = (5, 20)
 GRADE_ORDER = ["강력매수", "매수", "중립", "매도", "강력매도"]
+COST_PCT = 0.3  # 왕복 수수료+슬리피지 근사 (%p) — 순수익률 = 평균 - COST_PCT
 
 
-def backtest_ticker(df: pd.DataFrame) -> dict | None:
+def backtest_ticker(df: pd.DataFrame, bench: pd.Series | None = None,
+                    bench_label: str | None = None) -> dict | None:
     if len(df) < 150:
         return None
     enriched = indicators.compute_indicators(df)
@@ -21,6 +23,10 @@ def backtest_ticker(df: pd.DataFrame) -> dict | None:
     first_valid = enriched["sma120"].first_valid_index()
     if first_valid is None:
         return None
+    # 벤치마크 종가를 종목 거래일에 맞춰 정렬 (휴장일 차이는 직전 값으로 보간)
+    b = None
+    if bench is not None and not bench.empty:
+        b = bench.reindex(enriched.index, method="ffill")
     start = enriched.index.get_loc(first_valid) + 10
     records = []
     for i in range(start, n - min(HORIZONS)):
@@ -30,8 +36,13 @@ def backtest_ticker(df: pd.DataFrame) -> dict | None:
             continue
         rec = {"grade": res["swing_grade"]}
         for h in HORIZONS:
-            rec[f"fwd{h}"] = (round((closes.iloc[i + h] / closes.iloc[i] - 1) * 100, 2)
-                              if i + h < n else None)
+            if i + h >= n:
+                rec[f"fwd{h}"] = None
+                continue
+            fwd = (closes.iloc[i + h] / closes.iloc[i] - 1) * 100
+            rec[f"fwd{h}"] = round(fwd, 2)
+            if b is not None and pd.notna(b.iloc[i]) and pd.notna(b.iloc[i + h]) and b.iloc[i]:
+                rec[f"ex{h}"] = round(fwd - (b.iloc[i + h] / b.iloc[i] - 1) * 100, 2)
         records.append(rec)
     if not records:
         return None
@@ -45,11 +56,16 @@ def backtest_ticker(df: pd.DataFrame) -> dict | None:
         for h in HORIZONS:
             vals = [r[f"fwd{h}"] for r in rows if r[f"fwd{h}"] is not None]
             entry[f"avg_fwd{h}"] = round(sum(vals) / len(vals), 2) if vals else None
+            entry[f"avg_net{h}"] = round(entry[f"avg_fwd{h}"] - COST_PCT, 2) if vals else None
             entry[f"win{h}"] = round(sum(v > 0 for v in vals) / len(vals) * 100, 1) if vals else None
+            exs = [r[f"ex{h}"] for r in rows if r.get(f"ex{h}") is not None]
+            entry[f"avg_excess{h}"] = round(sum(exs) / len(exs), 2) if exs else None
         grades.append(entry)
     return {
         "samples": len(records),
         "start": enriched.index[start].strftime("%Y-%m-%d"),
         "end": enriched.index[-1].strftime("%Y-%m-%d"),
+        "bench_label": bench_label if b is not None else None,
+        "cost_pct": COST_PCT,
         "grades": grades,
     }

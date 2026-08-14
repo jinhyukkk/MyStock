@@ -114,7 +114,7 @@ export default function TickerDetail() {
             {detail.symbol} · {detail.market}{detail.is_etf ? ' · ETF' : ''}
             {sig?.regime_label ? ` · ${sig.regime_label}` : ''}</span></h2>
           {last && <div style={{ fontSize: 22, fontWeight: 700 }}>
-            {last.close.toLocaleString('ko-KR')}</div>}
+            {detail.currency === 'USD' ? '$' : '₩'}{last.close.toLocaleString('ko-KR')}</div>}
         </div>
         {sig && <div style={{ display: 'flex', gap: 24 }}>
           <div style={{ textAlign: 'center' }}>
@@ -191,21 +191,34 @@ export default function TickerDetail() {
       {backtest && <div className="card">
         <strong>시그널 백테스트</strong>
         <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
-          {' '}{backtest.start} ~ {backtest.end} · 표본 {backtest.samples}일 · 현재 스코어링 로직을 과거에 적용한 결과 (수수료·슬리피지 미반영)</span>
+          {' '}{backtest.start} ~ {backtest.end} · 표본 {backtest.samples}일 · 현재 스코어링 로직을 과거에 적용한 결과
+          {backtest.bench_label && ` · 초과수익 = ${backtest.bench_label} 대비`}
+          {` · 순 = 왕복 비용 ${backtest.cost_pct}%p 차감 · 인접일 표본 중첩(자기상관)으로 실제 독립 표본은 더 적음`}</span>
         <table style={{ marginTop: 8 }}>
           <thead><tr><th>등급</th><th>신호 일수</th><th>5일 평균</th><th>5일 승률</th>
-            <th>20일 평균</th><th>20일 승률</th></tr></thead>
+            <th>20일 평균</th><th>20일 승률</th>
+            {backtest.bench_label && <><th>5일 초과</th><th>20일 초과</th></>}</tr></thead>
           <tbody>
             {backtest.grades.map(g => (
               <tr key={g.grade}>
                 <td><SignalBadge grade={g.grade} /></td>
                 <td>{g.n}</td>
                 <td className={(g.avg_fwd5 ?? 0) >= 0 ? 'pos' : 'neg'}>
-                  {g.avg_fwd5 === null ? '—' : `${g.avg_fwd5 >= 0 ? '+' : ''}${g.avg_fwd5}%`}</td>
+                  {g.avg_fwd5 === null ? '—' : `${g.avg_fwd5 >= 0 ? '+' : ''}${g.avg_fwd5}%`}
+                  {g.avg_net5 !== null && <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>
+                    {' '}(순 {g.avg_net5 >= 0 ? '+' : ''}{g.avg_net5}%)</span>}</td>
                 <td>{g.win5 === null ? '—' : `${g.win5}%`}</td>
                 <td className={(g.avg_fwd20 ?? 0) >= 0 ? 'pos' : 'neg'}>
-                  {g.avg_fwd20 === null ? '—' : `${g.avg_fwd20 >= 0 ? '+' : ''}${g.avg_fwd20}%`}</td>
+                  {g.avg_fwd20 === null ? '—' : `${g.avg_fwd20 >= 0 ? '+' : ''}${g.avg_fwd20}%`}
+                  {g.avg_net20 !== null && <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>
+                    {' '}(순 {g.avg_net20 >= 0 ? '+' : ''}{g.avg_net20}%)</span>}</td>
                 <td>{g.win20 === null ? '—' : `${g.win20}%`}</td>
+                {backtest.bench_label && <>
+                  <td className={(g.avg_excess5 ?? 0) >= 0 ? 'pos' : 'neg'}>
+                    {g.avg_excess5 == null ? '—' : `${g.avg_excess5 >= 0 ? '+' : ''}${g.avg_excess5}%p`}</td>
+                  <td className={(g.avg_excess20 ?? 0) >= 0 ? 'pos' : 'neg'}>
+                    {g.avg_excess20 == null ? '—' : `${g.avg_excess20 >= 0 ? '+' : ''}${g.avg_excess20}%p`}</td>
+                </>}
               </tr>
             ))}
           </tbody>

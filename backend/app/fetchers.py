@@ -7,6 +7,10 @@ import requests
 UPBIT_CANDLES = "https://api.upbit.com/v1/candles/days"
 UPBIT_MARKETS = "https://api.upbit.com/v1/market/all"
 
+# 시장별 벤치마크 — (fetch_ohlcv에 넘길 심볼, 표시 라벨). price_cache에는 "BENCH:{market}" 키로 저장.
+BENCHMARKS = {"KR": ("KS11", "KOSPI"), "US": ("^GSPC", "S&P500"),
+              "CRYPTO": ("KRW-BTC", "BTC")}
+
 
 def normalize_ohlcv(df: pd.DataFrame, colmap: dict) -> pd.DataFrame:
     out = df.rename(columns=colmap)[["open", "high", "low", "close", "volume"]].copy()
@@ -38,16 +42,21 @@ def fetch_ohlcv(symbol: str, market: str, yf_symbol: str | None = None,
         return normalize_ohlcv(df, {"Open": "open", "High": "high", "Low": "low",
                                     "Close": "close", "Volume": "volume"})
     if market == "CRYPTO":
-        params = {"market": symbol, "count": 200}
-        r = requests.get(UPBIT_CANDLES, params=params, timeout=10)
-        r.raise_for_status()
-        payload = r.json()
-        if days > 200 and payload:
-            to = payload[-1]["candle_date_time_utc"]
-            r2 = requests.get(UPBIT_CANDLES,
-                              params={"market": symbol, "count": 200, "to": to}, timeout=10)
-            r2.raise_for_status()
-            payload += r2.json()
+        payload, to = [], None
+        while len(payload) < days:
+            params = {"market": symbol, "count": 200}
+            if to:
+                params["to"] = to
+            r = requests.get(UPBIT_CANDLES, params=params, timeout=10)
+            r.raise_for_status()
+            batch = r.json()
+            if not batch:
+                break
+            new_to = batch[-1]["candle_date_time_utc"]
+            if new_to == to:  # 진행 없음 — 상장 초기 도달, 무한 루프 방지
+                break
+            payload += batch
+            to = new_to
         return parse_upbit_candles(payload)
     raise ValueError(f"unknown market: {market}")
 

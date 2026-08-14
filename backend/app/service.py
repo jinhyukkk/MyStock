@@ -5,6 +5,8 @@ import pandas as pd
 
 from app import backtest, db, fetchers, indicators, portfolio, scoring, sentiment
 
+BACKTEST_DAYS = 1100  # 약 3년 — 한 국면짜리 400일 검증은 상승장 착시를 못 거른다
+
 
 def _active_tickers(conn):
     """워치리스트에 있거나 현재 보유 중인 종목 (보유 종목 + 관심 종목)."""
@@ -30,7 +32,7 @@ def refresh_all(conn, symbol: str | None = None) -> dict:
     for t in targets:
         try:
             df = fetchers.fetch_ohlcv(t["symbol"], t["market"],
-                                      yf_symbol=t["yf_symbol"], days=400)
+                                      yf_symbol=t["yf_symbol"], days=BACKTEST_DAYS)
             db.save_prices(conn, t["symbol"], df)
             _compute_and_store_signal(conn, t, senti)
             if t["yf_symbol"]:
@@ -39,6 +41,12 @@ def refresh_all(conn, symbol: str | None = None) -> dict:
                     db.set_meta(conn, f"fund:{t['symbol']}", json.dumps(fund))
         except Exception:
             failed_tickers.append(t["symbol"])
+    if symbol is None:
+        for market in {t["market"] for t in targets}:
+            try:
+                _refresh_benchmark(conn, market)
+            except Exception:
+                failed_tickers.append(f"BENCH:{market}")
     if symbol is None:  # 단일 갱신은 전체 기준 시각을 건드리지 않는다
         db.set_meta(conn, "last_refresh", datetime.now().isoformat(timespec="seconds"))
     return {"refreshed": True, "failed_sources": senti.get("failed", []),
@@ -197,17 +205,37 @@ def _risk_block(conn, enriched: pd.DataFrame, currency: str) -> dict | None:
     }
 
 
+def _refresh_benchmark(conn, market):
+    bench_symbol, _ = fetchers.BENCHMARKS[market]
+    bdf = fetchers.fetch_ohlcv(bench_symbol, market, yf_symbol=bench_symbol,
+                               days=BACKTEST_DAYS)
+    db.save_prices(conn, f"BENCH:{market}", bdf)
+
+
 def get_backtest(conn, symbol) -> dict | None:
-    df = db.load_prices(conn, symbol)
+    df = db.load_prices(conn, symbol, limit=BACKTEST_DAYS)
     if df.empty:
         return None
     last_date = df.index[-1].strftime("%Y-%m-%d")
     cached = db.get_meta(conn, f"backtest:{symbol}")
     if cached:
         obj = json.loads(cached)
-        if obj.get("end") == last_date:
+        if obj.get("end") == last_date and "cost_pct" in obj:
             return obj
-    result = backtest.backtest_ticker(df)
+    t = db.get_ticker(conn, symbol)
+    bench, bench_label = None, None
+    if t and t["market"] in fetchers.BENCHMARKS:
+        bench_label = fetchers.BENCHMARKS[t["market"]][1]
+        bdf = db.load_prices(conn, f"BENCH:{t['market']}", limit=BACKTEST_DAYS)
+        # 미수집이거나 종목 데이터보다 짧으면(초과수익 구간 불일치) 1회 재수집
+        if bdf.empty or bdf.index[0] > df.index[0]:
+            try:
+                _refresh_benchmark(conn, t["market"])
+                bdf = db.load_prices(conn, f"BENCH:{t['market']}", limit=BACKTEST_DAYS)
+            except Exception:
+                pass
+        bench = bdf["close"] if not bdf.empty else None
+    result = backtest.backtest_ticker(df, bench=bench, bench_label=bench_label)
     if result:
         db.set_meta(conn, f"backtest:{symbol}", json.dumps(result, ensure_ascii=False))
     return result

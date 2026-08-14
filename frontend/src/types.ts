@@ -66,9 +66,12 @@ export interface BacktestGrade {
   grade: string; n: number;
   avg_fwd5: number | null; win5: number | null;
   avg_fwd20: number | null; win20: number | null;
+  avg_net5: number | null; avg_net20: number | null;
+  avg_excess5: number | null; avg_excess20: number | null;
 }
 export interface Backtest {
-  samples: number; start: string; end: string; grades: BacktestGrade[];
+  samples: number; start: string; end: string;
+  bench_label: string | null; cost_pct: number; grades: BacktestGrade[];
 }
 export interface SearchResult {
   symbol: string; name: string; market: string; is_etf: number;
