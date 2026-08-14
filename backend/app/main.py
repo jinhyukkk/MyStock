@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from app import db, service
 from app.api import router
 
-# ponytail: 1시간 폴링 — 손절/목표가 알림의 실시간성이 더 필요하면 텔레그램 푸시 추가
+# ponytail: 1시간 폴링 + 갱신 시 텔레그램 푸시 — 장중 분 단위 실시간성이 필요해지면 별도 알림 루프 분리
 REFRESH_INTERVAL = 60 * 60  # 1시간
 
 ROOT = Path(__file__).parent.parent.parent

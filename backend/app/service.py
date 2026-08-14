@@ -1,5 +1,8 @@
 import json
+import os
 from datetime import datetime
+
+import requests
 
 import pandas as pd
 
@@ -49,6 +52,14 @@ def refresh_all(conn, symbol: str | None = None) -> dict:
                 failed_tickers.append(f"BENCH:{market}")
     if symbol is None:  # 단일 갱신은 전체 기준 시각을 건드리지 않는다
         db.set_meta(conn, "last_refresh", datetime.now().isoformat(timespec="seconds"))
+        prices = {}
+        for t in targets:
+            close, _ = _latest_close_and_change(conn, t["symbol"])
+            if close is not None:
+                prices[t["symbol"]] = close
+        holdings = _holdings_map(conn)
+        avg_prices = {s: h["avg_price"] for s, h in holdings.items()}
+        _notify_telegram(conn, check_rules(conn, prices, avg_prices))
     return {"refreshed": True, "failed_sources": senti.get("failed", []),
             "failed_tickers": failed_tickers}
 
@@ -116,6 +127,27 @@ def check_rules(conn, prices: dict, avg_prices: dict) -> list:
                                "value": v,
                                "message": f"{name} 평단 대비 {change:+.1f}% (조건 {v:+.0f}%)"})
     return alerts
+
+
+def _notify_telegram(conn, alerts: list) -> None:
+    """룰 도달 알림을 텔레그램으로 발송. 같은 룰은 하루 한 번만 (중복 방지)."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not token or not chat_id or not alerts:
+        return
+    today = datetime.now().strftime("%Y-%m-%d")
+    for a in alerts:
+        key = f"tg_sent:{a['symbol']}:{a['rule_type']}:{a['value']}"
+        if db.get_meta(conn, key) == today:
+            continue
+        try:
+            r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                              json={"chat_id": chat_id, "text": f"[MyStock] {a['message']}"},
+                              timeout=10)
+            r.raise_for_status()
+            db.set_meta(conn, key, today)
+        except Exception:
+            pass  # 발송 실패는 다음 갱신 때 재시도
 
 
 def get_sentiment_view(conn) -> dict:

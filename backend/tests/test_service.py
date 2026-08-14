@@ -105,3 +105,30 @@ def test_ticker_detail(conn):
     assert detail["signal"]["swing_grade"]
     assert detail["fundamentals"] == {"per": 15.0}
     assert service.get_ticker_detail(conn, "NOPE") is None
+
+
+def test_notify_telegram_dedupes_per_day(conn, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
+    sent = []
+
+    class OK:
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(service.requests, "post",
+                        lambda url, json=None, timeout=None: sent.append(json) or OK())
+    alerts = [{"symbol": "005930", "rule_type": "TARGET", "value": 100.0,
+               "message": "삼성전자 목표가 100 도달"}]
+    service._notify_telegram(conn, alerts)
+    service._notify_telegram(conn, alerts)  # 같은 날 재호출 → 발송 안 함
+    assert len(sent) == 1
+    assert "삼성전자" in sent[0]["text"] and sent[0]["chat_id"] == "42"
+
+
+def test_notify_telegram_noop_without_config(conn, monkeypatch):
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.setattr(service.requests, "post",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("호출되면 안 됨")))
+    service._notify_telegram(conn, [{"symbol": "A", "rule_type": "STOP", "value": 1,
+                                     "message": "m"}])
