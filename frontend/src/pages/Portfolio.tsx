@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
-import { del, get, post } from '../api'
+import { del, get, post, put } from '../api'
 import type { Portfolio as PF } from '../types'
 
 const PIE_COLORS = ['#4f8ef7', '#2ecc71', '#f7c948', '#b06ef7', '#ff8a65']
 const fmt = (n: number | null) => n === null ? '—' : n.toLocaleString('ko-KR', { maximumFractionDigits: 2 })
+const cur = (c: string, n: number | null) => n === null ? '—' : (c === 'USD' ? '$' : '₩') + fmt(n)
 
 interface Trade { id: number; symbol: string; side: string; quantity: number;
                   price: number; trade_date: string }
@@ -16,6 +17,14 @@ export default function Portfolio() {
   const [form, setForm] = useState({ symbol: '', side: 'BUY', quantity: '', price: '',
     trade_date: new Date().toISOString().slice(0, 10) })
   const [msg, setMsg] = useState<string | null>(null)
+  const [cashInput, setCashInput] = useState<string>('')
+
+  const saveCash = async () => {
+    const amount = Number(cashInput)
+    if (!(amount >= 0)) { setMsg('예수금은 0 이상이어야 합니다'); return }
+    try { await put('/api/cash', { amount }); setMsg(null); load() }
+    catch (e) { setMsg(String(e)) }
+  }
 
   const load = () => Promise.all([
     get<PF>('/api/portfolio').then(setPf),
@@ -24,9 +33,13 @@ export default function Portfolio() {
   useEffect(() => { load() }, [])
 
   const addTrade = async () => {
+    const quantity = Number(form.quantity), price = Number(form.price)
+    if (!form.symbol.trim() || !(quantity > 0) || !(price > 0)) {
+      setMsg('심볼·수량·단가를 확인하세요 (0 이하 불가)'); return
+    }
     try {
-      await post('/api/trades', { ...form, quantity: Number(form.quantity),
-                                  price: Number(form.price) })
+      await post('/api/trades', { ...form, symbol: form.symbol.trim().toUpperCase(),
+                                  quantity, price })
       setMsg(null); setForm({ ...form, quantity: '', price: '' }); load()
     } catch (e) { setMsg(String(e)) }
   }
@@ -45,10 +58,17 @@ export default function Portfolio() {
     <div className="grid">
       <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
         <div className="card">
-          <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>총 평가액 (KRW 환산)</div>
-          <div style={{ fontSize: 26, fontWeight: 700 }}>₩{fmt(t.total_value_krw)}</div>
+          <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>총자산 (평가액 + 예수금, KRW 환산)</div>
+          <div style={{ fontSize: 26, fontWeight: 700 }}>₩{fmt(t.total_asset_krw)}</div>
           <div className={t.total_pnl_krw >= 0 ? 'pos' : 'neg'} style={{ fontSize: 16 }}>
             {t.total_pnl_krw >= 0 ? '+' : ''}₩{fmt(t.total_pnl_krw)} ({t.total_pnl_pct}%)</div>
+          <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
+            평가액 ₩{fmt(t.total_value_krw)} · 현금 ₩{fmt(t.cash_krw)} ({t.cash_pct}%)</div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <input type="number" placeholder="예수금 (KRW)" value={cashInput}
+                   onChange={e => setCashInput(e.target.value)} style={{ width: 150 }} />
+            <button onClick={saveCash}>저장</button>
+          </div>
         </div>
         <div className="card" style={{ height: 180 }}>
           {pf.allocation.length > 0 ? (
@@ -78,10 +98,10 @@ export default function Portfolio() {
                 <td><Link to={`/ticker/${h.symbol}`}><strong>{h.name}</strong>
                   <span style={{ color: 'var(--text-dim)', fontSize: 12 }}> {h.currency}</span></Link></td>
                 <td>{fmt(h.quantity)}</td>
-                <td>{fmt(h.avg_price)}</td>
-                <td>{fmt(h.close)}</td>
-                <td>{fmt(h.value)}</td>
-                <td className={(h.pnl ?? 0) >= 0 ? 'pos' : 'neg'}>{fmt(h.pnl)}</td>
+                <td>{cur(h.currency, h.avg_price)}</td>
+                <td>{cur(h.currency, h.close)}</td>
+                <td>{cur(h.currency, h.value)}</td>
+                <td className={(h.pnl ?? 0) >= 0 ? 'pos' : 'neg'}>{cur(h.currency, h.pnl)}</td>
                 <td className={(h.pnl_pct ?? 0) >= 0 ? 'pos' : 'neg'}>
                   {h.pnl_pct === null ? '—' : `${h.pnl_pct >= 0 ? '+' : ''}${h.pnl_pct}%`}</td>
               </tr>
@@ -89,6 +109,59 @@ export default function Portfolio() {
           </tbody>
         </table>
       </div>
+
+      {pf.risk && <div className="card">
+        <strong>계좌 리스크</strong>
+        <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+          {' '}최근 {pf.risk.days}거래일 · 현재 보유 수량 기준 근사 (환율 고정)</span>
+        <div style={{ display: 'flex', gap: 32, marginTop: 10, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>연환산 변동성</div>
+            <div style={{ fontWeight: 700, fontSize: 18 }}>{pf.risk.volatility_pct}%</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>계좌 최대 낙폭 (MDD)</div>
+            <div className="neg" style={{ fontWeight: 700, fontSize: 18 }}>{pf.risk.mdd_pct}%</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>최대 종목 비중</div>
+            <div style={{ fontWeight: 700, fontSize: 18 }}
+                 className={(pf.risk.max_weight_pct ?? 0) >= 30 ? 'neg' : ''}>
+              {pf.risk.max_weight_pct}%
+              {(pf.risk.max_weight_pct ?? 0) >= 30 && <span style={{ fontSize: 12 }}> ⚠ 집중</span>}</div>
+          </div>
+        </div>
+        <table style={{ marginTop: 12 }}>
+          <thead><tr><th>종목</th><th>총자산 대비 비중</th></tr></thead>
+          <tbody>
+            {pf.risk.weights.map(w => (
+              <tr key={w.symbol}>
+                <td style={{ textAlign: 'left' }}>{w.name}</td>
+                <td className={w.weight_pct >= 30 ? 'neg' : ''}>{w.weight_pct}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {pf.risk.corr && <>
+          <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 12 }}>
+            보유 종목 간 일간수익률 상관계수 — 0.7 이상이면 사실상 같은 포지션</div>
+          <table style={{ marginTop: 6 }}>
+            <thead><tr><th></th>
+              {pf.risk.corr.symbols.map(s => <th key={s}>{s}</th>)}</tr></thead>
+            <tbody>
+              {pf.risk.corr.symbols.map((s, i) => (
+                <tr key={s}>
+                  <td style={{ textAlign: 'left' }}><strong>{s}</strong></td>
+                  {pf.risk!.corr!.matrix[i].map((v, j) => (
+                    <td key={j} className={i !== j && v >= 0.7 ? 'neg' : ''}>
+                      {v.toFixed(2)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>}
+      </div>}
 
       {pf.realized && pf.realized.stats.count > 0 && <div className="card">
         <strong>실현손익 · 매매 복기</strong>

@@ -1,3 +1,5 @@
+import pandas as pd
+
 MARKET_LABELS = {"KR": "한국 주식", "US": "미국 주식", "CRYPTO": "암호화폐"}
 DEFAULT_USDKRW = 1400.0
 
@@ -60,7 +62,8 @@ def realized_stats(realized: list, tickers: dict, usdkrw) -> dict:
     }
 
 
-def build_portfolio(holdings: dict, prices: dict, tickers: dict, usdkrw) -> dict:
+def build_portfolio(holdings: dict, prices: dict, tickers: dict, usdkrw,
+                    cash_krw: float = 0.0) -> dict:
     fx = usdkrw or DEFAULT_USDKRW
     rows, alloc = [], {}
     total_value = total_cost = 0.0
@@ -82,10 +85,60 @@ def build_portfolio(holdings: dict, prices: dict, tickers: dict, usdkrw) -> dict
                      "market": info.get("market"), "currency": currency,
                      "quantity": h["quantity"], "avg_price": h["avg_price"],
                      "close": close, "value": value, "pnl": pnl, "pnl_pct": pnl_pct})
+    total_asset = total_value + cash_krw
     totals = {"total_value_krw": round(total_value, 0),
               "total_cost_krw": round(total_cost, 0),
               "total_pnl_krw": round(total_value - total_cost, 0),
-              "total_pnl_pct": round((total_value / total_cost - 1) * 100, 2) if total_cost else 0.0}
+              "total_pnl_pct": round((total_value / total_cost - 1) * 100, 2) if total_cost else 0.0,
+              "cash_krw": round(cash_krw, 0),
+              "total_asset_krw": round(total_asset, 0),
+              "cash_pct": round(cash_krw / total_asset * 100, 1) if total_asset else 0.0}
     allocation = [{"label": k, "value_krw": round(v, 0)} for k, v in
                   sorted(alloc.items(), key=lambda x: -x[1])]
+    if cash_krw > 0:
+        allocation.append({"label": "현금", "value_krw": round(cash_krw, 0)})
     return {"holdings": rows, "totals": totals, "allocation": allocation}
+
+
+def account_risk(holdings: dict, closes: dict, tickers: dict, usdkrw,
+                 cash_krw: float = 0.0) -> dict | None:
+    """계좌 단위 리스크 — 종목 비중(집중도), 상관계수, 변동성/MDD.
+    현재 보유 수량을 과거 종가에 그대로 적용한 근사이며 환율은 현재 값 고정."""
+    fx = usdkrw or DEFAULT_USDKRW
+    series = {s: closes[s] for s in holdings
+              if s in closes and closes[s] is not None and len(closes[s]) > 1}
+    if not series:
+        return None
+    frame = pd.DataFrame(series).ffill().dropna()
+    if len(frame) < 20:
+        return None
+    rates = {s: (fx if tickers.get(s, {}).get("currency") == "USD" else 1.0)
+             for s in frame.columns}
+    qty = {s: holdings[s]["quantity"] for s in frame.columns}
+    port = sum(frame[s] * qty[s] * rates[s] for s in frame.columns)
+    rets = port.pct_change().dropna()
+    mdd = float(((port / port.cummax()) - 1).min() * 100)
+
+    last_vals = {s: float(frame[s].iloc[-1]) * qty[s] * rates[s] for s in frame.columns}
+    total_asset = sum(last_vals.values()) + max(cash_krw, 0.0)
+    weights = sorted(
+        [{"symbol": s, "name": tickers.get(s, {}).get("name", s),
+          "weight_pct": round(v / total_asset * 100, 1)} for s, v in last_vals.items()],
+        key=lambda w: -w["weight_pct"])
+
+    corr = None
+    if len(frame.columns) >= 2:
+        m = frame.pct_change().corr()
+        symbols = list(m.columns)
+        corr = {"symbols": symbols,
+                "names": [tickers.get(s, {}).get("name", s) for s in symbols],
+                "matrix": [[round(float(m.iloc[i, j]), 2) for j in range(len(symbols))]
+                           for i in range(len(symbols))]}
+    return {
+        "days": len(frame),
+        "weights": weights,
+        "max_weight_pct": weights[0]["weight_pct"] if weights else None,
+        "volatility_pct": round(float(rets.std() * (252 ** 0.5) * 100), 1),
+        "mdd_pct": round(mdd, 2),
+        "corr": corr,
+    }

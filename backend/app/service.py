@@ -83,6 +83,11 @@ def _holdings_map(conn):
     return portfolio.compute_holdings(trades)
 
 
+def get_cash_krw(conn) -> float:
+    raw = db.get_meta(conn, "cash_krw")
+    return float(raw) if raw else 0.0
+
+
 def check_rules(conn, prices: dict, avg_prices: dict) -> list:
     alerts = []
     for r in db.list_rules(conn):
@@ -151,7 +156,8 @@ def get_dashboard(conn) -> dict:
         })
     signals.sort(key=lambda s: -abs(s["swing_score"]))
     tickers_map = {t["symbol"]: dict(t) for t in active}
-    pf = portfolio.build_portfolio(holdings, prices, tickers_map, senti.get("usdkrw"))
+    pf = portfolio.build_portfolio(holdings, prices, tickers_map, senti.get("usdkrw"),
+                                   cash_krw=get_cash_krw(conn))
     avg_prices = {s: h["avg_price"] for s, h in holdings.items()}
     return {
         "sentiment": senti,
@@ -172,11 +178,15 @@ def get_portfolio_view(conn) -> dict:
             prices[s] = close
     tickers_map = {t["symbol"]: dict(t) for t in db.list_tickers(conn)}
     fx = get_sentiment_view(conn).get("usdkrw")
-    pf = portfolio.build_portfolio(holdings, prices, tickers_map, fx)
+    pf = portfolio.build_portfolio(holdings, prices, tickers_map, fx,
+                                   cash_krw=get_cash_krw(conn))
     trades = [dict(r) for r in db.list_trades(conn)]
     realized = portfolio.realized_pnl(trades)
     pf["realized"] = {"entries": realized[::-1][:50],
                       "stats": portfolio.realized_stats(realized, tickers_map, fx)}
+    closes = {s: db.load_prices(conn, s, limit=250)["close"] for s in holdings}
+    pf["risk"] = portfolio.account_risk(holdings, closes, tickers_map, fx,
+                                        cash_krw=get_cash_krw(conn))
     return pf
 
 
@@ -191,7 +201,8 @@ def _risk_block(conn, enriched: pd.DataFrame, currency: str) -> dict | None:
     stop = close - 2 * atr
     senti = get_sentiment_view(conn)
     fx = (senti.get("usdkrw") or portfolio.DEFAULT_USDKRW) if currency == "USD" else 1.0
-    total = get_portfolio_view(conn)["totals"]["total_value_krw"]
+    # 리스크 분모는 총자산(평가액+예수금) — 보유 평가액만 쓰면 현금 비중만큼 과소/과대 계상
+    total = get_portfolio_view(conn)["totals"]["total_asset_krw"]
     risk_krw = total * 0.01
     return {
         "atr": round(atr, 4),

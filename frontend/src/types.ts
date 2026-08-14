@@ -58,9 +58,19 @@ export interface RealizedStats {
 export interface Portfolio {
   holdings: Holding[];
   totals: { total_value_krw: number; total_cost_krw: number;
-    total_pnl_krw: number; total_pnl_pct: number };
+    total_pnl_krw: number; total_pnl_pct: number;
+    cash_krw: number; total_asset_krw: number; cash_pct: number };
   allocation: { label: string; value_krw: number }[];
   realized: { entries: RealizedEntry[]; stats: RealizedStats };
+  risk: AccountRisk | null;
+}
+export interface AccountRisk {
+  days: number;
+  weights: { symbol: string; name: string; weight_pct: number }[];
+  max_weight_pct: number | null;
+  volatility_pct: number;
+  mdd_pct: number;
+  corr: { symbols: string[]; names: string[]; matrix: number[][] } | null;
 }
 export interface BacktestGrade {
   grade: string; n: number;

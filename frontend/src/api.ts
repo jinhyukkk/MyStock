@@ -22,6 +22,14 @@ export async function post<T = unknown>(path: string, body?: unknown): Promise<T
   if (!res.ok) await fail(res)
   return res.json()
 }
+export async function put<T = unknown>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  if (!res.ok) await fail(res)
+  return res.json()
+}
 export async function del(path: string): Promise<void> {
   const res = await fetch(path, { method: 'DELETE' })
   if (!res.ok) await fail(res)

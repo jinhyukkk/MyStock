@@ -54,6 +54,37 @@ def test_build_portfolio_usd_conversion():
     assert out["allocation"][0]["label"] == "미국 주식"
 
 
+def test_build_portfolio_cash():
+    holdings = {"AAPL": {"quantity": 10, "avg_price": 100.0}}
+    tickers = {"AAPL": {"name": "Apple", "market": "US", "currency": "USD"}}
+    out = portfolio.build_portfolio(holdings, {"AAPL": 150.0}, tickers,
+                                    usdkrw=1000.0, cash_krw=500_000.0)
+    t = out["totals"]
+    assert t["total_asset_krw"] == 2_000_000.0
+    assert t["cash_krw"] == 500_000.0 and t["cash_pct"] == 25.0
+    assert {"label": "현금", "value_krw": 500_000.0} in out["allocation"]
+
+
+def test_account_risk():
+    import pandas as pd
+    idx = pd.date_range("2026-01-01", periods=60)
+    a = pd.Series(range(100, 160), index=idx, dtype=float)
+    holdings = {"A": {"quantity": 1, "avg_price": 100.0},
+                "B": {"quantity": 2, "avg_price": 50.0}}
+    closes = {"A": a, "B": a * 0.5}  # 완전 동행 → 상관 1.0
+    tickers = {"A": {"name": "가", "currency": "KRW"}, "B": {"name": "나", "currency": "KRW"}}
+    out = portfolio.account_risk(holdings, closes, tickers, usdkrw=None, cash_krw=159.0)
+    assert out is not None
+    # 총자산 = A 159 + B 159 + 현금 159 → 각 종목 33.3%
+    assert out["weights"][0]["weight_pct"] == 33.3
+    assert out["corr"]["matrix"][0][1] == 1.0
+    assert out["mdd_pct"] == 0.0  # 단조 상승 → 낙폭 없음
+
+
+def test_account_risk_insufficient():
+    assert portfolio.account_risk({}, {}, {}, usdkrw=None) is None
+
+
 def test_build_portfolio_missing_price():
     holdings = {"A": {"quantity": 5, "avg_price": 10.0}}
     tickers = {"A": {"name": "가", "market": "KR", "currency": "KRW"}}

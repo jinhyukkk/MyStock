@@ -114,6 +114,16 @@ def get_portfolio(request: Request):
     return service.get_portfolio_view(_conn(request))
 
 
+class CashIn(BaseModel):
+    amount: float = Field(ge=0)
+
+
+@router.put("/cash")
+def set_cash(c: CashIn, request: Request):
+    db.set_meta(_conn(request), "cash_krw", str(c.amount))
+    return {"cash_krw": c.amount}
+
+
 @router.get("/rules")
 def get_rules(request: Request, symbol: str | None = None):
     return [dict(r) for r in db.list_rules(_conn(request), symbol)]

@@ -185,7 +185,7 @@ export default function TickerDetail() {
           </div>}
         </div>
         <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 8 }}>
-          2×ATR 손절 기준, 계좌 총액의 1%만 잃는 수량. 진입 전 손절가를 먼저 정하세요.</div>
+          2×ATR 손절 기준, 총자산(평가액+예수금)의 1%만 잃는 수량. 진입 전 손절가를 먼저 정하세요.</div>
       </div>}
 
       {backtest && <div className="card">
