@@ -23,6 +23,7 @@ class TradeIn(BaseModel):
     quantity: float = Field(gt=0)
     price: float = Field(gt=0)
     trade_date: str
+    note: str | None = None
 
 
 class RuleIn(BaseModel):
@@ -97,9 +98,17 @@ def get_trades(request: Request, symbol: str | None = None):
 @router.post("/trades")
 def add_trade(t: TradeIn, request: Request):
     conn = _conn(request)
-    if not db.get_ticker(conn, t.symbol):
+    ticker = db.get_ticker(conn, t.symbol)
+    if not ticker:
         raise HTTPException(400, "unknown symbol — 워치리스트에 먼저 추가하세요")
-    tid = db.insert_trade(conn, t.symbol, t.side, t.quantity, t.price, t.trade_date)
+    # 체결 시점 환율 스냅샷 — 실현손익 원화 환산이 과거 환율로 왜곡되지 않게
+    fx_rate = 1.0
+    if ticker["currency"] == "USD":
+        fx_rate = service.get_sentiment_view(conn).get("usdkrw")  # 미수집이면 NULL → 현재 환율 폴백
+    sig = db.get_latest_signal(conn, t.symbol)
+    tid = db.insert_trade(conn, t.symbol, t.side, t.quantity, t.price, t.trade_date,
+                          fx_rate=fx_rate, note=t.note,
+                          grade_at_trade=sig["grade"] if sig else None)
     return {"id": tid}
 
 

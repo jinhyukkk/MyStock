@@ -13,6 +13,8 @@ def _walk_trades(trades: list) -> tuple[dict, list]:
         s = t["symbol"]
         h = holdings.setdefault(s, {"quantity": 0.0, "avg_price": 0.0})
         if t["side"] == "BUY":
+            if h["quantity"] == 0:  # 신규 진입 — 첫 매수 시점 등급이 복기 기준
+                h["entry_grade"] = t.get("grade_at_trade")
             total_cost = h["avg_price"] * h["quantity"] + t["price"] * t["quantity"]
             h["quantity"] += t["quantity"]
             h["avg_price"] = total_cost / h["quantity"]
@@ -24,6 +26,10 @@ def _walk_trades(trades: list) -> tuple[dict, list]:
                     "buy_price": h["avg_price"], "sell_price": t["price"],
                     "pnl": round((t["price"] - h["avg_price"]) * qty, 4),
                     "pnl_pct": round((t["price"] / h["avg_price"] - 1) * 100, 2),
+                    # ponytail: 매도 시점 환율로 전체 손익 환산 — 매수/매도 환율 분리 정산이 필요해지면 평균 매수 환율 추적 추가
+                    "fx_rate": t.get("fx_rate"),
+                    "entry_grade": h.get("entry_grade"),
+                    "note": t.get("note"),
                 })
             h["quantity"] -= t["quantity"]
         if h["quantity"] <= 1e-9:
@@ -41,17 +47,27 @@ def realized_pnl(trades: list) -> list[dict]:
 
 def realized_stats(realized: list, tickers: dict, usdkrw) -> dict:
     """승률·평균 손익비 — 트레이더 자기 복기용 핵심 지표.
-    KRW 환산은 현재 환율 근사 (체결 시점 환율은 저장하지 않음)."""
+    KRW 환산은 매도 체결 시점 환율 우선, 미기록(과거 행)은 현재 환율 폴백."""
     fx = usdkrw or DEFAULT_USDKRW
     total_krw = 0.0
     for r in realized:
         cur = tickers.get(r["symbol"], {}).get("currency", "KRW")
-        total_krw += r["pnl"] * (fx if cur == "USD" else 1.0)
+        rate = r.get("fx_rate") or (fx if cur == "USD" else 1.0)
+        total_krw += r["pnl"] * rate
     wins = [r["pnl_pct"] for r in realized if r["pnl"] > 0]
     losses = [r["pnl_pct"] for r in realized if r["pnl"] <= 0]
     avg_win = sum(wins) / len(wins) if wins else None
     avg_loss = sum(losses) / len(losses) if losses else None
     payoff = round(avg_win / abs(avg_loss), 2) if avg_win and avg_loss else None
+    # 진입 등급별 성과 — "시그널 따른 매매 vs 뇌동매매"를 분리해서 본다
+    by_grade: dict[str, list] = {}
+    for r in realized:
+        by_grade.setdefault(r.get("entry_grade") or "미기록", []).append(r)
+    grade_stats = [
+        {"grade": g, "count": len(rows),
+         "win_rate": round(sum(r["pnl"] > 0 for r in rows) / len(rows) * 100, 1),
+         "avg_pnl_pct": round(sum(r["pnl_pct"] for r in rows) / len(rows), 2)}
+        for g, rows in sorted(by_grade.items(), key=lambda x: -len(x[1]))]
     return {
         "count": len(realized),
         "total_pnl_krw": round(total_krw, 0),
@@ -59,6 +75,7 @@ def realized_stats(realized: list, tickers: dict, usdkrw) -> dict:
         "avg_win_pct": round(avg_win, 2) if avg_win is not None else None,
         "avg_loss_pct": round(avg_loss, 2) if avg_loss is not None else None,
         "payoff_ratio": payoff,
+        "by_entry_grade": grade_stats,
     }
 
 

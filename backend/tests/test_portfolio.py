@@ -39,6 +39,24 @@ def test_realized_stats():
     assert s["total_pnl_krw"] == 50 and s["payoff_ratio"] == 2.0
 
 
+def test_entry_grade_tracked_and_aggregated():
+    trades = [dict(T("A", "BUY", 10, 100), grade_at_trade="강력매수", note=None),
+              dict(T("A", "BUY", 5, 110), grade_at_trade="중립", note=None),  # 추가 매수는 등급 유지
+              dict(T("A", "SELL", 15, 120), grade_at_trade="매도", note="목표가 도달")]
+    r = portfolio.realized_pnl(trades)
+    assert r[0]["entry_grade"] == "강력매수" and r[0]["note"] == "목표가 도달"
+    s = portfolio.realized_stats(r, {"A": {"currency": "KRW"}}, usdkrw=None)
+    g = s["by_entry_grade"][0]
+    assert g["grade"] == "강력매수" and g["count"] == 1 and g["win_rate"] == 100.0
+
+
+def test_realized_stats_uses_trade_fx_rate():
+    r = [{"symbol": "AAPL", "pnl": 100, "pnl_pct": 10.0, "fx_rate": 1300.0},
+         {"symbol": "AAPL", "pnl": 100, "pnl_pct": 10.0, "fx_rate": None}]  # 과거 행 폴백
+    s = portfolio.realized_stats(r, {"AAPL": {"currency": "USD"}}, usdkrw=1400.0)
+    assert s["total_pnl_krw"] == 100 * 1300 + 100 * 1400
+
+
 def test_realized_stats_empty():
     s = portfolio.realized_stats([], {}, usdkrw=None)
     assert s["count"] == 0 and s["win_rate"] is None

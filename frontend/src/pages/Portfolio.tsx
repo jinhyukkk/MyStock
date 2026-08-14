@@ -9,13 +9,14 @@ const fmt = (n: number | null) => n === null ? '—' : n.toLocaleString('ko-KR',
 const cur = (c: string, n: number | null) => n === null ? '—' : (c === 'USD' ? '$' : '₩') + fmt(n)
 
 interface Trade { id: number; symbol: string; side: string; quantity: number;
-                  price: number; trade_date: string }
+                  price: number; trade_date: string;
+                  note: string | null; grade_at_trade: string | null }
 
 export default function Portfolio() {
   const [pf, setPf] = useState<PF | null>(null)
   const [trades, setTrades] = useState<Trade[]>([])
   const [form, setForm] = useState({ symbol: '', side: 'BUY', quantity: '', price: '',
-    trade_date: new Date().toISOString().slice(0, 10) })
+    trade_date: new Date().toISOString().slice(0, 10), note: '' })
   const [msg, setMsg] = useState<string | null>(null)
   const [cashInput, setCashInput] = useState<string>('')
 
@@ -39,8 +40,8 @@ export default function Portfolio() {
     }
     try {
       await post('/api/trades', { ...form, symbol: form.symbol.trim().toUpperCase(),
-                                  quantity, price })
-      setMsg(null); setForm({ ...form, quantity: '', price: '' }); load()
+                                  quantity, price, note: form.note.trim() || null })
+      setMsg(null); setForm({ ...form, quantity: '', price: '', note: '' }); load()
     } catch (e) { setMsg(String(e)) }
   }
 
@@ -189,9 +190,27 @@ export default function Portfolio() {
             <div style={{ fontWeight: 700, fontSize: 18 }}>{pf.realized.stats.payoff_ratio ?? '—'}</div>
           </div>
         </div>
+        {pf.realized.stats.by_entry_grade.length > 0 && <>
+          <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 12 }}>
+            진입 등급별 성과 — 시그널을 따른 매매와 아닌 매매의 성적을 분리해서 보세요</div>
+          <table style={{ marginTop: 6 }}>
+            <thead><tr><th>진입 시 등급</th><th>횟수</th><th>승률</th><th>평균 수익률</th></tr></thead>
+            <tbody>
+              {pf.realized.stats.by_entry_grade.map(g => (
+                <tr key={g.grade}>
+                  <td>{g.grade}</td>
+                  <td>{g.count}</td>
+                  <td>{g.win_rate}%</td>
+                  <td className={g.avg_pnl_pct >= 0 ? 'pos' : 'neg'}>
+                    {g.avg_pnl_pct >= 0 ? '+' : ''}{g.avg_pnl_pct}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>}
         <table style={{ marginTop: 12 }}>
           <thead><tr><th>매도일</th><th>심볼</th><th>수량</th><th>평단</th><th>매도가</th>
-            <th>실현손익</th><th>수익률</th></tr></thead>
+            <th>실현손익</th><th>수익률</th><th>진입 등급</th><th>메모</th></tr></thead>
           <tbody>
             {pf.realized.entries.map((r, i) => (
               <tr key={i}>
@@ -203,6 +222,10 @@ export default function Portfolio() {
                 <td className={r.pnl >= 0 ? 'pos' : 'neg'}>{fmt(r.pnl)}</td>
                 <td className={r.pnl_pct >= 0 ? 'pos' : 'neg'}>
                   {r.pnl_pct >= 0 ? '+' : ''}{r.pnl_pct}%</td>
+                <td>{r.entry_grade ?? '—'}</td>
+                <td style={{ textAlign: 'left', maxWidth: 200, overflow: 'hidden',
+                             textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                    title={r.note ?? ''}>{r.note ?? ''}</td>
               </tr>
             ))}
           </tbody>
@@ -223,11 +246,14 @@ export default function Portfolio() {
                  onChange={e => setForm({ ...form, price: e.target.value })} style={{ width: 130 }} />
           <input type="date" value={form.trade_date}
                  onChange={e => setForm({ ...form, trade_date: e.target.value })} />
+          <input placeholder="메모 (진입/청산 근거)" value={form.note}
+                 onChange={e => setForm({ ...form, note: e.target.value })} style={{ flex: 1, minWidth: 180 }} />
           <button onClick={addTrade}>추가</button>
         </div>
         {msg && <div style={{ color: 'var(--sell)', marginTop: 8 }}>{msg}</div>}
         <table style={{ marginTop: 12 }}>
-          <thead><tr><th>날짜</th><th>심볼</th><th>구분</th><th>수량</th><th>단가</th><th></th></tr></thead>
+          <thead><tr><th>날짜</th><th>심볼</th><th>구분</th><th>수량</th><th>단가</th>
+            <th>체결 시 등급</th><th>메모</th><th></th></tr></thead>
           <tbody>
             {trades.slice().reverse().map(tr => (
               <tr key={tr.id}>
@@ -237,6 +263,10 @@ export default function Portfolio() {
                   {tr.side === 'BUY' ? '매수' : '매도'}</td>
                 <td>{fmt(tr.quantity)}</td>
                 <td>{fmt(tr.price)}</td>
+                <td>{tr.grade_at_trade ?? '—'}</td>
+                <td style={{ textAlign: 'left', maxWidth: 220, overflow: 'hidden',
+                             textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                    title={tr.note ?? ''}>{tr.note ?? ''}</td>
                 <td><button className="ghost"
                   onClick={() => del(`/api/trades/${tr.id}`).then(load)}>삭제</button></td>
               </tr>

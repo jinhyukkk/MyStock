@@ -4,13 +4,19 @@ from pathlib import Path
 import pandas as pd
 
 DEFAULT_DB = str(Path(__file__).parent.parent / "mystock.db")
-_SCHEMA = (Path(__file__).parent / "schema.sql").read_text()
+_SCHEMA = (Path(__file__).parent / "schema.sql").read_text(encoding="utf-8")
 
 
 def get_conn(db_path: str | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path or DEFAULT_DB, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
+    # 기존 DB 마이그레이션 — CREATE IF NOT EXISTS는 컬럼 추가를 못 하므로 여기서 보강
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(trades)")]
+    for col, decl in (("fx_rate", "REAL"), ("note", "TEXT"), ("grade_at_trade", "TEXT")):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {decl}")
+    conn.commit()
     return conn
 
 
@@ -46,10 +52,12 @@ def remove_from_watchlist(conn, symbol):
     set_watchlist(conn, symbol, 0)
 
 
-def insert_trade(conn, symbol, side, quantity, price, trade_date) -> int:
+def insert_trade(conn, symbol, side, quantity, price, trade_date, fx_rate=None,
+                 note=None, grade_at_trade=None) -> int:
     cur = conn.execute(
-        "INSERT INTO trades (symbol, side, quantity, price, trade_date) VALUES (?,?,?,?,?)",
-        (symbol, side, quantity, price, trade_date))
+        """INSERT INTO trades (symbol, side, quantity, price, trade_date, fx_rate, note, grade_at_trade)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (symbol, side, quantity, price, trade_date, fx_rate, note, grade_at_trade))
     conn.commit()
     return cur.lastrowid
 

@@ -50,10 +50,12 @@ export interface Holding {
 export interface RealizedEntry {
   symbol: string; trade_date: string; quantity: number;
   buy_price: number; sell_price: number; pnl: number; pnl_pct: number;
+  entry_grade: string | null; note: string | null;
 }
 export interface RealizedStats {
   count: number; total_pnl_krw: number; win_rate: number | null;
   avg_win_pct: number | null; avg_loss_pct: number | null; payoff_ratio: number | null;
+  by_entry_grade: { grade: string; count: number; win_rate: number; avg_pnl_pct: number }[];
 }
 export interface Portfolio {
   holdings: Holding[];
