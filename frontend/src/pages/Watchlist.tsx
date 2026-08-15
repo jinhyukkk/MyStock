@@ -63,6 +63,12 @@ export default function Watchlist() {
           불러오기 실패: {error}
           <button style={{ marginLeft: 8 }} onClick={() => { setError(null); load() }}>다시 시도</button>
         </div>}
+        {dash && dash.signals.filter(s => s.in_watchlist).length === 0 && !error &&
+          <div className="empty">
+            워치리스트가 비어 있습니다.<br />
+            위 검색창에서 종목을 찾아 추가하면 <Link to="/">대시보드</Link>에 시그널이 표시됩니다.
+          </div>}
+        <div className="table-scroll">
         <table>
           <thead><tr><th>종목</th><th>스윙</th><th>중장기</th><th></th></tr></thead>
           <tbody>
@@ -81,6 +87,7 @@ export default function Watchlist() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   )

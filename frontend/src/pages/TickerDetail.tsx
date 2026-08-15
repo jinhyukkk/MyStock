@@ -5,6 +5,7 @@ import { del, get, post } from '../api'
 import type { Backtest, TickerDetail as Detail } from '../types'
 import SignalBadge from '../components/SignalBadge'
 import ScoreBar from '../components/ScoreBar'
+import TradeDialog from '../components/TradeDialog'
 
 const CHART_OPTS = {
   layout: { background: { color: 'transparent' }, textColor: '#8b93a3' },
@@ -72,24 +73,38 @@ function useCandleChart(detail: Detail | null) {
   return { mainRef, rsiRef, macdRef }
 }
 
+/** 등급의 방향만 뽑는다 (+1 매수 / 0 중립 / -1 매도). */
+const dir = (grade: string) => grade.includes('매수') ? 1 : grade.includes('매도') ? -1 : 0
+
 export default function TickerDetail() {
   const { symbol } = useParams()
   const [detail, setDetail] = useState<Detail | null>(null)
   const [backtest, setBacktest] = useState<Backtest | null>(null)
+  const [btError, setBtError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [ruleType, setRuleType] = useState('TARGET')
   const [ruleValue, setRuleValue] = useState('')
+  const [ruleMsg, setRuleMsg] = useState<string | null>(null)
+  const [tradeOpen, setTradeOpen] = useState(false)
   const { mainRef, rsiRef, macdRef } = useCandleChart(detail)
 
   const load = () => get<Detail>(`/api/tickers/${symbol}`)
-    .then(setDetail).catch(e => setError(String(e)))
+    .then(d => { setDetail(d); setError(null) }).catch(e => setError(String(e)))
   useEffect(() => {
     load()
-    setBacktest(null)
-    get<Backtest>(`/api/tickers/${symbol}/backtest`).then(setBacktest).catch(() => {})
+    setBacktest(null); setBtError(null)
+    // 백테스트 실패를 삼키면 카드가 조용히 사라진다. 백엔드는
+    // "가격 데이터 부족 — 새로고침 후 다시 시도" 같은 행동 가능한 메시지를 준다.
+    get<Backtest>(`/api/tickers/${symbol}/backtest`)
+      .then(setBacktest).catch(e => setBtError(String(e)))
   }, [symbol])
 
-  if (error) return <div className="card">불러오기 실패: {error}</div>
+  if (error) return (
+    <div className="card">
+      <div style={{ color: 'var(--sell)' }}>불러오기 실패: {error}</div>
+      <button style={{ marginTop: 10 }} onClick={() => { setError(null); load() }}>다시 시도</button>
+    </div>
+  )
   if (!detail) return (
     <div className="grid">
       <div className="card skeleton" style={{ minHeight: 120 }} />
@@ -98,11 +113,29 @@ export default function TickerDetail() {
   )
   const sig = detail.signal
   const last = detail.candles.at(-1)
+  const unit = detail.currency === 'USD' ? '$' : '₩'
+  // 현재 등급이 과거에 어떤 성적을 냈는지 — 등급 배지만으로는 그 등급을 믿을 근거가 없다
+  const gradeStat = backtest?.grades.find(g => g.grade === sig?.swing_grade) ?? null
+  const conflict = sig && dir(sig.swing_grade) !== 0 && dir(sig.longterm_grade) !== 0
+    && dir(sig.swing_grade) !== dir(sig.longterm_grade)
+  const hasStopRule = detail.rules.some(r => r.rule_type === 'STOP')
 
   const addRule = async () => {
     if (!ruleValue) return
-    await post('/api/rules', { symbol, rule_type: ruleType, value: Number(ruleValue) })
-    setRuleValue(''); load()
+    try {
+      await post('/api/rules', { symbol, rule_type: ruleType, value: Number(ruleValue) })
+      setRuleValue(''); setRuleMsg(null); load()
+    } catch (e) { setRuleMsg(String(e)) }
+  }
+
+  /** 손절가는 이 화면에서 이미 계산돼 있는데 룰 등록은 수동 재입력이었다.
+   *  옮겨 적는 사이에 값이 틀리거나 아예 등록을 건너뛰게 된다. */
+  const registerStop = async () => {
+    if (!detail.risk) return
+    try {
+      await post('/api/rules', { symbol, rule_type: 'STOP', value: detail.risk.stop_price })
+      setRuleMsg(null); load()
+    } catch (e) { setRuleMsg(String(e)) }
   }
 
   return (
@@ -116,34 +149,79 @@ export default function TickerDetail() {
           {last && <div style={{ fontSize: 22, fontWeight: 700 }}>
             {detail.currency === 'USD' ? '$' : '₩'}{last.close.toLocaleString('ko-KR')}</div>}
         </div>
-        {sig && <div style={{ display: 'flex', gap: 24 }}>
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>스윙</div>
-            <SignalBadge grade={sig.swing_grade} />
-            <ScoreBar score={sig.swing_score} />
-          </div>
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>중장기</div>
-            <SignalBadge grade={sig.longterm_grade} />
-            <ScoreBar score={sig.longterm_score} />
-          </div>
-        </div>}
+        <div style={{ display: 'flex', gap: 24, alignItems: 'center', flexWrap: 'wrap' }}>
+          {sig && <>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>스윙</div>
+              <SignalBadge grade={sig.swing_grade} />
+              <ScoreBar score={sig.swing_score} label="스윙" />
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>중장기</div>
+              <SignalBadge grade={sig.longterm_grade} />
+              <ScoreBar score={sig.longterm_score} label="중장기" />
+            </div>
+          </>}
+          <button onClick={() => setTradeOpen(true)}>매매 기록</button>
+        </div>
       </div>
 
-      {sig?.context_note && <div className="card" style={{ color: 'var(--accent)' }}>
-        💡 {sig.context_note}</div>}
+      {tradeOpen && <TradeDialog symbol={detail.symbol} name={detail.name}
+        currency={detail.currency} defaultPrice={last?.close ?? null}
+        onClose={() => setTradeOpen(false)} onSaved={load} />}
 
+      {/* 행동 요약 — 차트보다 위에 둔다. 차트 3개(600px)가 먼저 오면
+          손절가·수량·과거 성적이 스크롤 아래로 밀려 "30초 판단"이 성립하지 않는다. */}
       <div className="card">
-        <div ref={mainRef} />
-        <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 12 }}>RSI (14)</div>
-        <div ref={rsiRef} />
-        <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 12 }}>MACD (12,26,9)</div>
-        <div ref={macdRef} />
+        <strong>행동 요약</strong>
+        {detail.risk ? (
+          <div style={{ display: 'flex', gap: 32, marginTop: 10, flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>제안 손절가 (2×ATR)</div>
+              <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--sell)' }}>
+                {unit}{detail.risk.stop_price.toLocaleString('ko-KR')}
+                <span style={{ fontSize: 12 }}> ({detail.risk.stop_pct}%)</span></div>
+            </div>
+            {detail.risk.position_size_1pct !== null && <div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>계좌 1% 리스크 수량</div>
+              <div style={{ fontWeight: 700, fontSize: 18 }}>
+                {detail.risk.position_size_1pct.toLocaleString('ko-KR')}
+                <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+                  {' '}(리스크 ₩{detail.risk.risk_budget_krw?.toLocaleString('ko-KR')})</span></div>
+            </div>}
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+                이 등급의 과거 성적 (20일)</div>
+              <div style={{ fontWeight: 700, fontSize: 18 }}>
+                {gradeStat && gradeStat.win20 !== null
+                  ? <>승률 {gradeStat.win20}%
+                      <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+                        {' '}· 표본 {gradeStat.n}일</span></>
+                  : <span style={{ color: 'var(--text-dim)', fontSize: 14 }}>표본 없음</span>}</div>
+            </div>
+            <div style={{ alignSelf: 'center' }}>
+              <button className="ghost" onClick={registerStop} disabled={hasStopRule}>
+                {hasStopRule ? '손절 룰 등록됨' : '손절가를 룰로 등록'}</button>
+            </div>
+          </div>
+        ) : <div style={{ color: 'var(--text-dim)', marginTop: 8 }}>
+          ATR 계산에 필요한 가격 데이터가 부족합니다 — 새로고침 후 다시 확인하세요.</div>}
+
+        {conflict && sig && <div className="warn-box" style={{ marginTop: 12 }}>
+          ⚠ 스윙 {sig.swing_grade} · 중장기 {sig.longterm_grade} — 방향이 엇갈립니다.
+          어느 쪽을 따를지가 아니라 <strong>보유 기간을 먼저 정하고</strong> 그에 맞는 쪽을 보세요.</div>}
+        {sig?.context_note && <div style={{ color: 'var(--accent)', fontSize: 13, marginTop: 10 }}>
+          💡 {sig.context_note}</div>}
+        <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 10 }}>
+          2×ATR 손절 기준, 총자산(평가액+예수금)의 1%만 잃는 수량. 진입 전 손절가를 먼저 정하세요.
+          <br />지표 기반 참고 정보이며 투자 자문이 아닙니다. 최종 판단과 책임은 본인에게 있습니다.</div>
+        {ruleMsg && <div style={{ color: 'var(--sell)', fontSize: 12, marginTop: 8 }}>{ruleMsg}</div>}
       </div>
 
       {sig && <div className="card">
         <strong>시그널 근거</strong>
         <p style={{ margin: '8px 0', color: 'var(--text-dim)' }}>{sig.summary}</p>
+        <div className="table-scroll">
         <table>
           <thead><tr><th>지표</th><th>관점</th><th>점수</th><th style={{ textAlign: 'left' }}>근거</th></tr></thead>
           <tbody>
@@ -151,41 +229,29 @@ export default function TickerDetail() {
               <tr key={i}>
                 <td>{s.name}</td>
                 <td>{s.scope === 'swing' ? '스윙' : '중장기'}</td>
-                <td><ScoreBar score={s.score} /></td>
+                <td><ScoreBar score={s.score} label={s.name} /></td>
                 <td style={{ textAlign: 'left' }}>{s.reason}</td>
               </tr>
             ))}
           </tbody>
         </table>
+        </div>
       </div>}
 
-      {detail.risk && <div className="card">
-        <strong>리스크 관리 (ATR 기반)</strong>
-        <div style={{ display: 'flex', gap: 32, marginTop: 10, flexWrap: 'wrap' }}>
-          <div>
-            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>ATR (14일)</div>
-            <div style={{ fontWeight: 700 }}>{detail.risk.atr.toLocaleString('ko-KR')}
-              <span style={{ color: 'var(--text-dim)', fontSize: 12 }}> ({detail.risk.atr_pct}%)</span></div>
-          </div>
-          <div>
-            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>제안 손절가 (2×ATR)</div>
-            <div style={{ fontWeight: 700, color: 'var(--sell, #ff5252)' }}>
-              {detail.risk.stop_price.toLocaleString('ko-KR')}
-              <span style={{ fontSize: 12 }}> ({detail.risk.stop_pct}%)</span></div>
-          </div>
-          <div>
-            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>최대 낙폭 (400일)</div>
-            <div style={{ fontWeight: 700 }}>{detail.risk.mdd_pct}%</div>
-          </div>
-          {detail.risk.position_size_1pct !== null && <div>
-            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>계좌 1% 리스크 수량</div>
-            <div style={{ fontWeight: 700 }}>{detail.risk.position_size_1pct.toLocaleString('ko-KR')}
-              <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
-                {' '}(리스크 ₩{detail.risk.risk_budget_krw?.toLocaleString('ko-KR')})</span></div>
-          </div>}
-        </div>
-        <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 8 }}>
-          2×ATR 손절 기준, 총자산(평가액+예수금)의 1%만 잃는 수량. 진입 전 손절가를 먼저 정하세요.</div>
+      <div className="card">
+        {detail.risk && <div style={{ color: 'var(--text-dim)', fontSize: 12, marginBottom: 10 }}>
+          ATR(14) {detail.risk.atr.toLocaleString('ko-KR')} ({detail.risk.atr_pct}%)
+          {' · '}최대 낙폭(400일) {detail.risk.mdd_pct}%</div>}
+        <div ref={mainRef} />
+        <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 12 }}>RSI (14)</div>
+        <div ref={rsiRef} />
+        <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 12 }}>MACD (12,26,9)</div>
+        <div ref={macdRef} />
+      </div>
+
+      {btError && <div className="card">
+        <strong>시그널 백테스트</strong>
+        <div className="warn-box" style={{ marginTop: 8 }}>불러오지 못했습니다: {btError}</div>
       </div>}
 
       {backtest && <div className="card">
@@ -194,7 +260,8 @@ export default function TickerDetail() {
           {' '}{backtest.start} ~ {backtest.end} · 표본 {backtest.samples}일 · 현재 스코어링 로직을 과거에 적용한 결과
           {backtest.bench_label && ` · 초과수익 = ${backtest.bench_label} 대비`}
           {` · 순 = 왕복 비용 ${backtest.cost_pct}%p 차감 · 인접일 표본 중첩(자기상관)으로 실제 독립 표본은 더 적음`}</span>
-        <table style={{ marginTop: 8 }}>
+        <div className="table-scroll" style={{ marginTop: 8 }}>
+        <table>
           <thead><tr><th>등급</th><th>신호 일수</th><th>5일 평균</th><th>5일 승률</th>
             <th>20일 평균</th><th>20일 승률</th>
             {backtest.bench_label && <><th>5일 초과</th><th>20일 초과</th></>}</tr></thead>
@@ -223,9 +290,10 @@ export default function TickerDetail() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>}
 
-      <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
+      <div className="grid-2">
         <div className="card">
           <strong>펀더멘털 (참고)</strong>
           {detail.fundamentals ? (
@@ -244,6 +312,8 @@ export default function TickerDetail() {
         </div>
         <div className="card">
           <strong>커스텀 룰</strong>
+          {detail.rules.length === 0 && <div className="empty" style={{ padding: '14px 0' }}>
+            등록된 룰이 없습니다. 목표가·손절가를 걸어두면 도달 시 알림을 받습니다.</div>}
           {detail.rules.map(r => (
             <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
               <span>{{ TARGET: '목표가', STOP: '손절가', AVG_PCT: '평단 대비 %' }[r.rule_type]}
@@ -271,6 +341,7 @@ export default function TickerDetail() {
 
       <div className="card">
         <strong>시그널 히스토리</strong>
+        <div className="table-scroll">
         <table>
           <thead><tr><th>날짜</th><th>스윙 점수</th><th>중장기 점수</th><th>등급</th></tr></thead>
           <tbody>
@@ -284,6 +355,7 @@ export default function TickerDetail() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   )

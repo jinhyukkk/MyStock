@@ -1,23 +1,52 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { get, post } from '../api'
-import type { Dashboard as DashboardData } from '../types'
+import type { Dashboard as DashboardData, SignalRow } from '../types'
 import SentimentGauge from '../components/SentimentGauge'
 import SignalBadge from '../components/SignalBadge'
-import ScoreBar from '../components/ScoreBar'
+import { isStale, relativeTime } from '../time'
 
 const fmt = (n: number | null, cur = 'KRW') =>
   n === null ? '—' : (cur === 'USD' ? '$' : '₩') + n.toLocaleString('ko-KR', {
     maximumFractionDigits: cur === 'USD' ? 2 : 0 })
 
+/** 등급의 방향만 뽑는다 (+1 매수 / 0 중립 / -1 매도). */
+const dir = (grade: string) => grade.includes('매수') ? 1 : grade.includes('매도') ? -1 : 0
+
+/** 스윙과 중장기가 반대 방향이면 어느 쪽을 따를지 화면이 알려주지 않아 오독이 생긴다.
+ *  어느 쪽이 옳다고 말하는 대신, 판단에 필요한 질문(보유 기간)을 돌려준다. */
+function conflictHint(sig: SignalRow): string | null {
+  const s = dir(sig.swing_grade), l = dir(sig.longterm_grade)
+  if (s === 0 || l === 0 || s === l) return null
+  return s > 0
+    ? '단기 매수 · 장기 매도 — 짧게 볼 자리인지 먼저 정하세요'
+    : '단기 매도 · 장기 매수 — 눌림목인지 추세 이탈인지 먼저 정하세요'
+}
+
 export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [now, setNow] = useState(Date.now())
 
-  const load = () => get<DashboardData>('/api/dashboard')
-    .then(d => { setData(d); setError(null) }).catch(e => setError(String(e)))
-  useEffect(() => { load() }, [])
+  const load = useCallback(() => get<DashboardData>('/api/dashboard')
+    .then(d => { setData(d); setError(null); setNow(Date.now()) })
+    .catch(e => setError(String(e))), [])
+  useEffect(() => { load() }, [load])
+
+  // 백엔드는 백그라운드로 갱신되지만 열어둔 탭은 그 사실을 모른다.
+  // 탭으로 돌아올 때 다시 받고, 머무는 동안에도 "몇 분 전" 표기를 흘려보낸다.
+  useEffect(() => {
+    const onFocus = () => { if (document.visibilityState === 'visible') load() }
+    document.addEventListener('visibilitychange', onFocus)
+    window.addEventListener('focus', onFocus)
+    const tick = setInterval(() => setNow(Date.now()), 30_000)
+    return () => {
+      document.removeEventListener('visibilitychange', onFocus)
+      window.removeEventListener('focus', onFocus)
+      clearInterval(tick)
+    }
+  }, [load])
 
   const refresh = async () => {
     setBusy(true)
@@ -36,7 +65,7 @@ export default function Dashboard() {
   )
   if (!data) return (
     <div className="grid">
-      <div className="grid" style={{ gridTemplateColumns: '2fr 1fr' }}>
+      <div className="grid-2to1">
         <div className="card skeleton" style={{ minHeight: 130 }} />
         <div className="card skeleton" style={{ minHeight: 130 }} />
       </div>
@@ -45,11 +74,13 @@ export default function Dashboard() {
   )
   const { sentiment: s, portfolio_summary: pf } = data
   const pnlCls = pf.total_pnl_krw >= 0 ? 'pos' : 'neg'
+  const stale = isStale(data.last_refresh, now)
 
   return (
     <div className="grid">
-      <div className="grid" style={{ gridTemplateColumns: '2fr 1fr' }}>
-        <div className="card" style={{ display: 'flex', justifyContent: 'space-around' }}>
+      <div className="grid-2to1">
+        <div className="card" style={{ display: 'flex', justifyContent: 'space-around',
+                                       flexWrap: 'wrap', gap: 12 }}>
           <SentimentGauge label="주식 공포탐욕" value={s.cnn_fg} valueLabel={s.cnn_fg_label} />
           <SentimentGauge label="크립토 공포탐욕" value={s.crypto_fg} valueLabel={s.crypto_fg_label} />
           <div style={{ textAlign: 'center', alignSelf: 'center' }}>
@@ -84,29 +115,43 @@ export default function Dashboard() {
       )}
 
       <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10,
+                      flexWrap: 'wrap', gap: 8 }}>
           <strong>오늘의 시그널</strong>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-            {data.failed_sources.length > 0 &&
-              <span style={{ color: 'var(--sell)', fontSize: 12 }}>
-                일부 소스 갱신 실패: {data.failed_sources.join(', ')}</span>}
-            <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
-              기준: {data.last_refresh ?? '—'}</span>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span className={stale ? 'warn' : ''} style={{ fontSize: 12,
+                    color: stale ? undefined : 'var(--text-dim)' }}
+                  title={data.last_refresh ?? ''}>
+              {stale && '⚠ '}기준: {relativeTime(data.last_refresh, now)}</span>
             <button onClick={refresh} disabled={busy}>{busy ? '갱신 중…' : '새로고침'}</button>
           </div>
         </div>
-        {data.signals.length === 0 &&
-          <div style={{ color: 'var(--text-dim)' }}>
-            워치리스트에 종목을 추가하면 시그널이 표시됩니다.</div>}
+
+        {/* 경고는 시세 색과 다른 축이므로 --warn 으로 분리 */}
+        {stale && <div className="warn-box" style={{ marginBottom: 10 }}>
+          마지막 갱신이 2시간을 넘겼습니다. 표시된 가격·시그널이 현재 시장과 다를 수 있으니
+          새로고침 후 판단하세요.</div>}
+        {data.failed_sources.length > 0 && <div className="warn-box" style={{ marginBottom: 10 }}>
+          일부 소스 갱신 실패: {data.failed_sources.join(', ')} — 해당 종목 값이 낡았을 수 있습니다.</div>}
+
+        {data.signals.length === 0 ? (
+          <div className="empty">
+            아직 추적 중인 종목이 없습니다.<br />
+            <Link to="/watchlist">워치리스트</Link>에서 종목을 추가하면
+            스윙·중장기 시그널이 여기에 표시됩니다.
+          </div>
+        ) : (
+        <div className="table-scroll">
         <table>
           <thead><tr>
             <th>종목</th><th>현재가</th><th>등락</th><th>평단 대비</th><th>스윙</th><th>중장기</th>
           </tr></thead>
           <tbody>
             {data.signals.map((sig, idx) => {
-              const tooltip = `${sig.summary ?? ''}${sig.context_note ? ` · ${sig.context_note}` : ''}`
               // 보유 → 관심 경계에 구분선. 보유 종목이 먼저 오도록 백엔드가 정렬한다.
               const boundary = !sig.is_holding && idx > 0 && data.signals[idx - 1].is_holding
+              const hint = conflictHint(sig)
+              const tags = sig.summary_tags ?? []
               return (
               <Fragment key={sig.symbol}>
               {boundary && <tr><td colSpan={6} style={{ padding: '10px 0 4px', textAlign: 'left',
@@ -118,19 +163,29 @@ export default function Dashboard() {
                     <strong>{sig.name}</strong>
                     {sig.is_holding && <span style={{ color: 'var(--accent)', fontSize: 11 }}> 보유</span>}
                     {sig.grade_changed && <span style={{ color: 'var(--buy-strong)', fontSize: 11 }}> 등급변경</span>}
-                    <div className="sig-tags" title={tooltip}>
-                      {sig.summary_tags?.length
-                        ? sig.summary_tags.map((t, i) => (
-                            <span key={i} className={
-                              `sig-tag ${t.score > 0 ? 'buy' : 'sell'}${Math.abs(t.score) >= 60 ? ' strong' : ''}`}>
-                              {t.score > 0 ? '▲' : '▼'} {t.label}{t.warn && ' ⚠'}
-                            </span>
-                          ))
-                        : <span className="signal-summary">{sig.summary ?? '뚜렷한 시그널 없음'}</span>}
-                      {sig.context_note &&
-                        <span className="sig-tag note">{sig.context_note}</span>}
-                    </div>
                   </Link>
+                  {/* 행 요소를 줄이기 위해 근거는 2개까지만 노출하고 나머지는 접어둔다.
+                      title 툴팁은 터치 기기에서 열리지 않으므로 <details> 로 대체. */}
+                  <div className="sig-tags">
+                    {tags.slice(0, 2).map((t, i) => (
+                      <span key={i} className={
+                        `sig-tag ${t.score > 0 ? 'buy' : 'sell'}${Math.abs(t.score) >= 60 ? ' strong' : ''}`}>
+                        {t.score > 0 ? '▲' : '▼'} {t.label}{t.warn && ' ⚠'}
+                      </span>
+                    ))}
+                    {tags.length === 0 &&
+                      <span className="signal-summary">{sig.summary ?? '뚜렷한 시그널 없음'}</span>}
+                  </div>
+                  {hint && <div className="warn" style={{ fontSize: 11, marginTop: 4 }}>⚠ {hint}</div>}
+                  {(sig.summary || sig.context_note || tags.length > 2) && (
+                    <details>
+                      <summary className="reason-toggle">근거 자세히</summary>
+                      <div className="reason-body">
+                        {sig.summary}
+                        {sig.context_note && <><br />💡 {sig.context_note}</>}
+                      </div>
+                    </details>
+                  )}
                 </td>
                 <td>{fmt(sig.close, sig.currency)}</td>
                 <td className={(sig.change_pct ?? 0) >= 0 ? 'pos' : 'neg'}>
@@ -141,16 +196,22 @@ export default function Dashboard() {
                     <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
                       평단 {fmt(sig.avg_price, sig.currency)}</div></>}</td>
                 <td><div className="signal-cell">
-                  <SignalBadge grade={sig.swing_grade} /><ScoreBar score={sig.swing_score} />
+                  <SignalBadge grade={sig.swing_grade} />
+                  <span style={{ color: 'var(--text-dim)', fontSize: 12, minWidth: 28 }}>
+                    {sig.swing_score > 0 ? '+' : ''}{sig.swing_score.toFixed(0)}</span>
                 </div></td>
                 <td><div className="signal-cell">
-                  <SignalBadge grade={sig.longterm_grade} /><ScoreBar score={sig.longterm_score} />
+                  <SignalBadge grade={sig.longterm_grade} />
+                  <span style={{ color: 'var(--text-dim)', fontSize: 12, minWidth: 28 }}>
+                    {sig.longterm_score > 0 ? '+' : ''}{sig.longterm_score.toFixed(0)}</span>
                 </div></td>
               </tr>
               </Fragment>
             )})}
           </tbody>
         </table>
+        </div>
+        )}
       </div>
     </div>
   )

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { del, get, post, put } from '../api'
 import type { Portfolio as PF } from '../types'
+import SymbolInput from '../components/SymbolInput'
 
 const PIE_COLORS = ['#4f8ef7', '#2ecc71', '#f7c948', '#b06ef7', '#ff8a65']
 
@@ -121,7 +122,7 @@ export default function Portfolio() {
   )
   if (!pf) return (
     <div className="grid">
-      <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
+      <div className="grid-2">
         <div className="card skeleton" style={{ minHeight: 180 }} />
         <div className="card skeleton" style={{ minHeight: 180 }} />
       </div>
@@ -131,7 +132,7 @@ export default function Portfolio() {
   const t = pf.totals
   return (
     <div className="grid">
-      <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
+      <div className="grid-2">
         <div className="card">
           <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>총자산 (평가액 + 예수금, KRW 환산)</div>
           <div style={{ fontSize: 26, fontWeight: 700 }}>₩{fmt(t.total_asset_krw)}</div>
@@ -140,11 +141,14 @@ export default function Portfolio() {
           <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
             평가액 ₩{fmt(t.total_value_krw)} · 현금 ₩{fmt(t.cash_krw + (t.cash_usd_krw ?? 0))} ({t.cash_pct}%)
             {(t.cash_usd ?? 0) > 0 && <> — ₩{fmt(t.cash_krw)} + ${fmt(t.cash_usd)}</>}</div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center',
+                        flexWrap: 'wrap' }}>
             <input type="number" placeholder="예수금 (KRW)" value={cashInput}
-                   onChange={e => setCashInput(e.target.value)} style={{ width: 150 }} />
+                   onChange={e => setCashInput(e.target.value)}
+                   style={{ flex: '1 1 140px', minWidth: 0 }} />
             <input type="number" placeholder="달러 예수금 (USD)" value={cashUsdInput}
-                   onChange={e => setCashUsdInput(e.target.value)} style={{ width: 150 }} />
+                   onChange={e => setCashUsdInput(e.target.value)}
+                   style={{ flex: '1 1 140px', minWidth: 0 }} />
             <button onClick={saveCash}>저장</button>
             <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>비우면 변경 없음</span>
           </div>
@@ -159,6 +163,11 @@ export default function Portfolio() {
 
       <div className="card">
         <strong>보유 종목</strong>
+        {pf.holdings.length === 0 && <div className="empty">
+          보유 종목이 없습니다.<br />
+          아래 <strong>매매 입력</strong>에 체결 내역을 기록하면 평단·수익률·실현손익이 계산됩니다.
+        </div>}
+        <div className="table-scroll">
         <table>
           <thead><tr><th>종목</th><th>수량</th><th>평단가</th><th>현재가</th>
             <th>평가액</th><th>손익</th><th>수익률</th></tr></thead>
@@ -178,6 +187,7 @@ export default function Portfolio() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
 
       {pf.risk && <div className="card">
@@ -215,7 +225,8 @@ export default function Portfolio() {
         {pf.risk.corr && <>
           <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 12 }}>
             보유 종목 간 일간수익률 상관계수 — 0.7 이상이면 사실상 같은 포지션</div>
-          <table style={{ marginTop: 6 }}>
+          <div className="table-scroll" style={{ marginTop: 6 }}>
+          <table>
             <thead><tr><th></th>
               {pf.risk.corr.symbols.map(s => <th key={s}>{s}</th>)}</tr></thead>
             <tbody>
@@ -230,6 +241,7 @@ export default function Portfolio() {
               ))}
             </tbody>
           </table>
+          </div>
         </>}
       </div>}
 
@@ -277,7 +289,8 @@ export default function Portfolio() {
             </tbody>
           </table>
         </>}
-        <table style={{ marginTop: 12 }}>
+        <div className="table-scroll" style={{ marginTop: 12 }}>
+        <table>
           <thead><tr><th>매도일</th><th>심볼</th><th>수량</th><th>평단</th><th>매도가</th>
             <th>실현손익</th><th>수익률</th><th>진입 등급</th><th>메모</th></tr></thead>
           <tbody>
@@ -299,13 +312,15 @@ export default function Portfolio() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>}
 
       <div className="card">
         <strong>매매 입력</strong>
         <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-          <input placeholder="심볼 (예: 005930, AAPL, KRW-BTC)" value={form.symbol}
-                 onChange={e => setForm({ ...form, symbol: e.target.value })} style={{ width: 200 }} />
+          {/* 자유 텍스트 입력은 오타 한 번에 400으로 실패한다 — 등록 종목에서 고르게 한다 */}
+          <SymbolInput value={form.symbol} style={{ width: 220 }}
+                       onChange={v => setForm({ ...form, symbol: v })} />
           <select value={form.side} onChange={e => setForm({ ...form, side: e.target.value })}>
             <option value="BUY">매수</option><option value="SELL">매도</option>
           </select>
@@ -320,7 +335,10 @@ export default function Portfolio() {
           <button onClick={addTrade}>추가</button>
         </div>
         {msg && <div style={{ color: 'var(--sell)', marginTop: 8 }}>{msg}</div>}
-        <table style={{ marginTop: 12 }}>
+        {trades.length === 0 && <div className="empty">
+          기록된 매매가 없습니다. 체결 내역을 남기면 진입 등급별 성과까지 복기할 수 있습니다.</div>}
+        <div className="table-scroll" style={{ marginTop: 12 }}>
+        <table>
           <thead><tr><th>날짜</th><th>심볼</th><th>구분</th><th>수량</th><th>단가</th>
             <th>체결 시 등급</th><th>메모</th><th></th></tr></thead>
           <tbody>
@@ -347,6 +365,7 @@ export default function Portfolio() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   )

@@ -3,6 +3,8 @@ __pycache__/
 .venv/
 *.egg-info/
 backend/mystock.db
+backend/mystock.db-wal
+backend/mystock.db-shm
 frontend/node_modules/
 frontend/dist/
 .pytest_cache/

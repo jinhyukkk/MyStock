@@ -3,6 +3,9 @@
   --border: rgba(148, 163, 200, 0.14); --text: #e8ebf2; --text-dim: #8b93a3;
   --buy: #2ee59d; --buy-strong: #00e676; --sell: #ff5c7a;
   --sell-strong: #ff1744; --neutral: #8b93a3;
+  /* 경고는 시세 방향(빨강=하락)과 다른 축이다. 같은 색을 쓰면
+     "갱신 실패"와 "주가 하락"이 구분되지 않아 경고가 배경으로 묻힌다. */
+  --warn: #ffb020; --warn-bg: rgba(255, 176, 32, 0.10);
   --accent: #5b8cff; --accent-2: #a06bff;
   --grad: linear-gradient(135deg, var(--accent), var(--accent-2));
   --font: 'Pretendard', -apple-system, 'Apple SD Gothic Neo', sans-serif;
@@ -147,3 +150,71 @@ input:focus, select:focus {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ── 경고 표기 ── */
+.warn { color: var(--warn); }
+.warn-box {
+  background: var(--warn-bg); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  border-radius: 8px; padding: 8px 12px; font-size: 12px; color: var(--warn);
+}
+
+/* ── 표 가로 스크롤 ──
+   실현손익 9컬럼·상관계수 N+1컬럼은 좁은 화면에서 페이지 전체를 밀어낸다.
+   표만 자기 안에서 스크롤하게 가둔다. */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
+.table-scroll > table { min-width: max-content; }
+/* grid/flex 아이템의 기본 min-width:auto 는 내용보다 작아지는 것을 막는다.
+   이게 남아 있으면 넓은 표가 카드를 밀어내 페이지 전체가 가로로 넘친다. */
+.grid > *, .grid-2 > *, .grid-2to1 > *, .card { min-width: 0; }
+
+/* ── 반응형 그리드 ──
+   인라인 gridTemplateColumns는 미디어쿼리로 덮을 수 없어 클래스로 뺐다. */
+.grid-2 { display: grid; gap: 14px; grid-template-columns: 1fr 1fr; }
+.grid-2to1 { display: grid; gap: 14px; grid-template-columns: 2fr 1fr; }
+@media (max-width: 860px) {
+  .grid-2, .grid-2to1 { grid-template-columns: 1fr; }
+  .topbar { flex-wrap: wrap; gap: 10px; }
+  .sig-tags, .signal-summary { max-width: none; }
+}
+
+/* ── 근거 디스클로저 ──
+   title 속성 툴팁은 터치 기기에서 열리지 않는다. 탭으로 펼치는 요약으로 대체. */
+.reason-toggle {
+  font-size: 11px; color: var(--text-dim); cursor: pointer;
+  list-style: none; padding: 2px 0;
+}
+.reason-toggle::-webkit-details-marker { display: none; }
+.reason-toggle:hover { color: var(--text); }
+.reason-body { font-size: 12px; color: var(--text-dim); line-height: 1.6; padding: 4px 0 2px; }
+
+/* ── 모달 ── */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 120; background: rgba(5, 7, 12, 0.6);
+  backdrop-filter: blur(4px); display: flex; justify-content: center;
+  align-items: flex-start; padding: 12vh 16px 16px; animation: rise 0.18s ease-out;
+}
+.modal {
+  width: min(460px, 100%); border-radius: 14px; padding: 20px;
+  background: rgba(20, 25, 36, 0.96); border: 1px solid var(--border);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+.modal input, .modal select { width: 100%; }
+.modal-row { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; }
+.modal-row > label { font-size: 12px; color: var(--text-dim); }
+
+/* ── 자동완성 ── */
+.autocomplete { position: relative; }
+.autocomplete-list {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 50;
+  max-height: 240px; overflow-y: auto; border-radius: 10px;
+  background: rgba(20, 25, 36, 0.97); border: 1px solid var(--border);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+.autocomplete-item { padding: 8px 12px; cursor: pointer; font-size: 13px; }
+.autocomplete-item.sel, .autocomplete-item:hover { background: var(--bg-hover); }
+
+/* ── 빈 상태 ── */
+.empty {
+  text-align: center; color: var(--text-dim); padding: 28px 16px; font-size: 13px; line-height: 1.7;
+}
+.empty a { color: var(--accent); }
