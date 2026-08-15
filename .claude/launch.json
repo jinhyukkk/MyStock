@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "mystock",
+      "runtimeExecutable": "./run.sh",
+      "runtimeArgs": [],
+      "port": 8722,
+      "autoPort": true
+    }
+  ]
+}

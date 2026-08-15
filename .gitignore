@@ -9,3 +9,14 @@ frontend/node_modules/
 frontend/dist/
 .pytest_cache/
 .env
+.DS_Store
+
+# 개인 계좌 데이터 — 증권사에서 내려받은 원본과 그 임포트 결과
+거래내역증명서_*.pdf
+보유종목_거래내역.csv
+mystock_import.sql
+
+# 에이전트 정의와 실행 설정만 공유하고 개인 설정(settings.local.json 등)은 제외
+.claude/*
+!.claude/agents/
+!.claude/launch.json
