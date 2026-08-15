@@ -198,6 +198,10 @@ def get_dashboard(conn) -> dict:
             continue
         details = json.loads(sig["details"]) if sig["details"] else {}
         prev_grade = db.get_prev_grade(conn, t["symbol"])
+        # 보유 종목은 평단 대비 위치를 함께 실어 보낸다 — 시그널만으로는
+        # "물려 있는데 매도 신호"인지 "수익 중인데 매도 신호"인지 판단할 수 없다.
+        held = holdings.get(t["symbol"])
+        avg_price = held["avg_price"] if held else None
         signals.append({
             "symbol": t["symbol"], "name": t["name"], "market": t["market"],
             "currency": t["currency"], "close": close, "change_pct": change,
@@ -205,13 +209,18 @@ def get_dashboard(conn) -> dict:
             "longterm_score": sig["longterm_score"],
             "longterm_grade": scoring.grade(sig["longterm_score"]),
             "grade_changed": prev_grade is not None and prev_grade != sig["grade"],
-            "is_holding": t["symbol"] in holdings,
+            "is_holding": held is not None,
             "in_watchlist": bool(t["in_watchlist"]),
+            "avg_price": avg_price,
+            "holding_pnl_pct": (round((close / avg_price - 1) * 100, 2)
+                                if avg_price and close else None),
             "context_note": details.get("context_note"),
             "summary": details.get("summary"),
             "summary_tags": summary_tags(details),
         })
-    signals.sort(key=lambda s: -abs(s["swing_score"]))
+    # 보유 종목 우선 — 장중 가장 먼저 확인해야 할 것은 "내가 들고 있는 것 중 매도 신호"다.
+    # 워치리스트가 길면 점수순 정렬만으로는 보유 종목이 스크롤 아래로 밀린다.
+    signals.sort(key=lambda s: (not s["is_holding"], -abs(s["swing_score"])))
     tickers_map = {t["symbol"]: dict(t) for t in active}
     pf = portfolio.build_portfolio(holdings, prices, tickers_map, senti.get("usdkrw"),
                                    cash_krw=get_cash_krw(conn), cash_usd=get_cash_usd(conn))

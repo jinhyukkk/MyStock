@@ -125,17 +125,21 @@ def get_portfolio(request: Request):
 
 
 class CashIn(BaseModel):
-    amount: float = Field(ge=0)
-    amount_usd: float | None = Field(default=None, ge=0)  # 미전송 시 기존 값 유지
+    # 미전송(None) = 기존 값 유지. 0은 "비웠다"는 명시적 의사이므로 구분해서 저장한다.
+    # 프론트의 빈 입력이 0으로 변환되어 예수금을 날리면 총자산이 줄고,
+    # 그것을 분모로 쓰는 1% 리스크 포지션 사이징까지 오염된다.
+    amount: float | None = Field(default=None, ge=0)
+    amount_usd: float | None = Field(default=None, ge=0)
 
 
 @router.put("/cash")
 def set_cash(c: CashIn, request: Request):
     conn = _conn(request)
-    db.set_meta(conn, "cash_krw", str(c.amount))
+    if c.amount is not None:
+        db.set_meta(conn, "cash_krw", str(c.amount))
     if c.amount_usd is not None:
         db.set_meta(conn, "cash_usd", str(c.amount_usd))
-    return {"cash_krw": c.amount, "cash_usd": service.get_cash_usd(conn)}
+    return {"cash_krw": service.get_cash_krw(conn), "cash_usd": service.get_cash_usd(conn)}
 
 
 @router.get("/rules")

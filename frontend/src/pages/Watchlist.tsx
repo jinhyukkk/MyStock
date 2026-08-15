@@ -11,7 +11,11 @@ export default function Watchlist() {
   const [busy, setBusy] = useState(false)
   const [adding, setAdding] = useState<string | null>(null)  // 추가 진행 중인 심볼
 
-  const load = () => get<Dashboard>('/api/dashboard').then(setDash)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = () => get<Dashboard>('/api/dashboard')
+    .then(d => { setDash(d); setError(null) })
+    .catch(e => setError(String(e)))  // catch가 없으면 빈 표만 남아 실패를 알 수 없다
   useEffect(() => { load() }, [])
 
   const search = async () => {
@@ -55,6 +59,10 @@ export default function Watchlist() {
 
       <div className="card">
         <strong>워치리스트</strong>
+        {error && <div style={{ color: 'var(--sell)', marginTop: 8 }}>
+          불러오기 실패: {error}
+          <button style={{ marginLeft: 8 }} onClick={() => { setError(null); load() }}>다시 시도</button>
+        </div>}
         <table>
           <thead><tr><th>종목</th><th>스윙</th><th>중장기</th><th></th></tr></thead>
           <tbody>
@@ -64,8 +72,11 @@ export default function Watchlist() {
                   <span style={{ color: 'var(--text-dim)', fontSize: 12 }}> {s.symbol}</span></Link></td>
                 <td><SignalBadge grade={s.swing_grade} /></td>
                 <td><SignalBadge grade={s.longterm_grade} /></td>
-                <td><button className="ghost"
-                  onClick={() => del(`/api/watchlist/${s.symbol}`).then(load)}>제거</button></td>
+                <td><button className="ghost" onClick={() => {
+                  if (confirm(`${s.name}을(를) 워치리스트에서 제거합니다.`
+                    + (s.is_holding ? '\n보유 중인 종목이라 시그널은 계속 표시됩니다.' : '')))
+                    del(`/api/watchlist/${s.symbol}`).then(load).catch(e => setError(String(e)))
+                }}>제거</button></td>
               </tr>
             ))}
           </tbody>

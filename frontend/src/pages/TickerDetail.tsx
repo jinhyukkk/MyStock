@@ -248,7 +248,12 @@ export default function TickerDetail() {
             <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
               <span>{{ TARGET: '목표가', STOP: '손절가', AVG_PCT: '평단 대비 %' }[r.rule_type]}
                 {' '}{r.value.toLocaleString('ko-KR')}</span>
-              <button className="ghost" onClick={() => del(`/api/rules/${r.id}`).then(load)}>삭제</button>
+              <button className="ghost" onClick={() => {
+                const label = { TARGET: '목표가', STOP: '손절가', AVG_PCT: '평단 대비 %' }[r.rule_type]
+                if (confirm(`${label} ${r.value.toLocaleString('ko-KR')} 룰을 삭제합니다.`
+                  + (r.rule_type === 'STOP' ? '\n손절 알림이 더 이상 오지 않습니다.' : '')))
+                  del(`/api/rules/${r.id}`).then(load)
+              }}>삭제</button>
             </div>
           ))}
           <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>

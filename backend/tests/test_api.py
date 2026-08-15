@@ -139,3 +139,52 @@ def test_set_cash_krw_only_keeps_usd(client):
     client.put("/api/cash", json={"amount": 100, "amount_usd": 50})
     r = client.put("/api/cash", json={"amount": 999})  # 하위호환: USD 미전송 → 유지
     assert r.json() == {"cash_krw": 999.0, "cash_usd": 50.0}
+
+
+def test_set_cash_usd_only_keeps_krw(client):
+    """KRW 미전송 = '변경 없음'. 프론트 빈 입력이 원화 예수금을 0으로 날리던 버그 방지."""
+    client.put("/api/cash", json={"amount": 700000, "amount_usd": 50})
+    r = client.put("/api/cash", json={"amount_usd": 300})
+    assert r.json() == {"cash_krw": 700000.0, "cash_usd": 300.0}
+
+
+def test_set_cash_empty_body_changes_nothing(client):
+    client.put("/api/cash", json={"amount": 700000, "amount_usd": 50})
+    r = client.put("/api/cash", json={})
+    assert r.json() == {"cash_krw": 700000.0, "cash_usd": 50.0}
+
+
+def test_set_cash_zero_is_explicit(client):
+    """0은 '비웠다'는 명시적 의사 — None(미전송)과 구분되어야 한다."""
+    client.put("/api/cash", json={"amount": 700000})
+    r = client.put("/api/cash", json={"amount": 0})
+    assert r.json()["cash_krw"] == 0.0
+
+
+def _add_two_tickers(client):
+    for sym, name in [("005930", "삼성전자"), ("000660", "SK하이닉스")]:
+        client.post("/api/watchlist", json={"symbol": sym, "name": name, "market": "KR",
+                                            "is_etf": 0, "yf_symbol": f"{sym}.KS",
+                                            "currency": "KRW"})
+    client.post("/api/refresh")
+
+
+def test_dashboard_lists_holdings_first(client):
+    """보유 종목이 시그널 표 상단에 오지 않으면 '보유 중 매도 신호'를 놓친다."""
+    _add_two_tickers(client)
+    client.post("/api/trades", json={"symbol": "000660", "side": "BUY", "quantity": 10,
+                                     "price": 70000, "trade_date": "2026-01-05"})
+    signals = client.get("/api/dashboard").json()["signals"]
+    assert [s["is_holding"] for s in signals] == [True, False]
+
+
+def test_dashboard_signal_carries_avg_price(client):
+    _add_two_tickers(client)
+    client.post("/api/trades", json={"symbol": "000660", "side": "BUY", "quantity": 10,
+                                     "price": 70000, "trade_date": "2026-01-05"})
+    by_symbol = {s["symbol"]: s for s in client.get("/api/dashboard").json()["signals"]}
+    held, watched = by_symbol["000660"], by_symbol["005930"]
+    assert held["avg_price"] == 70000.0
+    expected = round((held["close"] / 70000 - 1) * 100, 2)
+    assert held["holding_pnl_pct"] == expected
+    assert watched["avg_price"] is None and watched["holding_pnl_pct"] is None

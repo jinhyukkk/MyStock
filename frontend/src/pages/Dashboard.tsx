@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { get, post } from '../api'
 import type { Dashboard as DashboardData } from '../types'
@@ -16,7 +16,7 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null)
 
   const load = () => get<DashboardData>('/api/dashboard')
-    .then(setData).catch(e => setError(String(e)))
+    .then(d => { setData(d); setError(null) }).catch(e => setError(String(e)))
   useEffect(() => { load() }, [])
 
   const refresh = async () => {
@@ -26,7 +26,14 @@ export default function Dashboard() {
     finally { setBusy(false) }
   }
 
-  if (error) return <div className="card">불러오기 실패: {error}</div>
+  if (error) return (
+    <div className="card">
+      <div style={{ color: 'var(--sell)' }}>불러오기 실패: {error}</div>
+      <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
+        표시된 숫자가 없으므로 판단 근거로 쓰지 마세요.</div>
+      <button style={{ marginTop: 10 }} onClick={() => { setError(null); load() }}>다시 시도</button>
+    </div>
+  )
   if (!data) return (
     <div className="grid">
       <div className="grid" style={{ gridTemplateColumns: '2fr 1fr' }}>
@@ -58,8 +65,10 @@ export default function Dashboard() {
           <div className={pnlCls}>
             {pf.total_pnl_krw >= 0 ? '+' : ''}{fmt(pf.total_pnl_krw)} ({pf.total_pnl_pct}%)
           </div>
+          {/* 현금은 원화+달러 합산(cash_pct와 같은 기준) — 포트폴리오 화면과 숫자가 달라지면
+              어느 쪽을 믿어야 할지 판단이 멈춘다 */}
           <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 4 }}>
-            평가액 {fmt(pf.total_value_krw)} · 현금 {fmt(pf.cash_krw)} ({pf.cash_pct}%) · 보유 {pf.holdings_count}종목</div>
+            평가액 {fmt(pf.total_value_krw)} · 현금 {fmt(pf.cash_krw + (pf.cash_usd_krw ?? 0))} ({pf.cash_pct}%) · 보유 {pf.holdings_count}종목</div>
         </div>
       </div>
 
@@ -91,13 +100,19 @@ export default function Dashboard() {
             워치리스트에 종목을 추가하면 시그널이 표시됩니다.</div>}
         <table>
           <thead><tr>
-            <th>종목</th><th>현재가</th><th>등락</th><th>스윙</th><th>중장기</th>
+            <th>종목</th><th>현재가</th><th>등락</th><th>평단 대비</th><th>스윙</th><th>중장기</th>
           </tr></thead>
           <tbody>
-            {data.signals.map(sig => {
+            {data.signals.map((sig, idx) => {
               const tooltip = `${sig.summary ?? ''}${sig.context_note ? ` · ${sig.context_note}` : ''}`
+              // 보유 → 관심 경계에 구분선. 보유 종목이 먼저 오도록 백엔드가 정렬한다.
+              const boundary = !sig.is_holding && idx > 0 && data.signals[idx - 1].is_holding
               return (
-              <tr key={sig.symbol}>
+              <Fragment key={sig.symbol}>
+              {boundary && <tr><td colSpan={6} style={{ padding: '10px 0 4px', textAlign: 'left',
+                fontSize: 11, color: 'var(--text-dim)', borderBottom: '1px solid var(--border)' }}>
+                관심 종목</td></tr>}
+              <tr>
                 <td>
                   <Link to={`/ticker/${sig.symbol}`}>
                     <strong>{sig.name}</strong>
@@ -120,6 +135,11 @@ export default function Dashboard() {
                 <td>{fmt(sig.close, sig.currency)}</td>
                 <td className={(sig.change_pct ?? 0) >= 0 ? 'pos' : 'neg'}>
                   {sig.change_pct === null ? '—' : `${sig.change_pct >= 0 ? '+' : ''}${sig.change_pct}%`}</td>
+                <td className={sig.holding_pnl_pct === null ? '' : sig.holding_pnl_pct >= 0 ? 'pos' : 'neg'}>
+                  {sig.holding_pnl_pct === null ? '—' : <>
+                    <strong>{sig.holding_pnl_pct >= 0 ? '+' : ''}{sig.holding_pnl_pct}%</strong>
+                    <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                      평단 {fmt(sig.avg_price, sig.currency)}</div></>}</td>
                 <td><div className="signal-cell">
                   <SignalBadge grade={sig.swing_grade} /><ScoreBar score={sig.swing_score} />
                 </div></td>
@@ -127,6 +147,7 @@ export default function Dashboard() {
                   <SignalBadge grade={sig.longterm_grade} /><ScoreBar score={sig.longterm_score} />
                 </div></td>
               </tr>
+              </Fragment>
             )})}
           </tbody>
         </table>

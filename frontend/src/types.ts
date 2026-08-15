@@ -10,6 +10,7 @@ export interface SignalRow {
   swing_score: number; swing_grade: string;
   longterm_score: number; longterm_grade: string;
   grade_changed: boolean; is_holding: boolean; in_watchlist: boolean;
+  avg_price: number | null; holding_pnl_pct: number | null;
   context_note: string | null; summary: string | null;
   summary_tags: { label: string; score: number; warn: boolean }[];
 }
@@ -18,7 +19,8 @@ export interface Dashboard {
   sentiment: Sentiment;
   portfolio_summary: { total_value_krw: number; total_pnl_krw: number;
     total_pnl_pct: number; holdings_count: number;
-    cash_krw: number; total_asset_krw: number; cash_pct: number };
+    cash_krw: number; cash_usd: number; cash_usd_krw: number;
+    total_asset_krw: number; cash_pct: number };
   signals: SignalRow[]; rule_alerts: RuleAlert[];
   last_refresh: string | null; failed_sources: string[];
 }

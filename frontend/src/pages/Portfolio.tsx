@@ -56,26 +56,46 @@ export default function Portfolio() {
   const [form, setForm] = useState({ symbol: '', side: 'BUY', quantity: '', price: '',
     trade_date: new Date().toISOString().slice(0, 10), note: '' })
   const [msg, setMsg] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const [cashInput, setCashInput] = useState<string>('')
   const [cashUsdInput, setCashUsdInput] = useState<string>('')
 
+  // 빈 입력은 "변경 없음". 빈 값을 0으로 보내면 예수금이 소리 없이 사라지고,
+  // 총자산을 분모로 쓰는 1% 리스크 포지션 사이징까지 틀어진다.
+  const parseCash = (raw: string, label: string): number | null | 'error' => {
+    if (raw.trim() === '') return null
+    const n = Number(raw)
+    if (!Number.isFinite(n) || n < 0) { setMsg(`${label}은 0 이상이어야 합니다`); return 'error' }
+    return n
+  }
+
   const saveCash = async () => {
-    const amount = Number(cashInput)
-    if (!(amount >= 0)) { setMsg('예수금은 0 이상이어야 합니다'); return }
-    const body: { amount: number; amount_usd?: number } = { amount }
-    if (cashUsdInput.trim() !== '') {
-      const usd = Number(cashUsdInput)
-      if (!(usd >= 0)) { setMsg('달러 예수금은 0 이상이어야 합니다'); return }
-      body.amount_usd = usd
-    }
+    const krw = parseCash(cashInput, '예수금')
+    if (krw === 'error') return
+    const usd = parseCash(cashUsdInput, '달러 예수금')
+    if (usd === 'error') return
+    if (krw === null && usd === null) { setMsg('변경할 예수금을 입력하세요'); return }
+
+    const prevKrw = pf?.totals.cash_krw ?? 0
+    if (krw !== null && prevKrw > 0 && krw < prevKrw / 2 &&
+        !confirm(`원화 예수금을 ₩${fmt(prevKrw)} → ₩${fmt(krw)} 로 줄입니다. 계속할까요?`)) return
+
+    const body: { amount?: number; amount_usd?: number } = {}
+    if (krw !== null) body.amount = krw
+    if (usd !== null) body.amount_usd = usd
     try { await put('/api/cash', body); setMsg(null); load() }
     catch (e) { setMsg(String(e)) }
   }
 
   const load = () => Promise.all([
-    get<PF>('/api/portfolio').then(setPf),
-    get<Trade[]>('/api/trades').then(setTrades),
-  ]).catch(e => setMsg(String(e)))
+    get<PF>('/api/portfolio'),
+    get<Trade[]>('/api/trades'),
+  ]).then(([p, tr]) => {
+    setPf(p); setTrades(tr); setError(null)
+    // 현재 저장된 값을 프리필 — 한쪽만 고치려다 다른 쪽을 날리는 일이 없게
+    setCashInput(String(p.totals.cash_krw))
+    setCashUsdInput(String(p.totals.cash_usd ?? 0))
+  }).catch(e => setError(String(e)))
   useEffect(() => { load() }, [])
 
   const addTrade = async () => {
@@ -90,6 +110,15 @@ export default function Portfolio() {
     } catch (e) { setMsg(String(e)) }
   }
 
+  // 에러를 스켈레톤보다 먼저 검사한다 — 순서가 반대면 실패 시 영원히 로딩 화면으로 보인다.
+  if (error) return (
+    <div className="card">
+      <div style={{ color: 'var(--sell)' }}>불러오기 실패: {error}</div>
+      <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
+        계좌 숫자를 불러오지 못했습니다. 판단 근거로 쓰지 마세요.</div>
+      <button style={{ marginTop: 10 }} onClick={() => { setError(null); load() }}>다시 시도</button>
+    </div>
+  )
   if (!pf) return (
     <div className="grid">
       <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
@@ -117,7 +146,9 @@ export default function Portfolio() {
             <input type="number" placeholder="달러 예수금 (USD)" value={cashUsdInput}
                    onChange={e => setCashUsdInput(e.target.value)} style={{ width: 150 }} />
             <button onClick={saveCash}>저장</button>
+            <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>비우면 변경 없음</span>
           </div>
+          {msg && <div style={{ color: 'var(--sell)', fontSize: 12, marginTop: 6 }}>{msg}</div>}
         </div>
         <div className="card" style={{ height: 180 }}>
           {pf.allocation.length > 0 ? (
@@ -305,8 +336,13 @@ export default function Portfolio() {
                 <td style={{ textAlign: 'left', maxWidth: 220, overflow: 'hidden',
                              textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                     title={tr.note ?? ''}>{tr.note ?? ''}</td>
-                <td><button className="ghost"
-                  onClick={() => del(`/api/trades/${tr.id}`).then(load)}>삭제</button></td>
+                {/* 매매 삭제는 평단·실현손익 원장까지 되돌린다 — 복구 경로가 없으므로 확인을 받는다 */}
+                <td><button className="ghost" onClick={() => {
+                  if (confirm(`${tr.trade_date} ${tr.symbol} ${tr.side === 'BUY' ? '매수' : '매도'} `
+                    + `${fmt(tr.quantity)}주 기록을 삭제합니다.\n`
+                    + '평단과 실현손익 원장이 함께 바뀌며 되돌릴 수 없습니다.'))
+                    del(`/api/trades/${tr.id}`).then(load).catch(e => setMsg(String(e)))
+                }}>삭제</button></td>
               </tr>
             ))}
           </tbody>
