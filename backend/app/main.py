@@ -45,13 +45,15 @@ def _safe_static_path(dist: Path, path: str) -> Path | None:
 def create_app(db_path: str | None = None, refresh_on_start: bool = True) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.conn = db.get_conn(db_path)
+        app.state.db = db.ThreadLocalDB(db_path)
         task = None
         if refresh_on_start:
             async def loop():
                 while True:
                     try:
-                        await asyncio.to_thread(service.refresh_all, app.state.conn)
+                        # to_thread는 워커 스레드에서 돌므로 그 스레드의 연결을 쓴다.
+                        # 요청 스레드와 연결을 공유하면 동시 접근으로 프로세스가 죽는다.
+                        await asyncio.to_thread(lambda: service.refresh_all(app.state.db.conn()))
                     except Exception:
                         pass
                     await asyncio.sleep(REFRESH_INTERVAL)
@@ -59,7 +61,7 @@ def create_app(db_path: str | None = None, refresh_on_start: bool = True) -> Fas
         yield
         if task:
             task.cancel()
-        app.state.conn.close()
+        app.state.db.close_all()
 
     app = FastAPI(title="MyStock", lifespan=lifespan)
     app.include_router(router)

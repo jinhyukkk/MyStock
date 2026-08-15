@@ -33,7 +33,8 @@ class RuleIn(BaseModel):
 
 
 def _conn(request: Request):
-    return request.app.state.conn
+    """요청을 처리 중인 스레드의 연결. 스레드 간 공유는 세그폴트를 부른다."""
+    return request.app.state.db.conn()
 
 
 @router.get("/health")

@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 from pathlib import Path
 
 import pandas as pd
@@ -10,6 +11,10 @@ _SCHEMA = (Path(__file__).parent / "schema.sql").read_text(encoding="utf-8")
 def get_conn(db_path: str | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path or DEFAULT_DB, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    # 연결이 스레드마다 따로 열리므로 동시 접근은 sqlite에 맡긴다.
+    # WAL이면 읽기가 쓰기를 막지 않고, busy_timeout이 락 경합을 재시도로 흡수한다.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.executescript(_SCHEMA)
     # 기존 DB 마이그레이션 — CREATE IF NOT EXISTS는 컬럼 추가를 못 하므로 여기서 보강
     cols = [r[1] for r in conn.execute("PRAGMA table_info(trades)")]
@@ -18,6 +23,41 @@ def get_conn(db_path: str | None = None) -> sqlite3.Connection:
             conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {decl}")
     conn.commit()
     return conn
+
+
+class ThreadLocalDB:
+    """스레드마다 sqlite 연결을 따로 준다.
+
+    sqlite3.Connection 객체 하나를 여러 스레드가 동시에 쓰면 파이썬 인터프리터가
+    세그폴트로 죽는다(check_same_thread=False는 그 검사를 끌 뿐 안전하게 만들지 않는다).
+    FastAPI는 `def` 엔드포인트를 스레드풀에서 실행하므로, 종목 상세 화면이
+    상세와 백테스트를 동시에 요청하는 것만으로 그 조건이 성립한다.
+    """
+
+    def __init__(self, db_path: str | None = None):
+        self._path = db_path
+        self._local = threading.local()
+        self._all: list[sqlite3.Connection] = []
+        self._lock = threading.Lock()
+
+    def conn(self) -> sqlite3.Connection:
+        c = getattr(self._local, "conn", None)
+        if c is None:
+            c = get_conn(self._path)
+            self._local.conn = c
+            with self._lock:
+                self._all.append(c)  # 종료 시 한 번에 닫으려고 모아둔다
+        return c
+
+    def close_all(self) -> None:
+        with self._lock:
+            for c in self._all:
+                try:
+                    c.close()
+                except Exception:
+                    pass  # 이미 닫혔거나 소유 스레드가 끝난 연결은 무시
+            self._all.clear()
+        self._local = threading.local()
 
 
 def upsert_ticker(conn, symbol, market, name, is_etf=0, in_watchlist=0,
