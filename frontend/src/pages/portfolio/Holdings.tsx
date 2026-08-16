@@ -79,7 +79,10 @@ export default function Holdings() {
           <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
             평가액 ₩{fmt(t.total_value_krw)} · 현금 ₩{fmt(t.cash_krw + (t.cash_usd_krw ?? 0))} ({t.cash_pct}%)
             {(t.cash_usd ?? 0) > 0 && <> — ₩{fmt(t.cash_krw)} + ${fmt(t.cash_usd)}</>}</div>
-          <details className="pf-settings">
+          {/* 예수금이 0이면 TickerDetail이 여기로 보낸 사용자가 입력칸을 곧장 봐야 한다 —
+              접혀 있으면 온보딩이 끊긴다. 예수금이 이미 있는 계좌만 기본으로 접는다. */}
+          <details className="pf-settings"
+                   open={pf.totals.cash_krw === 0 && (pf.totals.cash_usd ?? 0) === 0}>
             <summary>계좌 설정 — 예수금 · 목표 종목 수</summary>
             <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center',
                           flexWrap: 'wrap' }}>

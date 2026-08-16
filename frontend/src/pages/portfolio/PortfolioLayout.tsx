@@ -101,7 +101,7 @@ export default function PortfolioLayout() {
             {s.label}</NavLink>
         ))}
       </nav>
-      <Outlet context={{ pf, trades, flows, posRule, setPosRule, now,
+      <Outlet context={{ pf, trades, flows, posRule, setPosRule,
                          reload: load, setCashWarn } satisfies PortfolioContext} />
     </div>
   )

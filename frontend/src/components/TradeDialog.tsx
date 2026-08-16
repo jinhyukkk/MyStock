@@ -4,7 +4,7 @@ import { cashClampWarning, type TradeResult } from '../trade'
 import type { EntryReview, ExitPlan } from '../types'
 
 /** 종목 상세에서 바로 매매를 기록하는 모달.
- *  기록이 포트폴리오 탭 최하단에만 있으면 "판단 → 주문 → 기록" 사이에 탭 이동과
+ *  기록이 포트폴리오의 매매 기록 탭에서만 가능하면 "판단 → 주문 → 기록" 사이에 탭 이동과
  *  심볼 재입력이 끼어든다. 그 마찰이 기록 누락을 만들고, 기록이 없으면
  *  실현손익·진입 등급별 성과 같은 이 앱의 복기 기능이 통째로 비어버린다. */
 export default function TradeDialog({ symbol, name, currency, defaultPrice, defaultSide,
