@@ -7,7 +7,8 @@ import requests
 
 import pandas as pd
 
-from app import backtest, db, fetchers, indicators, portfolio, scoring, sentiment
+from app import (backtest, costs, db, fetchers, indicators, portfolio, scoring,
+                 sentiment)
 
 BACKTEST_DAYS = 1100  # 약 3년 — 한 국면짜리 400일 검증은 상승장 착시를 못 거른다
 
@@ -53,16 +54,21 @@ def refresh_all(conn, symbol: str | None = None) -> dict:
                 failed_tickers.append(f"BENCH:{market}")
     if symbol is None:  # 단일 갱신은 전체 기준 시각을 건드리지 않는다
         db.set_meta(conn, "last_refresh", datetime.now().isoformat(timespec="seconds"))
-        prices = {}
-        for t in targets:
-            close, _ = _latest_close_and_change(conn, t["symbol"])
-            if close is not None:
-                prices[t["symbol"]] = close
+        bars = _latest_bars(conn, [t["symbol"] for t in targets])
         holdings = _holdings_map(conn)
         avg_prices = {s: h["avg_price"] for s, h in holdings.items()}
-        _notify_telegram(conn, check_rules(conn, prices, avg_prices))
+        _notify_telegram(conn, check_rules(conn, bars, avg_prices))
     return {"refreshed": True, "failed_sources": senti.get("failed", []),
             "failed_tickers": failed_tickers}
+
+
+def _is_partial_bar(df) -> bool:
+    """마지막 봉이 오늘 것이면 아직 마감 전 — 그 봉으로 만든 등급은 종가에 뒤집힐 수 있다.
+
+    KR/US/CRYPTO 모두 소스가 장중에 당일 미완성 봉을 돌려준다. 11시에 본 "매수"가
+    15시 30분에 "중립"이 되면 사용자는 백테스트가 검증한 적 없는 신호로 주문한 것이다.
+    """
+    return df.index[-1].date() >= datetime.now().date()
 
 
 def _compute_and_store_signal(conn, ticker_row, senti):
@@ -73,26 +79,51 @@ def _compute_and_store_signal(conn, ticker_row, senti):
     result = scoring.score_ticker(enriched)
     result["context_note"] = sentiment.context_note(
         result["swing_score"], ticker_row["market"], senti)
+    result["bar_complete"] = not _is_partial_bar(df)
     date_str = df.index[-1].strftime("%Y-%m-%d")
+    result["bar_date"] = date_str
     db.save_signal(conn, ticker_row["symbol"], date_str,
                    result["swing_score"], result["longterm_score"],
                    result["swing_grade"], json.dumps(result, ensure_ascii=False))
 
 
-def _latest_close_and_change(conn, symbol):
+def _latest_bar(conn, symbol) -> dict | None:
+    """최신 봉의 종가·전일 대비·고가·저가. 룰 판정에 고저가 필요 — 종가만 보면
+    장중에 손절선을 관통했다가 회복한 날을 알림 0건으로 넘긴다."""
     df = db.load_prices(conn, symbol, limit=2)
     if df.empty:
-        return None, None
-    close = float(df.iloc[-1]["close"])
-    if len(df) < 2:
-        return close, None
-    prev = float(df.iloc[-2]["close"])
-    return close, round((close / prev - 1) * 100, 2)
+        return None
+    last = df.iloc[-1]
+    change = None
+    if len(df) >= 2:
+        change = round((float(last["close"]) / float(df.iloc[-2]["close"]) - 1) * 100, 2)
+    return {"close": float(last["close"]), "change_pct": change,
+            "high": float(last["high"]), "low": float(last["low"])}
+
+
+def _latest_close_and_change(conn, symbol):
+    bar = _latest_bar(conn, symbol)
+    return (bar["close"], bar["change_pct"]) if bar else (None, None)
+
+
+def _latest_bars(conn, symbols) -> dict:
+    bars = {}
+    for s in symbols:
+        bar = _latest_bar(conn, s)
+        if bar is not None:
+            bars[s] = bar
+    return bars
+
+
+def _tickers_map(conn):
+    return {t["symbol"]: dict(t) for t in db.list_tickers(conn)}
 
 
 def _holdings_map(conn):
+    """평단은 수수료 포함 비용 기준 — tickers를 넘겨야 시장별 요율 추정이 붙는다."""
     trades = [dict(r) for r in db.list_trades(conn)]
-    return portfolio.compute_holdings(trades)
+    fx = get_sentiment_view(conn).get("usdkrw")
+    return portfolio.compute_holdings(trades, _tickers_map(conn), fx)
 
 
 def get_cash_krw(conn) -> float:
@@ -105,32 +136,85 @@ def get_cash_usd(conn) -> float:
     return float(raw) if raw else 0.0
 
 
-def check_rules(conn, prices: dict, avg_prices: dict) -> list:
+def apply_trade_to_cash(conn, trade: dict, ticker_row, reverse: bool = False) -> dict:
+    """체결 금액만큼 예수금을 증감한다 (매수 −, 매도 +). 삭제 시 reverse=True로 되돌린다.
+
+    예수금이 수동 입력값에만 의존하면 매매를 반복할수록 총자산이 어긋나고,
+    그 총자산이 1% 리스크 사이징의 분모라 사이즈까지 함께 틀어진다.
+    입출금·배당처럼 매매가 아닌 변동은 예수금을 직접 수정해 반영하면 된다.
+    """
+    info = dict(ticker_row) if ticker_row is not None else {}
+    fee, tax, _ = portfolio._trade_costs(trade, info)
+    notional = trade["price"] * trade["quantity"]
+    # 매수는 대금+비용이 나가고, 매도는 대금에서 비용을 뺀 만큼 들어온다
+    delta = -(notional + fee + tax) if trade["side"] == "BUY" else (notional - fee - tax)
+    if reverse:
+        delta = -delta
+    usd = info.get("currency") == "USD"
+    key = "cash_usd" if usd else "cash_krw"
+    current = get_cash_usd(conn) if usd else get_cash_krw(conn)
+    # 예수금이 음수로 내려가는 것은 막는다 — 과거 매매를 뒤늦게 입력하는 흔한 경우다
+    updated = max(current + delta, 0.0)
+    db.set_meta(conn, key, str(updated))
+    return {"currency": "USD" if usd else "KRW", "delta": round(delta, 4),
+            "applied": round(updated - current, 4),
+            "cash_krw": get_cash_krw(conn), "cash_usd": get_cash_usd(conn),
+            "clamped": abs((updated - current) - delta) > 1e-9}
+
+
+STOP_DISCLAIMER = "이 손절가는 자동 예약주문이 아니며 일봉 기준으로만 감시됩니다"
+
+
+def _fmt_price(v: float) -> str:
+    """가격대에 맞는 자릿수 — 고정 소수 0자리는 USD 종목(150.4→"150")과
+    저가 알트코인(0.8→"1")에서 어떤 가격인지 알 수 없게 만든다."""
+    a = abs(v)
+    if a >= 1000:
+        return f"{v:,.0f}"
+    if a >= 1:
+        return f"{v:,.2f}"
+    return f"{v:,.4f}"
+
+
+def check_rules(conn, bars: dict, avg_prices: dict) -> list:
+    """룰 도달 판정. 목표가·손절가는 **일중 고저가**로 터치 여부를 본다.
+
+    종가만 보면 장중 -9%까지 밀렸다가 -3%로 마감한 날이 알림 0건이 된다.
+    사용자는 손절선이 지켜졌다고 믿지만 실제로는 관통 후 회복이었다.
+    """
     alerts = []
     for r in db.list_rules(conn):
         symbol = r["symbol"]
-        close = prices.get(symbol)
-        if close is None:
+        bar = bars.get(symbol)
+        if bar is None:
             continue
+        close, v = bar["close"], r["value"]
         t = db.get_ticker(conn, symbol)
         name = t["name"] if t else symbol
-        if r["rule_type"] == "TARGET" and close >= r["value"]:
+        if r["rule_type"] == "TARGET" and bar["high"] >= v:
+            intraday = close < v
+            msg = (f"{name} 목표가 {_fmt_price(v)} 장중 터치 "
+                   f"(고가 {_fmt_price(bar['high'])}, 종가 {_fmt_price(close)}로 되밀림)"
+                   if intraday
+                   else f"{name} 목표가 {_fmt_price(v)} 도달 (현재 {_fmt_price(close)})")
             alerts.append({"symbol": symbol, "name": name, "rule_type": "TARGET",
-                           "value": r["value"],
-                           "message": f"{name} 목표가 {r['value']:,.0f} 도달 (현재 {close:,.0f})"})
-        elif r["rule_type"] == "STOP" and close <= r["value"]:
+                           "value": v, "intraday_only": intraday, "message": msg})
+        elif r["rule_type"] == "STOP" and bar["low"] <= v:
+            intraday = close > v
+            msg = (f"{name} 손절가 {_fmt_price(v)} 장중 이탈 "
+                   f"(저가 {_fmt_price(bar['low'])}, 종가 {_fmt_price(close)}로 회복)"
+                   if intraday
+                   else f"{name} 손절가 {_fmt_price(v)} 이탈 (현재 {_fmt_price(close)})")
             alerts.append({"symbol": symbol, "name": name, "rule_type": "STOP",
-                           "value": r["value"],
-                           "message": f"{name} 손절가 {r['value']:,.0f} 도달 (현재 {close:,.0f})"})
+                           "value": v, "intraday_only": intraday, "message": msg})
         elif r["rule_type"] == "AVG_PCT":
             avg = avg_prices.get(symbol)
             if not avg:
                 continue
             change = (close / avg - 1) * 100
-            v = r["value"]
             if (v > 0 and change >= v) or (v < 0 and change <= v):
                 alerts.append({"symbol": symbol, "name": name, "rule_type": "AVG_PCT",
-                               "value": v,
+                               "value": v, "intraday_only": False,
                                "message": f"{name} 평단 대비 {change:+.1f}% (조건 {v:+.0f}%)"})
     return alerts
 
@@ -146,9 +230,12 @@ def _notify_telegram(conn, alerts: list) -> None:
         key = f"tg_sent:{a['symbol']}:{a['rule_type']}:{a['value']}"
         if db.get_meta(conn, key) == today:
             continue
+        text = f"[MyStock] {a['message']}"
+        if a["rule_type"] == "STOP":
+            text += f"\n※ {STOP_DISCLAIMER}"
         try:
             r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                              json={"chat_id": chat_id, "text": f"[MyStock] {a['message']}"},
+                              json={"chat_id": chat_id, "text": text},
                               timeout=10)
             r.raise_for_status()
             db.set_meta(conn, key, today)
@@ -188,11 +275,12 @@ def get_dashboard(conn) -> dict:
     senti = get_sentiment_view(conn)
     holdings = _holdings_map(conn)
     active = _active_tickers(conn)
-    prices, signals = {}, []
+    bars = _latest_bars(conn, [t["symbol"] for t in active])
+    prices, signals = {s: b["close"] for s, b in bars.items()}, []
     for t in active:
-        close, change = _latest_close_and_change(conn, t["symbol"])
-        if close is not None:
-            prices[t["symbol"]] = close
+        bar = bars.get(t["symbol"])
+        close = bar["close"] if bar else None
+        change = bar["change_pct"] if bar else None
         sig = db.get_latest_signal(conn, t["symbol"])
         if not sig:
             continue
@@ -207,7 +295,7 @@ def get_dashboard(conn) -> dict:
             "currency": t["currency"], "close": close, "change_pct": change,
             "swing_score": sig["swing_score"], "swing_grade": sig["grade"],
             "longterm_score": sig["longterm_score"],
-            "longterm_grade": scoring.grade(sig["longterm_score"]),
+            "longterm_grade": scoring.grade(sig["longterm_score"], "longterm"),
             "grade_changed": prev_grade is not None and prev_grade != sig["grade"],
             "is_holding": held is not None,
             "in_watchlist": bool(t["in_watchlist"]),
@@ -217,6 +305,9 @@ def get_dashboard(conn) -> dict:
             "context_note": details.get("context_note"),
             "summary": details.get("summary"),
             "summary_tags": summary_tags(details),
+            # 장중 미완성 봉으로 계산된 등급은 마감 때 뒤집힐 수 있다 (백테스트 미검증 신호)
+            "bar_complete": details.get("bar_complete", True),
+            "bar_date": details.get("bar_date", sig["date"]),
         })
     # 보유 종목 우선 — 장중 가장 먼저 확인해야 할 것은 "내가 들고 있는 것 중 매도 신호"다.
     # 워치리스트가 길면 점수순 정렬만으로는 보유 종목이 스크롤 아래로 밀린다.
@@ -229,7 +320,7 @@ def get_dashboard(conn) -> dict:
         "sentiment": senti,
         "portfolio_summary": {**pf["totals"], "holdings_count": len(holdings)},
         "signals": signals,
-        "rule_alerts": check_rules(conn, prices, avg_prices),
+        "rule_alerts": check_rules(conn, bars, avg_prices),
         "last_refresh": db.get_meta(conn, "last_refresh"),
         "failed_sources": senti.get("failed", []),
     }
@@ -247,19 +338,77 @@ def get_portfolio_view(conn) -> dict:
     pf = portfolio.build_portfolio(holdings, prices, tickers_map, fx,
                                    cash_krw=get_cash_krw(conn), cash_usd=get_cash_usd(conn))
     trades = [dict(r) for r in db.list_trades(conn)]
-    realized = portfolio.realized_pnl(trades)
+    realized = portfolio.realized_pnl(trades, tickers_map, fx)
     pf["realized"] = {"entries": realized[::-1][:50],
                       "stats": portfolio.realized_stats(realized, tickers_map, fx)}
-    closes = {s: db.load_prices(conn, s, limit=250)["close"] for s in holdings}
+    price_frames = {s: db.load_prices(conn, s, limit=250) for s in holdings}
+    closes = {s: f["close"] for s, f in price_frames.items()}
     # 계좌 리스크는 환율 고정 근사 — 달러 예수금도 현재 환율로 환산해 고정 현금으로 합산
     fx_now = fx or portfolio.DEFAULT_USDKRW
     pf["risk"] = portfolio.account_risk(holdings, closes, tickers_map, fx,
                                         cash_krw=get_cash_krw(conn) + get_cash_usd(conn) * fx_now)
+    # 종목별 1% 룰은 합산해서 봐야 의미가 있다 — 5종목이면 총 몇 %인지 화면에 띄운다
+    pf["open_risk"] = portfolio.open_risk(
+        holdings, _atr_map(price_frames), tickers_map, fx,
+        pf["totals"]["total_asset_krw"])
     return pf
 
 
-def _risk_block(conn, enriched: pd.DataFrame, currency: str) -> dict | None:
-    """ATR 기반 손절 제안 + 계좌 1% 리스크 포지션 사이징 + 종목 MDD."""
+def _atr_map(price_frames: dict) -> dict:
+    """보유 종목의 최신 ATR(14) — 계좌 총 미결 리스크 합산의 입력."""
+    out = {}
+    for s, df in price_frames.items():
+        if df.empty:
+            continue
+        atr = indicators.compute_indicators(df)["atr14"].iloc[-1]
+        if pd.notna(atr) and atr:
+            out[s] = float(atr)
+    return out
+
+
+MAX_WEIGHT = 0.20  # 한 종목이 총자산에서 차지할 수 있는 상한
+TARGET_R = 2.0     # 목표가 = 손절 폭의 몇 배 (손익비 2:1)
+
+
+def _target_block(enriched: pd.DataFrame, close: float, atr: float, stop: float) -> dict:
+    """목표가와 손익비.
+
+    손절가만 있고 목표가가 없으면 진입 판단의 절반이 비어 있다 — 손익비를 모른 채
+    "승률 55%"만 보고 사이즈를 정하게 된다. 두 가지를 함께 낸다:
+
+    - **R배수 목표가**: 손절 폭(2×ATR)의 TARGET_R배. 손익비를 먼저 정하는 방식.
+    - **직전 고점(60일)**: 위에 놓인 실제 매물대. R배수 목표가가 이보다 위면
+      도달 전에 저항을 만난다는 뜻이므로 그 사실을 알린다.
+    """
+    risk = close - stop
+    target = close + risk * TARGET_R
+    highs = enriched["high"].tail(60)
+    resistance = float(highs.max()) if len(highs) else None
+    # 이미 60일 신고가 위면 저항이 없다 — 참고치로 쓸 수 없다
+    if resistance is not None and resistance <= close:
+        resistance = None
+    return {
+        "target_price": round(target, 4),
+        "target_pct": round((target / close - 1) * 100, 2),
+        "target_r": TARGET_R,
+        "reward_risk": round((target - close) / risk, 2) if risk else None,
+        "resistance_60d": round(resistance, 4) if resistance else None,
+        "resistance_pct": round((resistance / close - 1) * 100, 2) if resistance else None,
+        # 목표가가 직전 고점 위면 그 구간을 뚫어야 도달한다
+        "target_above_resistance": bool(resistance and target > resistance),
+        "resistance_reward_risk": (round((resistance - close) / risk, 2)
+                                   if resistance and risk else None),
+    }
+
+
+def _risk_block(conn, enriched: pd.DataFrame, currency: str,
+                symbol: str | None = None) -> dict | None:
+    """ATR 기반 손절 제안 + 계좌 1% 리스크 포지션 사이징 + 종목 MDD.
+
+    1% 룰 수량은 저변동성 종목에서 무한히 커진다(2×ATR이 주가의 0.6%면 노셔널이
+    총자산의 167%). 그래서 총자산 대비 노셔널 상한을 함께 걸고, 이미 보유한
+    수량을 뺀 '추가 매수 가능 수량'까지 계산해서 내려보낸다.
+    """
     last = enriched.iloc[-1]
     atr = last.get("atr14")
     if atr is None or pd.isna(atr) or not atr:
@@ -270,18 +419,50 @@ def _risk_block(conn, enriched: pd.DataFrame, currency: str) -> dict | None:
     senti = get_sentiment_view(conn)
     fx = (senti.get("usdkrw") or portfolio.DEFAULT_USDKRW) if currency == "USD" else 1.0
     # 리스크 분모는 총자산(평가액+예수금) — 보유 평가액만 쓰면 현금 비중만큼 과소/과대 계상
-    total = get_portfolio_view(conn)["totals"]["total_asset_krw"]
+    pf = get_portfolio_view(conn)
+    total = pf["totals"]["total_asset_krw"]
     risk_krw = total * 0.01
-    return {
+    out = {
         "atr": round(atr, 4),
         "atr_pct": round(atr / close * 100, 2),
         "stop_price": round(stop, 4),
         "stop_pct": round((stop / close - 1) * 100, 2),
         "mdd_pct": round(indicators.max_drawdown_pct(enriched["close"]), 2),
-        # 계좌 총액의 1%만 잃도록 2×ATR 손절 기준 수량 (총액 없으면 None)
-        "position_size_1pct": round(risk_krw / (2 * atr * fx), 4) if total > 0 else None,
-        "risk_budget_krw": round(risk_krw, 0) if total > 0 else None,
+        **_target_block(enriched, close, atr, stop),
+        "max_weight_pct": round(MAX_WEIGHT * 100, 1),
+        "account_open_risk": pf.get("open_risk"),
+        "position_size_1pct": None, "risk_budget_krw": None,
+        "position_size_capped": False, "cap_reason": None,
+        "position_notional_krw": None, "held_quantity": None, "addable_quantity": None,
+        "exit_plan": None,
     }
+    held = next((h["quantity"] for h in pf["holdings"] if h["symbol"] == symbol), 0.0)
+    avg = next((h["avg_price"] for h in pf["holdings"] if h["symbol"] == symbol), 0.0)
+    # 보유 중이면 나가는 쪽 숫자를 함께 낸다 — 진입 정보만 있으면 매도 등급이 뜬
+    # 종목에서도 화면이 '추가 매수 가능 수량'만 보여주게 된다
+    t = db.get_ticker(conn, symbol) if symbol else None
+    if held > 0:
+        out["exit_plan"] = portfolio.exit_plan(
+            held, avg, close, stop,
+            market=t["market"] if t else "", is_etf=(t["is_etf"] if t else 0) or 0, fx=fx)
+    if total <= 0:
+        return out
+    risk_qty = risk_krw / (2 * atr * fx)
+    cap_qty = total * MAX_WEIGHT / (close * fx)
+    size = min(risk_qty, cap_qty)
+    out.update({
+        "position_size_1pct": round(size, 4),
+        "risk_budget_krw": round(risk_krw, 0),
+        "position_size_capped": cap_qty < risk_qty,
+        "cap_reason": (f"1% 룰 수량 {risk_qty:,.2f}주는 총자산의 "
+                       f"{risk_qty * close * fx / total * 100:.0f}% — "
+                       f"종목 상한 {MAX_WEIGHT * 100:.0f}%로 잘랐습니다"
+                       if cap_qty < risk_qty else None),
+        "position_notional_krw": round(size * close * fx, 0),
+        "held_quantity": round(held, 4),
+        "addable_quantity": round(max(size - held, 0.0), 4),
+    })
+    return out
 
 
 def _refresh_benchmark(conn, market):
@@ -289,6 +470,22 @@ def _refresh_benchmark(conn, market):
     bdf = fetchers.fetch_ohlcv(bench_symbol, market, yf_symbol=bench_symbol,
                                days=BACKTEST_DAYS)
     db.save_prices(conn, f"BENCH:{market}", bdf)
+
+
+def _backtest_cost_pct(conn, symbol, ticker_row, df) -> float:
+    """이 종목의 왕복 비용(%p) — 시장별 수수료·세금 + 유동성 기반 스프레드.
+
+    시장 무관 0.3%p는 업비트(과대)와 국내 소형주(과소) 양쪽에서 틀린다.
+    """
+    if ticker_row is None:
+        return backtest.COST_PCT
+    turnover = None
+    if not df.empty:
+        recent = df.tail(60)
+        turnover = float((recent["close"] * recent["volume"]).median())
+        if ticker_row["currency"] == "USD":
+            turnover *= get_sentiment_view(conn).get("usdkrw") or portfolio.DEFAULT_USDKRW
+    return costs.backtest_cost_pct(ticker_row["market"], ticker_row["is_etf"], turnover)
 
 
 def get_backtest(conn, symbol) -> dict | None:
@@ -299,7 +496,7 @@ def get_backtest(conn, symbol) -> dict | None:
     cached = db.get_meta(conn, f"backtest:{symbol}")
     if cached:
         obj = json.loads(cached)
-        if obj.get("end") == last_date and "cost_pct" in obj:
+        if obj.get("end") == last_date and obj.get("version") == backtest.VERSION:
             return obj
     t = db.get_ticker(conn, symbol)
     bench, bench_label = None, None
@@ -313,8 +510,10 @@ def get_backtest(conn, symbol) -> dict | None:
                 bdf = db.load_prices(conn, f"BENCH:{t['market']}", limit=BACKTEST_DAYS)
             except Exception:
                 pass
-        bench = bdf["close"] if not bdf.empty else None
-    result = backtest.backtest_ticker(df, bench=bench, bench_label=bench_label)
+        # 종목 진입가가 익일 시가이므로 벤치마크도 시가 기준으로 맞춘다
+        bench = bdf[["open", "close"]] if not bdf.empty else None
+    result = backtest.backtest_ticker(df, bench=bench, bench_label=bench_label,
+                                      cost_pct=_backtest_cost_pct(conn, symbol, t, df))
     if result:
         db.set_meta(conn, f"backtest:{symbol}", json.dumps(result, ensure_ascii=False))
     return result
@@ -329,7 +528,7 @@ def get_ticker_detail(conn, symbol) -> dict | None:
     risk = None
     if not df.empty:
         full = indicators.compute_indicators(df)
-        risk = _risk_block(conn, full, t["currency"])
+        risk = _risk_block(conn, full, t["currency"], symbol)
         enriched = full.tail(200)
         enriched = enriched.astype(object).where(pd.notna(enriched), None)
         for idx, row in enriched.iterrows():
@@ -346,6 +545,11 @@ def get_ticker_detail(conn, symbol) -> dict | None:
         "currency": t["currency"], "is_etf": t["is_etf"],
         "fundamentals": json.loads(fund_raw) if fund_raw else None,
         "signal": signal, "candles": candles, "risk": risk,
+        # 주문 프리뷰가 체결 비용을 추정하는 근거 — 화면과 원장이 같은 요율을 쓰게 한다
+        "cost_rates": {
+            "fee_pct": round(costs.fee_rate(t["market"]) * 100, 6),
+            "sell_tax_pct": round(costs.sell_tax_rate(t["market"], t["is_etf"] or 0) * 100, 6),
+        },
         "history": [{"date": r["date"], "swing_score": r["swing_score"],
                      "longterm_score": r["longterm_score"], "grade": r["grade"]}
                     for r in db.load_signal_history(conn, symbol)],

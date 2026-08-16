@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { del, get, post, put } from '../api'
 import type { Portfolio as PF } from '../types'
+import { cashClampWarning, type TradeResult } from '../trade'
 import SymbolInput from '../components/SymbolInput'
 
 const PIE_COLORS = ['#4f8ef7', '#2ecc71', '#f7c948', '#b06ef7', '#ff8a65']
@@ -48,18 +49,22 @@ const fmt = (n: number | null) => n === null ? '—' : n.toLocaleString('ko-KR',
 const cur = (c: string, n: number | null) => n === null ? '—' : (c === 'USD' ? '$' : '₩') + fmt(n)
 
 interface Trade { id: number; symbol: string; side: string; quantity: number;
-                  price: number; trade_date: string;
-                  note: string | null; grade_at_trade: string | null }
+                  price: number; trade_date: string; executed_at: string | null;
+                  fee: number | null; tax: number | null;
+                  note: string | null; grade_at_trade: string | null
+                  exclude_from_stats: number }
 
 export default function Portfolio() {
   const [pf, setPf] = useState<PF | null>(null)
   const [trades, setTrades] = useState<Trade[]>([])
   const [form, setForm] = useState({ symbol: '', side: 'BUY', quantity: '', price: '',
-    trade_date: new Date().toISOString().slice(0, 10), note: '' })
+    trade_date: new Date().toISOString().slice(0, 10), executed_at: '',
+    note: '', fee: '', tax: '', exclude_from_stats: false })
   const [msg, setMsg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [cashInput, setCashInput] = useState<string>('')
   const [cashUsdInput, setCashUsdInput] = useState<string>('')
+  const [cashWarn, setCashWarn] = useState<string | null>(null)
 
   // 빈 입력은 "변경 없음". 빈 값을 0으로 보내면 예수금이 소리 없이 사라지고,
   // 총자산을 분모로 쓰는 1% 리스크 포지션 사이징까지 틀어진다.
@@ -99,15 +104,32 @@ export default function Portfolio() {
   }).catch(e => setError(String(e)))
   useEffect(() => { load() }, [])
 
+  // 빈 비용 입력은 "미기록" — 0으로 보내면 비용 0짜리 매매로 원장에 남아
+  // 승률·손익비가 gross로 되돌아간다. null로 보내야 서버가 시장 요율로 추정한다.
+  const optionalCost = (raw: string): number | null => {
+    const s = raw.trim()
+    if (s === '') return null
+    const n = Number(s)
+    return Number.isFinite(n) && n >= 0 ? n : null
+  }
+
   const addTrade = async () => {
     const quantity = Number(form.quantity), price = Number(form.price)
     if (!form.symbol.trim() || !(quantity > 0) || !(price > 0)) {
       setMsg('심볼·수량·단가를 확인하세요 (0 이하 불가)'); return
     }
     try {
-      await post('/api/trades', { ...form, symbol: form.symbol.trim().toUpperCase(),
-                                  quantity, price, note: form.note.trim() || null })
-      setMsg(null); setForm({ ...form, quantity: '', price: '', note: '' }); load()
+      const res = await post<TradeResult>('/api/trades',
+                                { ...form, symbol: form.symbol.trim().toUpperCase(),
+                                  quantity, price, note: form.note.trim() || null,
+                                  fee: optionalCost(form.fee), tax: optionalCost(form.tax),
+                                  executed_at: form.executed_at || null })
+      setMsg(null)
+      setCashWarn(cashClampWarning(res))
+      // 보정 체크는 매번 해제한다 — 켜둔 채로 다음 실거래를 넣으면 그 건까지 집계에서 빠진다
+      setForm({ ...form, quantity: '', price: '', note: '', fee: '', tax: '',
+                executed_at: '', exclude_from_stats: false })
+      load()
     } catch (e) { setMsg(String(e)) }
   }
 
@@ -136,8 +158,14 @@ export default function Portfolio() {
         <div className="card">
           <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>총자산 (평가액 + 예수금, KRW 환산)</div>
           <div style={{ fontSize: 26, fontWeight: 700 }}>₩{fmt(t.total_asset_krw)}</div>
+          {/* 같은 손익을 두 분모로 나눠 함께 보여준다 — 하나만 두면 현금 비중이 큰 계좌에서
+              체감 손실이 부풀려 읽히고 포지션 사이즈 판단이 통째로 틀어진다. */}
           <div className={t.total_pnl_krw >= 0 ? 'pos' : 'neg'} style={{ fontSize: 16 }}>
-            {t.total_pnl_krw >= 0 ? '+' : ''}₩{fmt(t.total_pnl_krw)} ({t.total_pnl_pct}%)</div>
+            {t.total_pnl_krw >= 0 ? '+' : ''}₩{fmt(t.total_pnl_krw)}
+            <span style={{ fontSize: 13 }}> (원금 대비 {t.total_pnl_pct}%)</span></div>
+          <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+            총자산 대비 {t.total_pnl_pct_of_asset >= 0 ? '+' : ''}{t.total_pnl_pct_of_asset}%
+            {' · '}보유 종목 평가손익이며 실현손익은 아래 카드에 따로 있습니다</div>
           <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
             평가액 ₩{fmt(t.total_value_krw)} · 현금 ₩{fmt(t.cash_krw + (t.cash_usd_krw ?? 0))} ({t.cash_pct}%)
             {(t.cash_usd ?? 0) > 0 && <> — ₩{fmt(t.cash_krw)} + ${fmt(t.cash_usd)}</>}</div>
@@ -152,6 +180,10 @@ export default function Portfolio() {
             <button onClick={saveCash}>저장</button>
             <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>비우면 변경 없음</span>
           </div>
+          {/* 예수금이 조용히 0으로 잘리면 총자산과 1% 리스크 수량이 함께 어긋난다 */}
+          {cashWarn && <div className="warn-box" style={{ marginTop: 8 }}>⚠ {cashWarn}
+            <button className="ghost" style={{ marginLeft: 8 }}
+                    onClick={() => setCashWarn(null)}>확인</button></div>}
           {msg && <div style={{ color: 'var(--sell)', fontSize: 12, marginTop: 6 }}>{msg}</div>}
         </div>
         <div className="card" style={{ height: 180 }}>
@@ -193,15 +225,19 @@ export default function Portfolio() {
       {pf.risk && <div className="card">
         <strong>계좌 리스크</strong>
         <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
-          {' '}최근 {pf.risk.days}거래일 · 현재 보유 수량 기준 근사 (환율 고정)</span>
+          {' '}현재 보유 수량 기준 근사 (환율 고정) · {pf.risk.calendar_note}</span>
         <div style={{ display: 'flex', gap: 32, marginTop: 10, flexWrap: 'wrap' }}>
           <div>
             <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>연환산 변동성</div>
             <div style={{ fontWeight: 700, fontSize: 18 }}>{pf.risk.volatility_pct}%</div>
+            <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+              연 {Math.round(pf.risk.periods_per_year)}회 관측 기준</div>
           </div>
           <div>
             <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>계좌 최대 낙폭 (MDD)</div>
             <div className="neg" style={{ fontWeight: 700, fontSize: 18 }}>{pf.risk.mdd_pct}%</div>
+            {/* 실제 계좌가 겪은 낙폭이 아니다 — 라벨이 없으면 실적으로 읽힌다 */}
+            <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>{pf.risk.mdd_note}</div>
           </div>
           <div>
             <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>최대 종목 비중</div>
@@ -245,17 +281,73 @@ export default function Portfolio() {
         </>}
       </div>}
 
-      {pf.realized && pf.realized.stats.count > 0 && <div className="card">
-        <strong>실현손익 · 매매 복기</strong>
+      {/* 종목마다 1% 룰을 지켜도 합산하면 몇 %인지는 어디에도 안 나온다.
+          사이즈 오류는 한 번에 계좌를 날리므로 총합을 상시 노출한다. */}
+      {pf.open_risk && <div className="card">
+        <strong>계좌 총 미결 리스크</strong>
+        <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+          {' '}모든 보유가 각자 2×ATR 손절에 닿았을 때의 손실 합계</span>
         <div style={{ display: 'flex', gap: 32, marginTop: 10, flexWrap: 'wrap' }}>
           <div>
-            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>총 실현손익 (KRW 환산)</div>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>총 리스크</div>
+            <div style={{ fontWeight: 700, fontSize: 18 }}
+                 className={pf.open_risk.over_limit ? 'neg' : ''}>
+              {pf.open_risk.total_risk_pct ?? '—'}%
+              <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+                {' '}(₩{fmt(pf.open_risk.total_risk_krw)})</span></div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>권장 상한</div>
+            <div style={{ fontWeight: 700, fontSize: 18 }}>{pf.open_risk.limit_pct}%</div>
+          </div>
+        </div>
+        {pf.open_risk.over_limit && <div className="warn-box" style={{ marginTop: 10 }}>
+          ⚠ 총 리스크가 상한 {pf.open_risk.limit_pct}%를 넘었습니다. 신규 진입보다 기존 포지션
+          축소를 먼저 검토하세요. 보유 종목 상관계수가 높으면 실제 동시 손실은 이 합계에 더 가깝습니다.</div>}
+        <table style={{ marginTop: 12 }}>
+          <thead><tr><th>종목</th><th>2×ATR 손실액</th><th>총자산 대비</th></tr></thead>
+          <tbody>
+            {pf.open_risk.rows.map(r => (
+              <tr key={r.symbol}>
+                <td style={{ textAlign: 'left' }}>{r.name}</td>
+                <td>₩{fmt(r.risk_krw)}</td>
+                <td className={(r.risk_pct ?? 0) >= 2 ? 'neg' : ''}>{r.risk_pct ?? '—'}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 8 }}>
+          손절가는 자동 예약주문이 아니며 갭 하락 시 계획보다 더 잃을 수 있습니다.</div>
+      </div>}
+
+      {/* count > 0 일 때만 렌더하면 매도 기록이 없는 계좌에서 카드가 통째로 사라져
+          "이 앱에는 실현손익 기능이 없다"로 읽힌다. 시스템이 돈을 벌고 있는지
+          확인할 자리가 있다는 사실 자체가 화면에 남아 있어야 한다. */}
+      {pf.realized && <div className="card">
+        <strong>실현손익 · 매매 복기</strong>
+        {pf.realized.stats.count === 0 ? (
+          <div className="empty">
+            아직 매도 기록이 없어 확정된 손익이 없습니다.<br />
+            매도를 기록하면 <strong>누적 실현손익 · 승률 · 손익비 · 진입 등급별 성과</strong>가
+            여기에 집계됩니다 — 위 평가손익은 아직 확정되지 않은 값입니다.
+            {pf.realized.stats.excluded_count > 0 &&
+              <><br />※ 평단 보정용으로 표시된 {pf.realized.stats.excluded_count}건은
+                집계에서 제외됩니다.</>}
+          </div>
+        ) : <>
+        <div style={{ display: 'flex', gap: 32, marginTop: 10, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>총 실현손익 (비용 차감 후)</div>
             <div className={pf.realized.stats.total_pnl_krw >= 0 ? 'pos' : 'neg'}
                  style={{ fontWeight: 700, fontSize: 18 }}>
               {pf.realized.stats.total_pnl_krw >= 0 ? '+' : ''}₩{fmt(pf.realized.stats.total_pnl_krw)}</div>
+            <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+              수수료·세금 ₩{fmt(pf.realized.stats.cost_krw)} 차감
+              {pf.realized.stats.fx_pnl_krw !== 0 &&
+                ` · 이 중 환손익 ${pf.realized.stats.fx_pnl_krw >= 0 ? '+' : ''}₩${fmt(pf.realized.stats.fx_pnl_krw)}`}</div>
           </div>
           <div>
-            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>승률</div>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>승률 (비용 차감 후)</div>
             <div style={{ fontWeight: 700, fontSize: 18 }}>{pf.realized.stats.win_rate ?? '—'}%
               <span style={{ color: 'var(--text-dim)', fontSize: 12 }}> ({pf.realized.stats.count}회)</span></div>
           </div>
@@ -271,6 +363,14 @@ export default function Portfolio() {
             <div style={{ fontWeight: 700, fontSize: 18 }}>{pf.realized.stats.payoff_ratio ?? '—'}</div>
           </div>
         </div>
+        {pf.realized.stats.cost_estimated && <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8 }}>
+          ⓘ 일부 체결의 수수료·세금이 기록돼 있지 않아 <strong>시장 기본 요율로 추정</strong>했습니다.
+          정확한 복기를 원하면 매매 입력에서 실제 비용을 넣으세요.</div>}
+        {/* 인위적 체결가가 승률에 섞이면 복기 전체가 거짓이 된다. 뺐다는 사실을
+            숨기면 이번엔 "왜 건수가 안 맞지"로 신뢰가 깨진다 — 몇 건인지 밝힌다. */}
+        {pf.realized.stats.excluded_count > 0 && <div className="warn-box" style={{ marginTop: 8 }}>
+          ⚠ 평단 보정용으로 표시된 <strong>{pf.realized.stats.excluded_count}건</strong>은 체결가가
+          인위적이라 위 승률·손익비·실현손익 집계에서 제외했습니다. 아래 표에는 「보정」 배지로 남아 있습니다.</div>}
         {pf.realized.stats.by_entry_grade.length > 0 && <>
           <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 12 }}>
             진입 등급별 성과 — 시그널을 따른 매매와 아닌 매매의 성적을 분리해서 보세요</div>
@@ -292,7 +392,8 @@ export default function Portfolio() {
         <div className="table-scroll" style={{ marginTop: 12 }}>
         <table>
           <thead><tr><th>매도일</th><th>심볼</th><th>수량</th><th>평단</th><th>매도가</th>
-            <th>실현손익</th><th>수익률</th><th>진입 등급</th><th>메모</th></tr></thead>
+            <th>비용</th><th>실현손익 (net)</th><th>수익률</th><th>원화 손익</th>
+            <th>진입 등급</th><th>메모</th></tr></thead>
           <tbody>
             {pf.realized.entries.map((r, i) => (
               <tr key={i}>
@@ -301,18 +402,34 @@ export default function Portfolio() {
                 <td>{fmt(r.quantity)}</td>
                 <td>{fmt(r.buy_price)}</td>
                 <td>{fmt(r.sell_price)}</td>
-                <td className={r.pnl >= 0 ? 'pos' : 'neg'}>{fmt(r.pnl)}</td>
+                <td style={{ color: 'var(--text-dim)' }}
+                    title={r.cost_estimated ? '시장 기본 요율로 추정한 값' : '입력된 실제 비용'}>
+                  {fmt(r.cost)}{r.cost_estimated && '*'}</td>
+                <td className={r.pnl >= 0 ? 'pos' : 'neg'}
+                    title={`비용 차감 전 ${fmt(r.pnl_gross)}`}>{fmt(r.pnl)}</td>
                 <td className={r.pnl_pct >= 0 ? 'pos' : 'neg'}>
                   {r.pnl_pct >= 0 ? '+' : ''}{r.pnl_pct}%</td>
+                {/* 매수·매도 환율을 각각 반영한 값. 환손익을 따로 보여야 "달러 자산이 잘 버텼다"는
+                    착시 없이 KR/US 배분을 판단할 수 있다. */}
+                <td className={r.pnl_krw >= 0 ? 'pos' : 'neg'}
+                    title={`가격 ${fmt(r.price_pnl_krw)} + 환 ${fmt(r.fx_pnl_krw)} `
+                           + `(매수 ${fmt(r.buy_fx)} → 매도 ${fmt(r.sell_fx)})`}>
+                  ₩{fmt(r.pnl_krw)}
+                  {r.fx_pnl_krw !== 0 && <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>
+                    {' '}(환 {r.fx_pnl_krw >= 0 ? '+' : ''}{fmt(r.fx_pnl_krw)})</span>}</td>
                 <td>{r.entry_grade ?? '—'}</td>
                 <td style={{ textAlign: 'left', maxWidth: 200, overflow: 'hidden',
                              textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                    title={r.note ?? ''}>{r.note ?? ''}</td>
+                    title={r.note ?? ''}>
+                  {r.basis_adjusted && <span className="warn" style={{ fontSize: 11 }}
+                    title="평단 맞춤용 보정 로트가 원가에 섞여 있어 집계에서 제외된 건입니다">
+                    [보정] </span>}{r.note ?? ''}</td>
               </tr>
             ))}
           </tbody>
         </table>
         </div>
+        </>}
       </div>}
 
       <div className="card">
@@ -330,26 +447,54 @@ export default function Portfolio() {
                  onChange={e => setForm({ ...form, price: e.target.value })} style={{ width: 130 }} />
           <input type="date" value={form.trade_date}
                  onChange={e => setForm({ ...form, trade_date: e.target.value })} />
+          {/* 같은 날 매도 후 재매수는 순서가 뒤바뀌면 평단이 잘못 만들어진다 */}
+          <input type="time" title="체결 시각 (같은 날 여러 번 체결한 경우)"
+                 value={form.executed_at}
+                 onChange={e => setForm({ ...form, executed_at: e.target.value })} />
+          <input type="number" placeholder="수수료" value={form.fee}
+                 onChange={e => setForm({ ...form, fee: e.target.value })} style={{ width: 100 }} />
+          <input type="number" placeholder="세금" value={form.tax}
+                 onChange={e => setForm({ ...form, tax: e.target.value })} style={{ width: 100 }} />
           <input placeholder="메모 (진입/청산 근거)" value={form.note}
                  onChange={e => setForm({ ...form, note: e.target.value })} style={{ flex: 1, minWidth: 180 }} />
           <button onClick={addTrade}>추가</button>
         </div>
+        {/* 평단을 시트에 맞추려고 넣는 가짜 체결가가 실거래와 섞이면 승률·손익비가
+            통째로 거짓이 된다. 넣을 수 있게 하되 집계에서는 빼야 복기가 산다. */}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8,
+                        fontSize: 12, color: 'var(--text-dim)' }}>
+          <input type="checkbox" checked={form.exclude_from_stats}
+                 onChange={e => setForm({ ...form, exclude_from_stats: e.target.checked })} />
+          평단 맞춤용 보정 로트 — 평단에는 반영하되 승률·실현손익 집계에서 제외
+        </label>
+        <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
+          수수료·세금을 비우면 시장 기본 요율로 추정합니다 — 실제 값을 넣을수록 승률·손익비가 정확해집니다.
+          <br />기록하면 예수금이 체결 대금만큼 자동 증감하며, 보유보다 많은 매도는 거부됩니다.
+          입출금·배당은 위 예수금 칸에서 직접 수정하세요.</div>
         {msg && <div style={{ color: 'var(--sell)', marginTop: 8 }}>{msg}</div>}
         {trades.length === 0 && <div className="empty">
           기록된 매매가 없습니다. 체결 내역을 남기면 진입 등급별 성과까지 복기할 수 있습니다.</div>}
         <div className="table-scroll" style={{ marginTop: 12 }}>
         <table>
           <thead><tr><th>날짜</th><th>심볼</th><th>구분</th><th>수량</th><th>단가</th>
-            <th>체결 시 등급</th><th>메모</th><th></th></tr></thead>
+            <th>비용</th><th>체결 시 등급</th><th>메모</th><th></th></tr></thead>
           <tbody>
             {trades.slice().reverse().map(tr => (
               <tr key={tr.id}>
-                <td style={{ textAlign: 'left' }}>{tr.trade_date}</td>
+                <td style={{ textAlign: 'left' }}>{tr.trade_date}
+                  {tr.executed_at && <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>
+                    {' '}{tr.executed_at}</span>}</td>
                 <td>{tr.symbol}</td>
                 <td className={tr.side === 'BUY' ? 'pos' : 'neg'}>
-                  {tr.side === 'BUY' ? '매수' : '매도'}</td>
+                  {tr.side === 'BUY' ? '매수' : '매도'}
+                  {/* 체결가가 인위적인 행은 원장에서 눈으로 구분돼야 한다 */}
+                  {tr.exclude_from_stats === 1 && <div className="warn" style={{ fontSize: 10 }}
+                    title="평단 맞춤용 보정 로트 — 승률·실현손익 집계에서 제외됩니다">보정</div>}</td>
                 <td>{fmt(tr.quantity)}</td>
                 <td>{fmt(tr.price)}</td>
+                <td style={{ color: 'var(--text-dim)' }}
+                    title={tr.fee === null && tr.tax === null ? '미기록 — 시장 요율로 추정' : '입력된 실제 비용'}>
+                  {tr.fee === null && tr.tax === null ? '추정' : fmt((tr.fee ?? 0) + (tr.tax ?? 0))}</td>
                 <td>{tr.grade_at_trade ?? '—'}</td>
                 <td style={{ textAlign: 'left', maxWidth: 220, overflow: 'hidden',
                              textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
@@ -358,7 +503,7 @@ export default function Portfolio() {
                 <td><button className="ghost" onClick={() => {
                   if (confirm(`${tr.trade_date} ${tr.symbol} ${tr.side === 'BUY' ? '매수' : '매도'} `
                     + `${fmt(tr.quantity)}주 기록을 삭제합니다.\n`
-                    + '평단과 실현손익 원장이 함께 바뀌며 되돌릴 수 없습니다.'))
+                    + '평단·실현손익 원장과 예수금이 함께 되돌아가며, 이 작업은 취소할 수 없습니다.'))
                     del(`/api/trades/${tr.id}`).then(load).catch(e => setMsg(String(e)))
                 }}>삭제</button></td>
               </tr>

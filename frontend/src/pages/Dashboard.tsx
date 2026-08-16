@@ -93,9 +93,15 @@ export default function Dashboard() {
         <div className="card">
           <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>총자산 (평가액+예수금, KRW 환산)</div>
           <div style={{ fontSize: 24, fontWeight: 700 }}>{fmt(pf.total_asset_krw)}</div>
+          {/* 분모를 밝히지 않으면 이 %가 총자산 등락률로 읽힌다. 현금 비중이 큰 계좌에서는
+              두 값이 몇 배씩 벌어져 손실 체감이 부풀고 멀쩡한 포지션을 조기 청산하게 된다. */}
           <div className={pnlCls}>
-            {pf.total_pnl_krw >= 0 ? '+' : ''}{fmt(pf.total_pnl_krw)} ({pf.total_pnl_pct}%)
+            {pf.total_pnl_krw >= 0 ? '+' : ''}{fmt(pf.total_pnl_krw)}
+            <span style={{ fontSize: 13 }}> (원금 대비 {pf.total_pnl_pct}%)</span>
           </div>
+          <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+            총자산 대비 {pf.total_pnl_pct_of_asset >= 0 ? '+' : ''}{pf.total_pnl_pct_of_asset}%
+            {' · '}평가손익 (실현손익 제외)</div>
           {/* 현금은 원화+달러 합산(cash_pct와 같은 기준) — 포트폴리오 화면과 숫자가 달라지면
               어느 쪽을 믿어야 할지 판단이 멈춘다 */}
           <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 4 }}>
@@ -109,8 +115,14 @@ export default function Dashboard() {
           {data.rule_alerts.map((a, i) => (
             <div key={i} style={{ marginTop: 6 }}>
               <Link to={`/ticker/${a.symbol}`}>🔔 {a.message}</Link>
+              {/* 장중 관통 후 회복은 종가만 보면 잡히지 않는다. 손절선이 지켜졌다고
+                  믿는 것과 관통 사실을 아는 것은 다음 주문 크기를 바꾼다. */}
+              {a.intraday_only && <span className="warn" style={{ fontSize: 11 }}> · 종가는 되돌아옴</span>}
             </div>
           ))}
+          <div style={{ color: 'var(--text-dim)', fontSize: 11, marginTop: 8 }}>
+            일봉 고저가 기준 판정입니다. 손절가는 자동 예약주문이 아니며, 갭 하락 시
+            체결가는 손절선보다 낮을 수 있습니다.</div>
         </div>
       )}
 
@@ -163,6 +175,9 @@ export default function Dashboard() {
                     <strong>{sig.name}</strong>
                     {sig.is_holding && <span style={{ color: 'var(--accent)', fontSize: 11 }}> 보유</span>}
                     {sig.grade_changed && <span style={{ color: 'var(--buy-strong)', fontSize: 11 }}> 등급변경</span>}
+                    {/* 장중 미완성 봉 기반 등급 — 마감 때 뒤집힐 수 있다 */}
+                    {sig.bar_complete === false && <span className="warn" style={{ fontSize: 11 }}
+                      title={`${sig.bar_date} 봉이 마감 전입니다. 종가 확정 시 등급이 바뀔 수 있고, 백테스트는 확정 종가 신호만 검증했습니다.`}> 미확정</span>}
                   </Link>
                   {/* 행 요소를 줄이기 위해 근거는 2개까지만 노출하고 나머지는 접어둔다.
                       title 툴팁은 터치 기기에서 열리지 않으므로 <details> 로 대체. */}

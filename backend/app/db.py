@@ -18,7 +18,9 @@ def get_conn(db_path: str | None = None) -> sqlite3.Connection:
     conn.executescript(_SCHEMA)
     # 기존 DB 마이그레이션 — CREATE IF NOT EXISTS는 컬럼 추가를 못 하므로 여기서 보강
     cols = [r[1] for r in conn.execute("PRAGMA table_info(trades)")]
-    for col, decl in (("fx_rate", "REAL"), ("note", "TEXT"), ("grade_at_trade", "TEXT")):
+    for col, decl in (("fx_rate", "REAL"), ("note", "TEXT"), ("grade_at_trade", "TEXT"),
+                      ("fee", "REAL"), ("tax", "REAL"), ("executed_at", "TEXT"),
+                      ("exclude_from_stats", "INTEGER NOT NULL DEFAULT 0")):
         if col not in cols:
             conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {decl}")
     conn.commit()
@@ -93,20 +95,31 @@ def remove_from_watchlist(conn, symbol):
 
 
 def insert_trade(conn, symbol, side, quantity, price, trade_date, fx_rate=None,
-                 note=None, grade_at_trade=None) -> int:
+                 note=None, grade_at_trade=None, fee=None, tax=None,
+                 executed_at=None, exclude_from_stats=0) -> int:
     cur = conn.execute(
-        """INSERT INTO trades (symbol, side, quantity, price, trade_date, fx_rate, note, grade_at_trade)
-           VALUES (?,?,?,?,?,?,?,?)""",
-        (symbol, side, quantity, price, trade_date, fx_rate, note, grade_at_trade))
+        """INSERT INTO trades (symbol, side, quantity, price, trade_date, executed_at,
+                               fx_rate, fee, tax, note, grade_at_trade, exclude_from_stats)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (symbol, side, quantity, price, trade_date, executed_at, fx_rate, fee, tax,
+         note, grade_at_trade, int(exclude_from_stats)))
     conn.commit()
     return cur.lastrowid
+
+
+# 시각 미기록(과거 행)은 입력 순서(id)로 폴백 — 빈 문자열이 어떤 시각보다 앞선다
+_TRADE_ORDER = "ORDER BY trade_date, COALESCE(executed_at, ''), id"
 
 
 def list_trades(conn, symbol=None):
     if symbol:
         return conn.execute(
-            "SELECT * FROM trades WHERE symbol=? ORDER BY trade_date, id", (symbol,)).fetchall()
-    return conn.execute("SELECT * FROM trades ORDER BY trade_date, id").fetchall()
+            "SELECT * FROM trades WHERE symbol=? " + _TRADE_ORDER, (symbol,)).fetchall()
+    return conn.execute("SELECT * FROM trades " + _TRADE_ORDER).fetchall()
+
+
+def get_trade(conn, trade_id):
+    return conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
 
 
 def delete_trade(conn, trade_id):

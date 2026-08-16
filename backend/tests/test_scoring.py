@@ -3,12 +3,31 @@ from app import indicators as ind
 from app import scoring
 
 def test_grade_thresholds():
-    assert scoring.grade(75) == "강력매수"
-    assert scoring.grade(60) == "강력매수"
-    assert scoring.grade(30) == "매수"
+    # 임계값은 실측 재보정으로 바뀐다 — 숫자가 아니라 경계 동작을 고정한다
+    sb, b, s, ss = scoring.SWING_CUTS
+    assert scoring.grade(sb + 1) == "강력매수"
+    assert scoring.grade(sb) == "강력매수"
+    assert scoring.grade(b) == "매수"
+    assert scoring.grade(b - 0.1) == "중립"
     assert scoring.grade(0) == "중립"
-    assert scoring.grade(-30) == "매도"
-    assert scoring.grade(-60) == "강력매도"
+    assert scoring.grade(s) == "매도"
+    assert scoring.grade(ss) == "강력매도"
+    assert scoring.grade(ss - 1) == "강력매도"
+
+
+def test_top_grades_are_reachable_within_attainable_score_range():
+    """ML-1: 실측 스윙 점수 범위는 [-50, +40] — 임계값이 그 안에 있어야 등급이 산다."""
+    lo, hi = -50.0, 40.0
+    assert scoring.grade(hi) == "강력매수" and scoring.grade(lo) == "강력매도"
+    assert all(lo < c < hi for c in scoring.SWING_CUTS)
+
+
+def test_longterm_uses_its_own_cuts():
+    """중장기 분포는 우편향 — 스윙 임계값을 그대로 쓰면 등급이 위로 쏠린다."""
+    assert scoring.SWING_CUTS != scoring.LONGTERM_CUTS
+    # 스윙 강력매수 경계 점수를 중장기에 넣으면 아직 최상위가 아니어야 한다
+    assert scoring.grade(scoring.SWING_CUTS[0]) == "강력매수"
+    assert scoring.grade(scoring.SWING_CUTS[0], "longterm") != "강력매수"
 
 def test_uptrend_scores_positive_longterm(ohlcv_up):
     result = scoring.score_ticker(ind.compute_indicators(ohlcv_up))
@@ -35,10 +54,47 @@ def test_regime_detection(ohlcv_up, ohlcv_down):
 
 def test_regime_dampens_meanrev_against_trend(ohlcv_down):
     result = scoring.score_ticker(ind.compute_indicators(ohlcv_down))
-    # 하락 추세에서 평균회귀 지표의 양(+) 점수는 반감 + 경고 문구
+    # 하락 추세에서 평균회귀 팩터의 양(+) 점수는 반감 + 경고 문구
     for item in result["indicator_scores"]:
-        if item["name"] in ("RSI", "볼린저밴드", "스토캐스틱") and item["score"] > 0:
+        if item["name"] == "과매수·과매도" and item["score"] > 0:
             assert "신뢰도 반감" in item["reason"]
+
+
+def test_meanrev_is_one_composite_factor_not_three():
+    """ML-13: RSI·볼린저·스토캐스틱 상호상관 0.70~0.77 — 따로 세면 한 신호에 3배 가중."""
+    assert "meanrev" in scoring.SWING_WEIGHTS
+    assert not {"rsi", "bollinger", "stoch"} & set(scoring.SWING_WEIGHTS)
+    assert round(sum(scoring.SWING_WEIGHTS.values()), 6) == 1.0
+    assert round(sum(scoring.LONG_WEIGHTS.values()), 6) == 1.0
+
+
+def test_meanrev_composite_spans_oversold_to_overbought():
+    import pandas as pd
+    over = pd.Series({"rsi": 10.0, "bb_upper": 110.0, "bb_lower": 100.0, "close": 100.0,
+                      "stoch_k": 5.0})
+    under = pd.Series({"rsi": 95.0, "bb_upper": 110.0, "bb_lower": 100.0, "close": 110.0,
+                       "stoch_k": 95.0})
+    assert scoring._score_meanrev(over)[0] == 70
+    assert scoring._score_meanrev(under)[0] == -70
+    # 근거 문구에 세부 지표 값이 남아야 판단 재료가 사라지지 않는다
+    assert "RSI" in scoring._score_meanrev(over)[1]
+
+
+def test_pos_52w_high_zone_no_longer_penalized():
+    """실측상 고점권 성과가 중간권과 같았다 — 감점할 근거가 없다."""
+    import pandas as pd
+    assert scoring._score_pos_52w(pd.Series({"pos_52w": 0.95}))[0] == 0
+    assert scoring._score_pos_52w(pd.Series({"pos_52w": 0.1}))[0] == 50
+
+
+def test_pos_52w_uses_high_low_range():
+    """52주 신고가는 장중 고가로 정의된다 — 종가 rolling만 쓰면 범위가 좁게 잡힌다."""
+    import pandas as pd
+    close = pd.Series([100.0] * 100)
+    high = pd.Series([120.0] * 100)
+    low = pd.Series([80.0] * 100)
+    assert ind.pos_52w(close, high, low).iloc[-1] == 0.5   # (100-80)/(120-80)
+    assert ind.pos_52w(close).iloc[-1] != 0.5              # 종가만이면 범위가 0
 
 def test_insufficient_data_raises(ohlcv_up):
     with pytest.raises(ValueError):

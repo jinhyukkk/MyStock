@@ -53,10 +53,17 @@ def volume_ratio(volume: pd.Series, window=20) -> pd.Series:
     return volume / volume.shift(1).rolling(window).mean()
 
 
-def pos_52w(close: pd.Series) -> pd.Series:
+def pos_52w(close: pd.Series, high: pd.Series | None = None,
+            low: pd.Series | None = None) -> pd.Series:
+    """52주 범위 내 현재 종가의 위치 (0=저점, 1=고점).
+
+    범위는 고가/저가 기준이다 — "52주 신고가"는 장중 고가로 정의되므로, 종가
+    rolling만 쓰면 실제 범위보다 좁게 잡혀 위치가 과대·과소 계상된다.
+    (고저가가 없으면 종가로 폴백)
+    """
     window = min(len(close), 252)
-    lo = close.rolling(window, min_periods=60).min()
-    hi = close.rolling(window, min_periods=60).max()
+    lo = (low if low is not None else close).rolling(window, min_periods=60).min()
+    hi = (high if high is not None else close).rolling(window, min_periods=60).max()
     return ((close - lo) / (hi - lo).replace(0, 1e-10)).clip(0, 1)
 
 
@@ -71,5 +78,5 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out = out.join(stochastic(df["high"], df["low"], df["close"]))
     out["atr14"] = atr(df["high"], df["low"], df["close"])
     out["vol_ratio"] = volume_ratio(df["volume"])
-    out["pos_52w"] = pos_52w(df["close"])
+    out["pos_52w"] = pos_52w(df["close"], df["high"], df["low"])
     return out

@@ -6,6 +6,7 @@ import type { Backtest, TickerDetail as Detail } from '../types'
 import SignalBadge from '../components/SignalBadge'
 import ScoreBar from '../components/ScoreBar'
 import TradeDialog from '../components/TradeDialog'
+import BacktestTable from '../components/BacktestTable'
 
 const CHART_OPTS = {
   layout: { background: { color: 'transparent' }, textColor: '#8b93a3' },
@@ -76,27 +77,64 @@ function useCandleChart(detail: Detail | null) {
 /** 등급의 방향만 뽑는다 (+1 매수 / 0 중립 / -1 매도). */
 const dir = (grade: string) => grade.includes('매수') ? 1 : grade.includes('매도') ? -1 : 0
 
+/** 행동 요약 최상단의 한 문장 판정.
+ *
+ *  이게 없으면 사용자가 손절가·목표가·수량·과거 성적·계좌 리스크 다섯 숫자와
+ *  최대 일곱 종류의 경고를 매번 머릿속에서 합성해야 한다. 30초 판단이 성립하지 않는다.
+ *  방향을 지시하는 게 아니라 **지금 이 화면에서 먼저 볼 것**을 가리킨다. */
+function verdict(detail: Detail): { text: string; tone: 'buy' | 'sell' | 'flat' } {
+  const sig = detail.signal
+  const held = (detail.risk?.exit_plan?.held_quantity ?? 0) > 0
+  const over = detail.risk?.account_open_risk?.over_limit
+  const d = sig ? dir(sig.swing_grade) : 0
+  if (held && d < 0)
+    return { tone: 'sell', text: '보유 중인데 스윙 매도 신호입니다 — 추가 매수가 아니라 '
+      + '아래 청산 플랜에서 얼마를 덜어낼지 먼저 정하세요.' }
+  if (held && d > 0 && over)
+    return { tone: 'sell', text: '매수 신호지만 계좌 총 미결 리스크가 상한을 넘었습니다 — '
+      + '추가 매수 전에 다른 포지션 축소가 먼저입니다.' }
+  if (held && d > 0)
+    return { tone: 'buy', text: '보유 중이며 매수 신호가 유지됩니다 — 추가 매수는 아래 '
+      + '제안 수량과 계좌 총 리스크 안에서만.' }
+  if (held)
+    return { tone: 'flat', text: '보유 중이나 뚜렷한 신호가 없습니다 — 새 판단보다 '
+      + '손절선 유지가 할 일입니다.' }
+  if (d > 0 && over)
+    return { tone: 'sell', text: '매수 신호지만 계좌 총 미결 리스크가 이미 상한을 넘었습니다 — '
+      + '신규 진입보다 기존 포지션 축소가 먼저입니다.' }
+  if (d > 0)
+    return { tone: 'buy', text: '신규 진입 후보입니다 — 아래 손절가를 먼저 정하고 '
+      + '제안 수량을 넘기지 마세요.' }
+  if (d < 0)
+    return { tone: 'sell', text: '매도 신호이고 보유하지 않았습니다 — 지금 할 일은 없습니다.' }
+  return { tone: 'flat', text: '뚜렷한 신호가 없습니다 — 관망 구간입니다.' }
+}
+
 export default function TickerDetail() {
   const { symbol } = useParams()
   const [detail, setDetail] = useState<Detail | null>(null)
   const [backtest, setBacktest] = useState<Backtest | null>(null)
   const [btError, setBtError] = useState<string | null>(null)
+  // 백테스트는 상세와 별개 요청이라 먼저 그려지는 프레임이 존재한다. 그 프레임에서
+  // "표본 부족"이라고 단정하면 아직 오지 않은 근거를 없다고 말하는 셈이 된다.
+  const [btLoading, setBtLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [ruleType, setRuleType] = useState('TARGET')
   const [ruleValue, setRuleValue] = useState('')
   const [ruleMsg, setRuleMsg] = useState<string | null>(null)
-  const [tradeOpen, setTradeOpen] = useState(false)
+  const [tradeOpen, setTradeOpen] = useState<'BUY' | 'SELL' | null>(null)
   const { mainRef, rsiRef, macdRef } = useCandleChart(detail)
 
   const load = () => get<Detail>(`/api/tickers/${symbol}`)
     .then(d => { setDetail(d); setError(null) }).catch(e => setError(String(e)))
   useEffect(() => {
     load()
-    setBacktest(null); setBtError(null)
+    setBacktest(null); setBtError(null); setBtLoading(true)
     // 백테스트 실패를 삼키면 카드가 조용히 사라진다. 백엔드는
     // "가격 데이터 부족 — 새로고침 후 다시 시도" 같은 행동 가능한 메시지를 준다.
     get<Backtest>(`/api/tickers/${symbol}/backtest`)
       .then(setBacktest).catch(e => setBtError(String(e)))
+      .finally(() => setBtLoading(false))
   }, [symbol])
 
   if (error) return (
@@ -116,9 +154,17 @@ export default function TickerDetail() {
   const unit = detail.currency === 'USD' ? '$' : '₩'
   // 현재 등급이 과거에 어떤 성적을 냈는지 — 등급 배지만으로는 그 등급을 믿을 근거가 없다
   const gradeStat = backtest?.grades.find(g => g.grade === sig?.swing_grade) ?? null
+  // 중장기 등급이 통계적으로 뒷받침되는지 — 아니면 배지에 "미검증"을 붙인다
+  const longtermStat = backtest?.longterm_grades.find(g => g.grade === sig?.longterm_grade) ?? null
+  const longtermUnverified = !!backtest &&
+    (!longtermStat || backtest.long_horizons.every(h => longtermStat[`insufficient${h}`] === true))
   const conflict = sig && dir(sig.swing_grade) !== 0 && dir(sig.longterm_grade) !== 0
     && dir(sig.swing_grade) !== dir(sig.longterm_grade)
   const hasStopRule = detail.rules.some(r => r.rule_type === 'STOP')
+  const v = verdict(detail)
+  const plan = detail.risk?.exit_plan ?? null
+  // 보유 + 매도 신호에서 '추가 매수 가능'을 띄우는 것은 물타기 유도다 — 그 줄만 접는다
+  const holdingSellSignal = !!plan && !!sig && dir(sig.swing_grade) < 0
 
   const addRule = async () => {
     if (!ruleValue) return
@@ -148,6 +194,11 @@ export default function TickerDetail() {
             {sig?.regime_label ? ` · ${sig.regime_label}` : ''}</span></h2>
           {last && <div style={{ fontSize: 22, fontWeight: 700 }}>
             {detail.currency === 'USD' ? '$' : '₩'}{last.close.toLocaleString('ko-KR')}</div>}
+          {/* 장중 미완성 봉으로 계산된 등급은 마감 때 뒤집힌다. 백테스트가 검증한 것은
+              확정 종가 신호이므로, 이 배지가 붙은 등급은 검증 밖에 있다. */}
+          {sig?.bar_complete === false && <div className="warn" style={{ fontSize: 12, marginTop: 4 }}>
+            ⚠ 미확정 — {sig.bar_date} 봉이 마감 전입니다. 종가 확정 시 등급이 바뀔 수 있고,
+            백테스트는 확정 종가 신호만 검증했습니다.</div>}
         </div>
         <div style={{ display: 'flex', gap: 24, alignItems: 'center', flexWrap: 'wrap' }}>
           {sig && <>
@@ -160,20 +211,85 @@ export default function TickerDetail() {
               <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>중장기</div>
               <SignalBadge grade={sig.longterm_grade} />
               <ScoreBar score={sig.longterm_score} label="중장기" />
+              {/* 검증된 신호와 검증 안 된 신호가 같은 시각적 무게로 놓이면 구분되지 않는다.
+                  중장기는 60/120일 구간이라 3년 데이터로도 독립 표본이 모자란다. */}
+              {longtermUnverified && <div className="warn" style={{ fontSize: 11 }}
+                   title="60/120일 구간은 관측 기간이 만들 수 있는 독립 표본이 부족해 통계적으로 검증되지 않았습니다.">
+                미검증</div>}
             </div>
           </>}
-          <button onClick={() => setTradeOpen(true)}>매매 기록</button>
+          <button onClick={() => setTradeOpen(holdingSellSignal ? 'SELL' : 'BUY')}>매매 기록</button>
         </div>
       </div>
 
       {tradeOpen && <TradeDialog symbol={detail.symbol} name={detail.name}
         currency={detail.currency} defaultPrice={last?.close ?? null}
-        onClose={() => setTradeOpen(false)} onSaved={load} />}
+        defaultSide={tradeOpen}
+        costRates={detail.cost_rates} exitPlan={detail.risk?.exit_plan}
+        suggestedQuantity={detail.risk?.addable_quantity ?? detail.risk?.position_size_1pct}
+        onClose={() => setTradeOpen(null)} onSaved={load} />}
 
       {/* 행동 요약 — 차트보다 위에 둔다. 차트 3개(600px)가 먼저 오면
           손절가·수량·과거 성적이 스크롤 아래로 밀려 "30초 판단"이 성립하지 않는다. */}
       <div className="card">
         <strong>행동 요약</strong>
+        {/* 다섯 숫자와 일곱 경고를 사용자가 머릿속에서 합성하던 작업을 한 줄로 대신한다 */}
+        <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 6,
+                      background: 'var(--bg)', borderLeft: `3px solid ${
+                        v.tone === 'buy' ? 'var(--buy)' : v.tone === 'sell' ? 'var(--sell)' : 'var(--border)'}`,
+                      fontSize: 15, fontWeight: 600 }}>
+          {v.text}
+        </div>
+
+        {/* 보유 중이면 나가는 쪽 숫자를 진입 숫자보다 먼저 놓는다. 매도 신호가 뜬
+            종목에서 화면이 '추가 매수 가능 수량'만 보여주면 물타기를 권하는 꼴이 된다. */}
+        {plan && <div style={{ marginTop: 12, padding: 12, borderRadius: 6,
+                               border: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between',
+                        flexWrap: 'wrap', gap: 8 }}>
+            <strong>청산 플랜 — 보유 {plan.held_quantity.toLocaleString('ko-KR')}</strong>
+            <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+              평단 {unit}{plan.avg_price.toLocaleString('ko-KR')}</span>
+          </div>
+          <div style={{ display: 'flex', gap: 28, marginTop: 10, flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>평가손익</div>
+              <div className={plan.unrealized_pnl_pct >= 0 ? 'pos' : 'neg'}
+                   style={{ fontWeight: 700, fontSize: 18 }}>
+                {plan.unrealized_pnl_pct >= 0 ? '+' : ''}{plan.unrealized_pnl_pct}%
+                <span style={{ fontSize: 12 }}>
+                  {' '}(₩{Math.round(plan.unrealized_pnl_krw).toLocaleString('ko-KR')})</span></div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>손절선 (평단 대비)</div>
+              <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--sell)' }}>
+                {plan.stop_from_avg_pct}%</div>
+              <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                여기서 손절까지 ₩{Math.round(plan.risk_to_stop_krw).toLocaleString('ko-KR')} 추가 손실</div>
+            </div>
+          </div>
+          <table style={{ marginTop: 10 }}>
+            <thead><tr><th>덜어낼 비중</th><th>수량</th><th>순회수액</th>
+              <th>확정 손익</th></tr></thead>
+            <tbody>
+              {plan.slices.map(s => (
+                <tr key={s.label}>
+                  <td style={{ textAlign: 'left' }}>{s.label}</td>
+                  <td>{s.quantity.toLocaleString('ko-KR')}</td>
+                  <td>₩{Math.round(s.proceeds_krw).toLocaleString('ko-KR')}</td>
+                  <td className={s.realized_pnl_krw >= 0 ? 'pos' : 'neg'}>
+                    {s.realized_pnl_krw >= 0 ? '+' : ''}
+                    ₩{Math.round(s.realized_pnl_krw).toLocaleString('ko-KR')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ color: 'var(--text-dim)', fontSize: 11, marginTop: 8 }}>
+            회수액·손익은 매도 수수료·세금을 뺀 추정치이며 평단 기준입니다.
+            {' '}실제 체결가는 호가에 따라 달라집니다.</div>
+          <button style={{ marginTop: 10 }} onClick={() => setTradeOpen('SELL')}>매도 기록</button>
+        </div>}
+
         {detail.risk ? (
           <div style={{ display: 'flex', gap: 32, marginTop: 10, flexWrap: 'wrap' }}>
             <div>
@@ -182,22 +298,46 @@ export default function TickerDetail() {
                 {unit}{detail.risk.stop_price.toLocaleString('ko-KR')}
                 <span style={{ fontSize: 12 }}> ({detail.risk.stop_pct}%)</span></div>
             </div>
-            {detail.risk.position_size_1pct !== null && <div>
-              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>계좌 1% 리스크 수량</div>
+            {/* 손절가만 있고 목표가가 없으면 손익비를 모른 채 사이즈를 정하게 된다 */}
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+                제안 목표가 (손익비 {detail.risk.target_r}:1)</div>
+              <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--buy)' }}>
+                {unit}{detail.risk.target_price.toLocaleString('ko-KR')}
+                <span style={{ fontSize: 12 }}> (+{detail.risk.target_pct}%)</span></div>
+              {detail.risk.resistance_60d !== null && <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                60일 고점 {unit}{detail.risk.resistance_60d.toLocaleString('ko-KR')}
+                {' '}(손익비 {detail.risk.resistance_reward_risk}:1)</div>}
+            </div>
+            {detail.risk.position_size_1pct !== null && !holdingSellSignal && <div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+                제안 수량 (1% 리스크, 비중 {detail.risk.max_weight_pct}% 상한)</div>
               <div style={{ fontWeight: 700, fontSize: 18 }}>
                 {detail.risk.position_size_1pct.toLocaleString('ko-KR')}
                 <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
-                  {' '}(리스크 ₩{detail.risk.risk_budget_krw?.toLocaleString('ko-KR')})</span></div>
+                  {' '}(리스크 ₩{detail.risk.risk_budget_krw?.toLocaleString('ko-KR')}
+                  {detail.risk.position_notional_krw !== null &&
+                    ` · 평가액 ₩${detail.risk.position_notional_krw.toLocaleString('ko-KR')}`})</span></div>
+              {(detail.risk.held_quantity ?? 0) > 0 && <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+                이미 {detail.risk.held_quantity?.toLocaleString('ko-KR')} 보유 →
+                {' '}추가 매수 가능 <strong>{detail.risk.addable_quantity?.toLocaleString('ko-KR')}</strong></div>}
             </div>}
             <div>
               <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
                 이 등급의 과거 성적 (20일)</div>
               <div style={{ fontWeight: 700, fontSize: 18 }}>
-                {gradeStat && gradeStat.win20 !== null
+                {gradeStat && gradeStat.insufficient20 !== true && typeof gradeStat.win20 === 'number'
                   ? <>승률 {gradeStat.win20}%
                       <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
-                        {' '}· 표본 {gradeStat.n}일</span></>
-                  : <span style={{ color: 'var(--text-dim)', fontSize: 14 }}>표본 없음</span>}</div>
+                        {' '}(비용 차감 후) · 독립 표본 {gradeStat.episodes20}개</span></>
+                  /* 아직 응답 전인 것과 검증해보니 표본이 없는 것은 전혀 다른 사실이다 */
+                  : btLoading
+                  ? <span style={{ color: 'var(--text-dim)', fontSize: 14 }}>불러오는 중…</span>
+                  : btError
+                  ? <span style={{ color: 'var(--text-dim)', fontSize: 14 }}>
+                      백테스트를 불러오지 못했습니다</span>
+                  : <span style={{ color: 'var(--text-dim)', fontSize: 14 }}>
+                      표본 부족 — 이 등급은 판단 근거로 쓰기에 관측이 부족합니다</span>}</div>
             </div>
             <div style={{ alignSelf: 'center' }}>
               <button className="ghost" onClick={registerStop} disabled={hasStopRule}>
@@ -207,13 +347,31 @@ export default function TickerDetail() {
         ) : <div style={{ color: 'var(--text-dim)', marginTop: 8 }}>
           ATR 계산에 필요한 가격 데이터가 부족합니다 — 새로고침 후 다시 확인하세요.</div>}
 
+        {/* 상한이 걸렸다는 사실 자체가 리스크 정보다 — 잘리지 않은 1% 룰 수량은
+            저변동성 구간에서 계좌 전액을 넘길 수 있다. */}
+        {detail.risk?.position_size_capped && <div className="warn-box" style={{ marginTop: 12 }}>
+          ⚠ {detail.risk.cap_reason}</div>}
+        {/* 목표가가 매물대 위면 그 구간을 뚫어야 도달한다 — 손익비가 종이 위에서만 성립한다 */}
+        {detail.risk?.target_above_resistance && <div className="warn-box" style={{ marginTop: 12 }}>
+          ⚠ 목표가가 60일 고점({unit}{detail.risk.resistance_60d?.toLocaleString('ko-KR')}) 위입니다 —
+          그 매물대를 뚫어야 도달합니다. 고점까지만 보면 손익비는
+          {' '}{detail.risk.resistance_reward_risk}:1입니다.</div>}
+        {detail.risk?.account_open_risk && <div style={{
+          marginTop: 12, fontSize: 13,
+          color: detail.risk.account_open_risk.over_limit ? 'var(--sell)' : 'var(--text-dim)' }}>
+          현재 계좌 총 미결 리스크 <strong>{detail.risk.account_open_risk.total_risk_pct}%</strong>
+          {' '}/ 상한 {detail.risk.account_open_risk.limit_pct}%
+          {detail.risk.account_open_risk.over_limit && ' — 신규 진입 전에 기존 포지션 축소를 먼저 검토하세요'}</div>}
+
         {conflict && sig && <div className="warn-box" style={{ marginTop: 12 }}>
           ⚠ 스윙 {sig.swing_grade} · 중장기 {sig.longterm_grade} — 방향이 엇갈립니다.
           어느 쪽을 따를지가 아니라 <strong>보유 기간을 먼저 정하고</strong> 그에 맞는 쪽을 보세요.</div>}
         {sig?.context_note && <div style={{ color: 'var(--accent)', fontSize: 13, marginTop: 10 }}>
           💡 {sig.context_note}</div>}
         <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 10 }}>
-          2×ATR 손절 기준, 총자산(평가액+예수금)의 1%만 잃는 수량. 진입 전 손절가를 먼저 정하세요.
+          2×ATR 손절 기준 총자산의 1%만 잃는 수량이되, 한 종목이 총자산의
+          {' '}{detail.risk?.max_weight_pct ?? 20}%를 넘지 않도록 상한을 겁니다. 진입 전 손절가를 먼저 정하세요.
+          {' '}손절가는 자동 예약주문이 아니며 갭 하락 시 계획보다 더 잃을 수 있습니다.
           <br />지표 기반 참고 정보이며 투자 자문이 아닙니다. 최종 판단과 책임은 본인에게 있습니다.</div>
         {ruleMsg && <div style={{ color: 'var(--sell)', fontSize: 12, marginTop: 8 }}>{ruleMsg}</div>}
       </div>
@@ -249,6 +407,14 @@ export default function TickerDetail() {
         <div ref={macdRef} />
       </div>
 
+      {/* 자리표시가 없으면 카드가 통째로 없는 것으로 보여 "이 종목엔 백테스트가 없다"로 읽힌다 */}
+      {btLoading && <div className="card">
+        <strong>시그널 백테스트</strong>
+        <div style={{ color: 'var(--text-dim)', fontSize: 13, marginTop: 8 }}>
+          등급별 과거 성적을 계산하는 중입니다…</div>
+        <div className="skeleton" style={{ height: 120, marginTop: 10 }} />
+      </div>}
+
       {btError && <div className="card">
         <strong>시그널 백테스트</strong>
         <div className="warn-box" style={{ marginTop: 8 }}>불러오지 못했습니다: {btError}</div>
@@ -257,40 +423,23 @@ export default function TickerDetail() {
       {backtest && <div className="card">
         <strong>시그널 백테스트</strong>
         <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
-          {' '}{backtest.start} ~ {backtest.end} · 표본 {backtest.samples}일 · 현재 스코어링 로직을 과거에 적용한 결과
-          {backtest.bench_label && ` · 초과수익 = ${backtest.bench_label} 대비`}
-          {` · 순 = 왕복 비용 ${backtest.cost_pct}%p 차감 · 인접일 표본 중첩(자기상관)으로 실제 독립 표본은 더 적음`}</span>
-        <div className="table-scroll" style={{ marginTop: 8 }}>
-        <table>
-          <thead><tr><th>등급</th><th>신호 일수</th><th>5일 평균</th><th>5일 승률</th>
-            <th>20일 평균</th><th>20일 승률</th>
-            {backtest.bench_label && <><th>5일 초과</th><th>20일 초과</th></>}</tr></thead>
-          <tbody>
-            {backtest.grades.map(g => (
-              <tr key={g.grade}>
-                <td><SignalBadge grade={g.grade} /></td>
-                <td>{g.n}</td>
-                <td className={(g.avg_fwd5 ?? 0) >= 0 ? 'pos' : 'neg'}>
-                  {g.avg_fwd5 === null ? '—' : `${g.avg_fwd5 >= 0 ? '+' : ''}${g.avg_fwd5}%`}
-                  {g.avg_net5 !== null && <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>
-                    {' '}(순 {g.avg_net5 >= 0 ? '+' : ''}{g.avg_net5}%)</span>}</td>
-                <td>{g.win5 === null ? '—' : `${g.win5}%`}</td>
-                <td className={(g.avg_fwd20 ?? 0) >= 0 ? 'pos' : 'neg'}>
-                  {g.avg_fwd20 === null ? '—' : `${g.avg_fwd20 >= 0 ? '+' : ''}${g.avg_fwd20}%`}
-                  {g.avg_net20 !== null && <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>
-                    {' '}(순 {g.avg_net20 >= 0 ? '+' : ''}{g.avg_net20}%)</span>}</td>
-                <td>{g.win20 === null ? '—' : `${g.win20}%`}</td>
-                {backtest.bench_label && <>
-                  <td className={(g.avg_excess5 ?? 0) >= 0 ? 'pos' : 'neg'}>
-                    {g.avg_excess5 == null ? '—' : `${g.avg_excess5 >= 0 ? '+' : ''}${g.avg_excess5}%p`}</td>
-                  <td className={(g.avg_excess20 ?? 0) >= 0 ? 'pos' : 'neg'}>
-                    {g.avg_excess20 == null ? '—' : `${g.avg_excess20 >= 0 ? '+' : ''}${g.avg_excess20}%p`}</td>
-                </>}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          {' '}{backtest.start} ~ {backtest.end} · 신호일 {backtest.samples}일
+          {backtest.bench_label && ` · 초과수익 = ${backtest.bench_label} 대비`}</span>
+        {/* 검증한 전략과 실행하는 전략이 같아야 이 숫자에 의미가 있다.
+            진입가·청산 규칙을 눈에 보이게 적어두는 것이 그 약속이다. */}
+        <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
+          진입 {backtest.entry_rule} · 청산 {backtest.exit_rule} ·
+          {' '}순·승률은 왕복 비용 {backtest.cost_pct}%p 차감 후 기준
+          <br />±1σ는 <strong>비중첩 에피소드</strong> 기준 표준오차입니다 — 인접일 신호는 구간이
+          겹쳐 독립 표본이 아니므로, 신호일 수로 계산한 오차는 실제보다 작게 나옵니다.
+          독립 표본 {backtest.min_episodes}개 미만인 칸은 수치를 감춥니다.
         </div>
+        <BacktestTable bt={backtest} grades={backtest.grades} horizons={backtest.horizons}
+                       missing={backtest.missing_grades} caption="스윙 등급" />
+        <BacktestTable bt={backtest} grades={backtest.longterm_grades}
+                       horizons={backtest.long_horizons}
+                       missing={backtest.missing_longterm_grades}
+                       caption="중장기 등급 — 보유 기간이 길어 독립 표본이 훨씬 적습니다" />
       </div>}
 
       <div className="grid-2">

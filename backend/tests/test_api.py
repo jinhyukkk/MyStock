@@ -76,6 +76,159 @@ def test_trades_and_portfolio(client):
     assert pf["holdings"][0]["quantity"] == 10
     assert client.delete(f"/api/trades/{tid}").status_code == 200
 
+def test_realized_round_trip_is_net_of_costs(client):
+    """원장 전 구간 — 실제 비용을 입력하면 그 값이, 비우면 추정값이 손익에서 빠진다."""
+    client.post("/api/watchlist", json={"symbol": "005930", "name": "삼성전자",
+                                        "market": "KR", "is_etf": 0,
+                                        "yf_symbol": "005930.KS", "currency": "KRW"})
+    client.post("/api/refresh")
+    client.post("/api/trades", json={"symbol": "005930", "side": "BUY", "quantity": 10,
+                                     "price": 70000, "trade_date": "2026-01-05",
+                                     "fee": 100, "tax": 0})
+    client.post("/api/trades", json={"symbol": "005930", "side": "SELL", "quantity": 10,
+                                     "price": 80000, "trade_date": "2026-02-05",
+                                     "fee": 120, "tax": 1200})
+    pf = client.get("/api/portfolio").json()
+    r = pf["realized"]["entries"][0]
+    assert r["buy_price"] == 70010.0                 # 매수 수수료가 평단에 가산
+    assert r["cost"] == 1320.0 and r["cost_estimated"] is False
+    assert r["pnl"] == r["pnl_gross"] - 1320.0
+    assert r["pnl_krw"] == r["pnl"]                  # KRW 종목은 환 손익 없음
+    assert r["fx_pnl_krw"] == 0.0
+    stats = pf["realized"]["stats"]
+    assert stats["cost_krw"] == 1320.0 and stats["cost_estimated"] is False
+
+
+def test_realized_estimates_costs_when_omitted(client):
+    client.post("/api/watchlist", json={"symbol": "005930", "name": "삼성전자",
+                                        "market": "KR", "is_etf": 0,
+                                        "yf_symbol": "005930.KS", "currency": "KRW"})
+    client.post("/api/refresh")
+    for side, price in (("BUY", 70000), ("SELL", 80000)):
+        client.post("/api/trades", json={"symbol": "005930", "side": side, "quantity": 10,
+                                         "price": price, "trade_date": "2026-01-05"})
+    stats = client.get("/api/portfolio").json()["realized"]["stats"]
+    assert stats["cost_estimated"] is True and stats["cost_krw"] > 0
+
+
+def _watch_samsung(client):
+    client.post("/api/watchlist", json={"symbol": "005930", "name": "삼성전자",
+                                        "market": "KR", "is_etf": 0,
+                                        "yf_symbol": "005930.KS", "currency": "KRW"})
+    client.post("/api/refresh")
+
+
+def test_oversell_is_rejected(client):
+    """ML-14: 통과시키면 수량이 음수가 되며 보유 종목이 조용히 사라진다."""
+    _watch_samsung(client)
+    client.post("/api/trades", json={"symbol": "005930", "side": "BUY", "quantity": 10,
+                                     "price": 70000, "trade_date": "2026-01-05"})
+    r = client.post("/api/trades", json={"symbol": "005930", "side": "SELL", "quantity": 11,
+                                         "price": 80000, "trade_date": "2026-01-06"})
+    assert r.status_code == 400 and "보유 수량" in r.json()["detail"]
+    pf = client.get("/api/portfolio").json()
+    assert pf["holdings"][0]["quantity"] == 10  # 원장이 그대로 남는다
+
+
+def test_exact_sell_is_allowed(client):
+    _watch_samsung(client)
+    client.post("/api/trades", json={"symbol": "005930", "side": "BUY", "quantity": 10,
+                                     "price": 70000, "trade_date": "2026-01-05"})
+    r = client.post("/api/trades", json={"symbol": "005930", "side": "SELL", "quantity": 10,
+                                         "price": 80000, "trade_date": "2026-01-06"})
+    assert r.status_code == 200
+    assert client.get("/api/portfolio").json()["holdings"] == []
+
+
+def test_cash_follows_trades(client):
+    """예수금이 매매와 연동돼야 총자산이, 나아가 1% 리스크 사이징이 맞는다."""
+    _watch_samsung(client)
+    client.put("/api/cash", json={"amount": 10_000_000})
+    client.post("/api/trades", json={"symbol": "005930", "side": "BUY", "quantity": 10,
+                                     "price": 70000, "trade_date": "2026-01-05",
+                                     "fee": 105, "tax": 0})
+    after_buy = client.get("/api/portfolio").json()["totals"]["cash_krw"]
+    assert after_buy == 10_000_000 - (700_000 + 105)
+    client.post("/api/trades", json={"symbol": "005930", "side": "SELL", "quantity": 10,
+                                     "price": 80000, "trade_date": "2026-01-06",
+                                     "fee": 120, "tax": 1200})
+    after_sell = client.get("/api/portfolio").json()["totals"]["cash_krw"]
+    assert after_sell == after_buy + (800_000 - 120 - 1200)
+
+
+def test_deleting_trade_reverses_cash(client):
+    _watch_samsung(client)
+    client.put("/api/cash", json={"amount": 10_000_000})
+    tid = client.post("/api/trades", json={"symbol": "005930", "side": "BUY", "quantity": 10,
+                                           "price": 70000, "trade_date": "2026-01-05",
+                                           "fee": 0, "tax": 0}).json()["id"]
+    assert client.get("/api/portfolio").json()["totals"]["cash_krw"] == 9_300_000
+    client.delete(f"/api/trades/{tid}")
+    assert client.get("/api/portfolio").json()["totals"]["cash_krw"] == 10_000_000
+
+
+def test_correction_lot_is_flagged_and_left_out_of_stats(client):
+    """평단 맞춤용 보정 로트는 평단에는 반영되지만 승률·실현손익 집계에는 빠져야 한다.
+    가짜 체결가가 통계에 섞이면 복기가 통째로 거짓이 된다."""
+    _watch_samsung(client)
+    client.post("/api/trades", json={"symbol": "005930", "side": "BUY", "quantity": 10,
+                                     "price": 70000, "trade_date": "2026-01-05",
+                                     "fee": 0, "tax": 0, "exclude_from_stats": True,
+                                     "note": "시트 평단 맞춤 보정 로트"})
+    client.post("/api/trades", json={"symbol": "005930", "side": "SELL", "quantity": 10,
+                                     "price": 80000, "trade_date": "2026-02-05",
+                                     "fee": 0, "tax": 0})
+    pf = client.get("/api/portfolio").json()
+    assert pf["realized"]["entries"][0]["basis_adjusted"] is True
+    stats = pf["realized"]["stats"]
+    assert stats["count"] == 0 and stats["excluded_count"] == 1
+    # 원장 자체에는 남아 있어야 화면에서 배지를 달 수 있다
+    assert client.get("/api/trades").json()[0]["exclude_from_stats"] == 1
+
+
+def test_trade_response_reports_cash_clamp(client):
+    """예수금보다 큰 매수는 예수금을 0으로 자른다 — 그 사실이 응답에 실려야
+    화면이 '총자산이 실제보다 작아졌다'를 사용자에게 알릴 수 있다."""
+    _watch_samsung(client)
+    client.put("/api/cash", json={"amount": 100_000})
+    res = client.post("/api/trades", json={"symbol": "005930", "side": "BUY", "quantity": 10,
+                                           "price": 70000, "trade_date": "2026-01-05",
+                                           "fee": 0, "tax": 0}).json()
+    assert res["cash"]["clamped"] is True
+    assert res["cash"]["cash_krw"] == 0.0
+    assert res["cash"]["applied"] == -100_000.0   # 실제로 빠진 금액
+    assert res["cash"]["delta"] == -700_000.0     # 빠졌어야 할 금액
+
+
+def test_usd_trade_moves_usd_cash_only(client):
+    client.post("/api/watchlist", json={"symbol": "AAPL", "name": "Apple", "market": "US",
+                                        "is_etf": 0, "yf_symbol": "AAPL", "currency": "USD"})
+    client.post("/api/refresh")
+    client.put("/api/cash", json={"amount": 5_000_000, "amount_usd": 10_000})
+    client.post("/api/trades", json={"symbol": "AAPL", "side": "BUY", "quantity": 10,
+                                     "price": 200, "trade_date": "2026-01-05",
+                                     "fee": 0, "tax": 0})
+    t = client.get("/api/portfolio").json()["totals"]
+    assert t["cash_usd"] == 8_000 and t["cash_krw"] == 5_000_000
+
+
+def test_same_day_trades_replay_in_execution_order(client):
+    """ML-14: 같은 날 매도 후 재매수 — 순서가 뒤바뀌면 평단이 잘못 만들어진다."""
+    _watch_samsung(client)
+    for side, qty, price, at in (("BUY", 10, 70000, "09:10"),
+                                 ("SELL", 10, 80000, "10:30"),
+                                 ("BUY", 5, 75000, "14:00")):
+        r = client.post("/api/trades", json={"symbol": "005930", "side": side,
+                                             "quantity": qty, "price": price,
+                                             "trade_date": "2026-01-05",
+                                             "executed_at": at, "fee": 0, "tax": 0})
+        assert r.status_code == 200
+    pf = client.get("/api/portfolio").json()
+    assert pf["holdings"][0]["quantity"] == 5
+    assert pf["holdings"][0]["avg_price"] == 75000  # 재매수분만 남는다
+    assert pf["realized"]["stats"]["count"] == 1
+
+
 def test_rules_crud(client):
     client.post("/api/watchlist", json={"symbol": "005930", "name": "삼성전자",
                                         "market": "KR", "is_etf": 0,
@@ -184,7 +337,8 @@ def test_dashboard_signal_carries_avg_price(client):
                                      "price": 70000, "trade_date": "2026-01-05"})
     by_symbol = {s["symbol"]: s for s in client.get("/api/dashboard").json()["signals"]}
     held, watched = by_symbol["000660"], by_symbol["005930"]
-    assert held["avg_price"] == 70000.0
-    expected = round((held["close"] / 70000 - 1) * 100, 2)
+    # 평단은 매수 수수료를 포함한 비용 기준 — 체결가보다 근소하게 높다
+    assert 70000.0 < held["avg_price"] < 70000.0 * 1.001
+    expected = round((held["close"] / held["avg_price"] - 1) * 100, 2)
     assert held["holding_pnl_pct"] == expected
     assert watched["avg_price"] is None and watched["holding_pnl_pct"] is None

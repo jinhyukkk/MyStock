@@ -1,6 +1,8 @@
 import json
+
+import pandas as pd
 import pytest
-from app import db, service, fetchers, sentiment
+from app import db, service, fetchers, portfolio, sentiment
 
 FAKE_SENTI = {"vix": 20.0, "vkospi": None, "cnn_fg": 40, "crypto_fg": 55,
               "usdkrw": 1300.0, "failed": ["vkospi"]}
@@ -78,6 +80,76 @@ def test_rule_alerts(conn):
     assert len(d["rule_alerts"]) == 1
     assert d["rule_alerts"][0]["rule_type"] == "TARGET"
 
+def test_stop_rule_fires_on_intraday_low(conn):
+    """ML-5: 장중 손절선을 관통했다가 회복한 날을 종가만 보면 알림 0건으로 넘긴다."""
+    service.refresh_all(conn)
+    bar = db.load_prices(conn, "005930").iloc[-1]
+    db.insert_rule(conn, "005930", "STOP", (float(bar["low"]) + float(bar["close"])) / 2)
+    alerts = service.get_dashboard(conn)["rule_alerts"]
+    assert len(alerts) == 1
+    a = alerts[0]
+    assert a["rule_type"] == "STOP" and a["intraday_only"] is True
+    assert "장중 이탈" in a["message"] and "회복" in a["message"]
+
+
+def test_stop_rule_below_low_does_not_fire(conn):
+    service.refresh_all(conn)
+    low = float(db.load_prices(conn, "005930").iloc[-1]["low"])
+    db.insert_rule(conn, "005930", "STOP", low * 0.5)
+    assert service.get_dashboard(conn)["rule_alerts"] == []
+
+
+def test_target_rule_fires_on_intraday_high(conn):
+    service.refresh_all(conn)
+    bar = db.load_prices(conn, "005930").iloc[-1]
+    db.insert_rule(conn, "005930", "TARGET", (float(bar["high"]) + float(bar["close"])) / 2)
+    a = service.get_dashboard(conn)["rule_alerts"][0]
+    assert a["rule_type"] == "TARGET" and a["intraday_only"] is True
+    assert "장중 터치" in a["message"]
+
+
+def test_price_format_keeps_meaning_across_magnitudes():
+    """ML-16: 소수 0자리는 USD 종목과 저가 코인에서 어떤 가격인지 알 수 없게 만든다."""
+    assert service._fmt_price(70000) == "70,000"
+    assert service._fmt_price(150.4) == "150.40"
+    assert service._fmt_price(0.8) == "0.8000"
+
+
+def test_telegram_stop_alert_carries_disclaimer(conn, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
+    sent = []
+
+    class OK:
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(service.requests, "post",
+                        lambda url, json, timeout: (sent.append(json), OK())[1])
+    service._notify_telegram(conn, [{"symbol": "005930", "name": "삼성전자",
+                                     "rule_type": "STOP", "value": 100,
+                                     "intraday_only": False, "message": "손절"}])
+    assert service.STOP_DISCLAIMER in sent[0]["text"]
+
+
+def test_partial_bar_is_flagged(conn, monkeypatch, ohlcv_up):
+    """장중 미완성 봉으로 만든 등급은 마감 때 뒤집힐 수 있다 — 그 사실을 실어 보낸다."""
+    today = ohlcv_up.copy()
+    # 마지막 봉이 "오늘"이어야 한다 — bdate_range는 주말이면 금요일로 물러선다
+    today.index = pd.date_range(end=pd.Timestamp.now().normalize(), periods=len(today))
+    monkeypatch.setattr(fetchers, "fetch_ohlcv", lambda *a, **k: today)
+    service.refresh_all(conn)
+    sig = next(s for s in service.get_dashboard(conn)["signals"] if s["symbol"] == "005930")
+    assert sig["bar_complete"] is False
+    assert sig["bar_date"] == pd.Timestamp.now().strftime("%Y-%m-%d")
+
+
+def test_complete_bar_is_not_flagged(conn):
+    service.refresh_all(conn)  # 픽스처는 과거 날짜로 끝난다
+    sig = next(s for s in service.get_dashboard(conn)["signals"] if s["symbol"] == "005930")
+    assert sig["bar_complete"] is True
+
+
 def test_signal_includes_in_watchlist_flag(conn):
     service.refresh_all(conn)
     d = service.get_dashboard(conn)
@@ -130,6 +202,97 @@ def test_ticker_detail(conn):
     assert detail["signal"]["swing_grade"]
     assert detail["fundamentals"] == {"per": 15.0}
     assert service.get_ticker_detail(conn, "NOPE") is None
+
+
+def test_position_size_capped_by_max_weight(conn, monkeypatch):
+    """ML-4: 2×ATR이 주가 대비 작으면 1% 룰 수량은 계좌 전액을 넘는다 — 상한이 잘라야 한다."""
+    service.refresh_all(conn)
+    db.set_meta(conn, "cash_krw", "100000000")
+    full = service.indicators.compute_indicators(db.load_prices(conn, "005930"))
+    full.loc[full.index[-1], "atr14"] = full["close"].iloc[-1] * 0.002  # 2×ATR = 주가의 0.4%
+    r = service._risk_block(conn, full, "KRW", "005930")
+    total = service.get_portfolio_view(conn)["totals"]["total_asset_krw"]
+    assert r["position_size_capped"] is True and r["cap_reason"]
+    assert r["position_notional_krw"] <= total * service.MAX_WEIGHT + 1
+
+
+def test_position_size_uncapped_when_atr_wide(conn):
+    service.refresh_all(conn)
+    db.set_meta(conn, "cash_krw", "100000000")
+    full = service.indicators.compute_indicators(db.load_prices(conn, "005930"))
+    full.loc[full.index[-1], "atr14"] = full["close"].iloc[-1] * 0.05  # 2×ATR = 주가의 10%
+    r = service._risk_block(conn, full, "KRW", "005930")
+    assert r["position_size_capped"] is False
+    assert r["position_notional_krw"] < service.get_portfolio_view(conn)["totals"]["total_asset_krw"] * 0.2
+
+
+def test_risk_block_subtracts_existing_holding(conn):
+    service.refresh_all(conn)
+    db.set_meta(conn, "cash_krw", "100000000")
+    detail = service.get_ticker_detail(conn, "005930")
+    size = detail["risk"]["position_size_1pct"]
+    db.insert_trade(conn, "005930", "BUY", size / 2, 100.0, "2026-01-05", fx_rate=1.0)
+    after = service.get_ticker_detail(conn, "005930")["risk"]
+    assert after["held_quantity"] == round(size / 2, 4)
+    assert after["addable_quantity"] < after["position_size_1pct"]
+
+
+def test_ticker_detail_exposes_cost_rates(conn):
+    """주문 프리뷰가 비용을 추정하려면 요율이 필요하다. 프론트에 상수를 복제하면
+    요율이 바뀔 때 화면과 원장이 서로 다른 비용을 말하게 된다."""
+    service.refresh_all(conn)
+    rates = service.get_ticker_detail(conn, "005930")["cost_rates"]
+    assert rates["fee_pct"] == 0.015        # KR 위탁수수료 0.015%
+    assert rates["sell_tax_pct"] == 0.15    # KR 증권거래세 0.15%
+
+
+def test_exit_plan_only_appears_when_holding(conn):
+    """비보유 종목에 청산 플랜을 띄우면 소음이고, 보유 종목에 없으면
+    나가는 판단을 화면이 지원하지 못한다."""
+    service.refresh_all(conn)
+    db.set_meta(conn, "cash_krw", "100000000")
+    assert service.get_ticker_detail(conn, "005930")["risk"]["exit_plan"] is None
+
+    close = float(db.load_prices(conn, "005930").iloc[-1]["close"])
+    db.insert_trade(conn, "005930", "BUY", 10, close * 1.25, "2026-01-05", fx_rate=1.0,
+                    fee=0, tax=0)  # 평단보다 -20% 물린 상태
+    plan = service.get_ticker_detail(conn, "005930")["risk"]["exit_plan"]
+    assert plan["held_quantity"] == 10
+    assert plan["unrealized_pnl_pct"] == -20.0
+    assert [s["label"] for s in plan["slices"]] == ["1/3", "1/2", "전량"]
+    # 부분청산 회수액은 매도 비용을 뺀 순액이라 명목 대금보다 작다
+    assert plan["slices"][0]["proceeds_krw"] < close * (10 / 3)
+
+
+def test_risk_block_includes_target_and_reward_risk(conn):
+    """손절가만 있고 목표가가 없으면 진입 판단의 절반이 비어 있다."""
+    service.refresh_all(conn)
+    r = service.get_ticker_detail(conn, "005930")["risk"]
+    close = db.load_prices(conn, "005930").iloc[-1]["close"]
+    assert r["target_price"] > close > r["stop_price"]
+    assert r["reward_risk"] == service.TARGET_R
+    # 목표가는 손절 폭의 TARGET_R배 (저장값이 소수 4자리로 반올림돼 오차 허용)
+    assert abs((r["target_price"] - close)
+               - (close - r["stop_price"]) * service.TARGET_R) < 1e-3
+
+
+def test_target_flags_overhead_resistance(conn):
+    service.refresh_all(conn)
+    r = service.get_ticker_detail(conn, "005930")["risk"]
+    if r["resistance_60d"] is not None:
+        close = db.load_prices(conn, "005930").iloc[-1]["close"]
+        assert r["resistance_60d"] > close  # 아래쪽 고점은 저항이 아니다
+        assert r["target_above_resistance"] == (r["target_price"] > r["resistance_60d"])
+
+
+def test_portfolio_view_reports_account_open_risk(conn):
+    service.refresh_all(conn)
+    db.set_meta(conn, "cash_krw", "10000000")
+    db.insert_trade(conn, "005930", "BUY", 10, 100.0, "2026-01-05", fx_rate=1.0)
+    orisk = service.get_portfolio_view(conn)["open_risk"]
+    assert orisk["total_risk_krw"] > 0
+    assert orisk["limit_pct"] == portfolio.MAX_ACCOUNT_RISK_PCT
+    assert orisk["rows"][0]["symbol"] == "005930"
 
 
 def test_notify_telegram_dedupes_per_day(conn, monkeypatch):

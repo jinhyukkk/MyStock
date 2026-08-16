@@ -23,7 +23,15 @@ class TradeIn(BaseModel):
     quantity: float = Field(gt=0)
     price: float = Field(gt=0)
     trade_date: str
+    # 같은 날 매도 후 재매수를 정확한 순서로 재생하려면 시각이 필요하다.
+    # 순서가 뒤바뀌면 매도가 무시되거나 평단이 잘못 만들어진다.
+    executed_at: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$")
     note: str | None = None
+    # 미전송(None) = 시장 요율로 추정. 실제 체결 비용을 넣으면 그 값이 원장에 그대로 쓰인다.
+    fee: float | None = Field(default=None, ge=0)
+    tax: float | None = Field(default=None, ge=0)
+    # 평단 맞춤용 보정 로트 — 체결가가 인위적이므로 승률·실현손익 집계에서 제외한다
+    exclude_from_stats: bool = False
 
 
 class RuleIn(BaseModel):
@@ -102,6 +110,12 @@ def add_trade(t: TradeIn, request: Request):
     ticker = db.get_ticker(conn, t.symbol)
     if not ticker:
         raise HTTPException(400, "unknown symbol — 워치리스트에 먼저 추가하세요")
+    # 보유보다 많이 파는 입력은 거부한다. 통과시키면 수량이 음수가 되면서
+    # 종목이 원장에서 통째로 사라진다 — 오타 한 번에 보유가 조용히 없어진다.
+    if t.side == "SELL":
+        held = service._holdings_map(conn).get(t.symbol, {}).get("quantity", 0.0)
+        if t.quantity > held + 1e-9:
+            raise HTTPException(400, f"보유 수량({held:g})보다 많이 매도할 수 없습니다")
     # 체결 시점 환율 스냅샷 — 실현손익 원화 환산이 과거 환율로 왜곡되지 않게
     fx_rate = 1.0
     if ticker["currency"] == "USD":
@@ -109,14 +123,28 @@ def add_trade(t: TradeIn, request: Request):
     sig = db.get_latest_signal(conn, t.symbol)
     tid = db.insert_trade(conn, t.symbol, t.side, t.quantity, t.price, t.trade_date,
                           fx_rate=fx_rate, note=t.note,
-                          grade_at_trade=sig["grade"] if sig else None)
-    return {"id": tid}
+                          grade_at_trade=sig["grade"] if sig else None,
+                          fee=t.fee, tax=t.tax, executed_at=t.executed_at,
+                          exclude_from_stats=int(t.exclude_from_stats))
+    # 예수금은 매매와 연동돼야 한다 — 수동 입력값만 쓰면 매수할수록 총자산이
+    # 과대 계상되고, 그 총자산을 분모로 쓰는 1% 리스크 사이징까지 오염된다.
+    cash = service.apply_trade_to_cash(conn, {
+        "symbol": t.symbol, "side": t.side, "quantity": t.quantity, "price": t.price,
+        "fee": t.fee, "tax": t.tax}, ticker)
+    return {"id": tid, "cash": cash}
 
 
 @router.delete("/trades/{trade_id}")
 def remove_trade(trade_id: int, request: Request):
-    db.delete_trade(_conn(request), trade_id)
-    return {"ok": True}
+    conn = _conn(request)
+    row = db.get_trade(conn, trade_id)
+    db.delete_trade(conn, trade_id)
+    cash = None
+    if row is not None:
+        ticker = db.get_ticker(conn, row["symbol"])
+        if ticker is not None:  # 삭제는 예수금 증감도 함께 되돌린다
+            cash = service.apply_trade_to_cash(conn, dict(row), ticker, reverse=True)
+    return {"ok": True, "cash": cash}
 
 
 @router.get("/portfolio")

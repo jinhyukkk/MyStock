@@ -12,27 +12,42 @@ export default function Watchlist() {
   const [adding, setAdding] = useState<string | null>(null)  // 추가 진행 중인 심볼
 
   const [error, setError] = useState<string | null>(null)
+  const [actionMsg, setActionMsg] = useState<string | null>(null)  // 검색·추가 결과
 
   const load = () => get<Dashboard>('/api/dashboard')
     .then(d => { setDash(d); setError(null) })
     .catch(e => setError(String(e)))  // catch가 없으면 빈 표만 남아 실패를 알 수 없다
   useEffect(() => { load() }, [])
 
+  // 검색·추가 실패를 삼키면 버튼만 원래대로 돌아온다. 사용자는 "검색 결과가 없다"
+  // 또는 "추가됐다"로 읽고 같은 조작을 반복한다.
   const search = async () => {
     if (!q.trim()) return
-    setBusy(true)
-    try { setResults(await get<SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}`)) }
+    setBusy(true); setActionMsg(null)
+    try {
+      const found = await get<SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}`)
+      setResults(found)
+      if (found.length === 0) setActionMsg(`'${q}' 검색 결과가 없습니다 — 종목명이나 심볼을 다시 확인하세요`)
+    } catch (e) { setResults([]); setActionMsg(`검색 실패: ${e}`) }
     finally { setBusy(false) }
   }
 
   const add = async (r: SearchResult) => {
-    setAdding(r.symbol)
+    setAdding(r.symbol); setActionMsg(null)
     try {
       await post('/api/watchlist', r)
       // 새 종목만 갱신 — 전체 갱신은 수 초 걸림
       await post(`/api/refresh?symbol=${encodeURIComponent(r.symbol)}`)
-      setResults([]); setQ(''); load()
-    } finally { setAdding(null) }
+      setResults([]); setQ('')
+      const d = await get<Dashboard>('/api/dashboard')
+      setDash(d); setError(null)
+      // 시세를 못 받아오면 시그널이 없어 목록에 나타나지 않는다. 그 사실을 알리지
+      // 않으면 "추가가 안 됐다"고 읽고 같은 종목을 반복해서 추가하게 된다.
+      if (!d.signals.some(s => s.symbol === r.symbol))
+        setActionMsg(`${r.name}을(를) 추가했지만 시세를 받지 못해 아직 목록에 없습니다 — `
+          + '대시보드에서 새로고침 후 확인하세요')
+    } catch (e) { setActionMsg(`추가 실패: ${e}`) }
+    finally { setAdding(null) }
   }
 
   return (
@@ -45,6 +60,7 @@ export default function Watchlist() {
                  onKeyDown={e => e.key === 'Enter' && search()} style={{ flex: 1 }} />
           <button onClick={search} disabled={busy}>{busy ? '검색 중…' : '검색'}</button>
         </div>
+        {actionMsg && <div className="warn-box" style={{ marginTop: 10 }}>{actionMsg}</div>}
         {results.map(r => (
           <div key={r.market + r.symbol}
                style={{ display: 'flex', justifyContent: 'space-between',
