@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **동작은 바뀌지 않는다.** 이번 작업은 이동과 분리다. 표시 숫자·경고 문구·계산 로직·주석을 바꾸지 않는다. 예외는 명시된 다섯 가지뿐이다: 설정 접기(Task 7), Risk 빈 상태(Task 7), 그리고 **같은 화면에 있던 것을 가리키던 문구 세 곳**을 탭 링크로 바꾸는 것(Task 4 Step 3, Task 5 Step 2, Task 6 Step 2). 분할 후에도 "아래 카드"·"위 예수금 칸"이라고 말하면 사용자는 없는 것을 찾는다.
+- **동작은 바뀌지 않는다.** 이번 작업은 이동과 분리다. 표시 숫자·경고 문구·계산 로직·주석을 바꾸지 않는다. 예외는 명시된 여섯 가지뿐이다: 설정 접기(Task 7), Risk 빈 상태(Task 7), 그리고 **같은 화면에 있던 것을 가리키던 문구 세 곳**을 탭 링크로 바꾸는 것(Task 4 Step 3, Task 5 Step 2, Task 6 Step 2, Task 7 Step 3의 두 곳). 분할 후에도 "아래 카드"·"위 예수금 칸"이라고 말하면 사용자는 없는 것을 찾는다.
 - **주석을 함께 옮긴다.** 원본의 한글 설명 주석은 그 코드가 왜 그렇게 생겼는지를 담고 있다. 코드를 옮길 때 바로 위 주석도 같이 옮긴다.
 - **백엔드를 건드리지 않는다.** `backend/` 아래 파일은 이 계획에서 수정 대상이 아니다.
 - **검증 명령:** `cd frontend && npm run build` — `tsc -b`가 포함되어 타입 오류가 있으면 실패한다. 모든 태스크의 마지막 검증은 이 명령이다.
@@ -708,7 +708,24 @@ git commit -m "refactor: 매매 입력·체결 원장을 별도 탭으로"
 .pf-settings > summary:hover { color: var(--text); }
 ```
 
-- [ ] **Step 3: `Risk.tsx`에 빈 상태 추가**
+- [ ] **Step 3: 매매 입력 카드를 가리키던 남은 참조 두 곳을 링크로 교체**
+
+Task 6 리뷰가 찾은 것으로, 분할이 만든 실제 회귀다. 두 문구 모두 "매매 입력"이 같은 화면에 있다고 전제하고 있는데 이제 별도 탭이다. 특히 첫 번째는 **보유 종목이 하나도 없는 첫 사용자**에게 나오는 안내라, 없는 카드를 찾게 만든다.
+
+`Holdings.tsx`의 보유 종목 빈 상태 (현재 122줄):
+
+```tsx
+          <Link to="/portfolio/journal"><strong>매매 기록</strong></Link> 탭에 체결 내역을
+          기록하면 평단·수익률·실현손익이 계산됩니다.
+```
+
+`Realized.tsx`의 비용 추정 안내 (현재 84줄). 이 파일은 아직 `Link`를 import하지 않으므로 `import { Link } from 'react-router-dom'`를 추가한다:
+
+```tsx
+          정확한 복기를 원하면 <Link to="/portfolio/journal">매매 기록</Link> 탭에서 실제 비용을 넣으세요.</div>}
+```
+
+- [ ] **Step 4: `Risk.tsx`에 빈 상태 추가**
 
 `pf.risk`와 `pf.open_risk`가 둘 다 null이면 탭이 빈 화면이 된다. 기능이 없는 것처럼 보이지 않게 왜 비었는지 말한다.
 
@@ -723,20 +740,20 @@ git commit -m "refactor: 매매 입력·체결 원장을 별도 탭으로"
       </div>}
 ```
 
-- [ ] **Step 4: 빌드 확인**
+- [ ] **Step 5: 빌드 확인**
 
 ```bash
 cd frontend && npm run build
 ```
 
-- [ ] **Step 5: 다섯 탭 전체 점검 (데스크톱)**
+- [ ] **Step 6: 다섯 탭 전체 점검 (데스크톱)**
 
 `/portfolio`, `/portfolio/risk`, `/portfolio/realized`, `/portfolio/income`, `/portfolio/journal`을 차례로 연다.
 - 콘솔 에러 0
 - 분할 전 화면(`git show 84c766c:frontend/src/pages/Portfolio.tsx`)과 대조해 사라진 블록·경고·문구가 없는지 확인
 - 조건부 블록 점검: `hasDiv`(보유 표 배당 열), `pf.risk`, `pf.open_risk`, `pf.realized`, `div.count === 0`, `trades.length === 0`, `flows.length > 0`
 
-- [ ] **Step 6: 모바일 폭(375px) 확인**
+- [ ] **Step 7: 모바일 폭(375px) 확인**
 
 브라우저 폭을 375px로 줄이고 확인한다:
 - 최상위 탭 3개가 한 줄에 읽힌다
@@ -744,7 +761,7 @@ cd frontend && npm run build
 - 총자산 스트립이 세로로 접히며 잘리지 않는다
 - 표들이 기존 `table-cards` 카드 레이아웃으로 정상 전환된다
 
-- [ ] **Step 7: 커밋**
+- [ ] **Step 8: 커밋**
 
 ```bash
 git add -A
