@@ -11,6 +11,7 @@ const SUBTABS = [
   { to: '/portfolio/risk', label: '리스크', end: false },
   { to: '/portfolio/realized', label: '복기', end: false },
   { to: '/portfolio/income', label: '배당·현금흐름', end: false },
+  { to: '/portfolio/journal', label: '매매 기록', end: false },
 ]
 
 export default function PortfolioLayout() {
