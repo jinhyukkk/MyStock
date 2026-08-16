@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { fmt } from '../../format'
 import { usePortfolio } from './context'
 
@@ -81,7 +82,7 @@ export default function Realized() {
         </div>}
         {pf.realized.stats.cost_estimated && <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8 }}>
           ⓘ 일부 체결의 수수료·세금이 기록돼 있지 않아 <strong>시장 기본 요율로 추정</strong>했습니다.
-          정확한 복기를 원하면 매매 입력에서 실제 비용을 넣으세요.</div>}
+          정확한 복기를 원하면 <Link to="/portfolio/journal">매매 기록</Link> 탭에서 실제 비용을 넣으세요.</div>}
         {/* 인위적 체결가가 승률에 섞이면 복기 전체가 거짓이 된다. 뺐다는 사실을
             숨기면 이번엔 "왜 건수가 안 맞지"로 신뢰가 깨진다 — 몇 건인지 밝힌다. */}
         {pf.realized.stats.excluded_count > 0 && <div className="warn-box" style={{ marginTop: 8 }}>

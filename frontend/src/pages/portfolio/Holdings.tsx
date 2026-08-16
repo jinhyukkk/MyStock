@@ -79,34 +79,37 @@ export default function Holdings() {
           <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
             평가액 ₩{fmt(t.total_value_krw)} · 현금 ₩{fmt(t.cash_krw + (t.cash_usd_krw ?? 0))} ({t.cash_pct}%)
             {(t.cash_usd ?? 0) > 0 && <> — ₩{fmt(t.cash_krw)} + ${fmt(t.cash_usd)}</>}</div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center',
-                        flexWrap: 'wrap' }}>
-            <input type="number" placeholder="예수금 (KRW)" value={cashInput}
-                   onChange={e => setCashInput(e.target.value)}
-                   style={{ flex: '1 1 140px', minWidth: 0 }} />
-            <input type="number" placeholder="달러 예수금 (USD)" value={cashUsdInput}
-                   onChange={e => setCashUsdInput(e.target.value)}
-                   style={{ flex: '1 1 140px', minWidth: 0 }} />
-            <button onClick={saveCash}>저장</button>
-            <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>비우면 변경 없음</span>
-          </div>
-          {/* 목표 종목 수 — 비중 상한도 총 리스크도 지키면서 종목 수만 두 배가 된
-              계좌는 어떤 한도에도 걸리지 않는다. 추적 가능한 개수가 규율의 전제다. */}
-          <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center',
-                        flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>목표 종목 수</span>
-            <input type="number" min={1} value={posRule.min} aria-label="목표 종목 수 최소"
-                   onChange={e => setPosRule(r => ({ ...r, min: e.target.value }))}
-                   style={{ width: 64 }} />
-            <span style={{ color: 'var(--text-dim)' }}>~</span>
-            <input type="number" min={1} value={posRule.max} aria-label="목표 종목 수 최대"
-                   onChange={e => setPosRule(r => ({ ...r, max: e.target.value }))}
-                   style={{ width: 64 }} />
-            <button className="ghost" onClick={savePositionRule}>저장</button>
-            <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>
-              현재 {pf.holdings.length}종목 — 범위를 벗어나면 대시보드가 경고합니다</span>
-          </div>
-          {msg && <div style={{ color: 'var(--sell)', fontSize: 12, marginTop: 6 }}>{msg}</div>}
+          <details className="pf-settings">
+            <summary>계좌 설정 — 예수금 · 목표 종목 수</summary>
+            <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center',
+                          flexWrap: 'wrap' }}>
+              <input type="number" placeholder="예수금 (KRW)" value={cashInput}
+                     onChange={e => setCashInput(e.target.value)}
+                     style={{ flex: '1 1 140px', minWidth: 0 }} />
+              <input type="number" placeholder="달러 예수금 (USD)" value={cashUsdInput}
+                     onChange={e => setCashUsdInput(e.target.value)}
+                     style={{ flex: '1 1 140px', minWidth: 0 }} />
+              <button onClick={saveCash}>저장</button>
+              <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>비우면 변경 없음</span>
+            </div>
+            {/* 목표 종목 수 — 비중 상한도 총 리스크도 지키면서 종목 수만 두 배가 된
+                계좌는 어떤 한도에도 걸리지 않는다. 추적 가능한 개수가 규율의 전제다. */}
+            <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center',
+                          flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>목표 종목 수</span>
+              <input type="number" min={1} value={posRule.min} aria-label="목표 종목 수 최소"
+                     onChange={e => setPosRule(r => ({ ...r, min: e.target.value }))}
+                     style={{ width: 64 }} />
+              <span style={{ color: 'var(--text-dim)' }}>~</span>
+              <input type="number" min={1} value={posRule.max} aria-label="목표 종목 수 최대"
+                     onChange={e => setPosRule(r => ({ ...r, max: e.target.value }))}
+                     style={{ width: 64 }} />
+              <button className="ghost" onClick={savePositionRule}>저장</button>
+              <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>
+                현재 {pf.holdings.length}종목 — 범위를 벗어나면 대시보드가 경고합니다</span>
+            </div>
+            {msg && <div style={{ color: 'var(--sell)', fontSize: 12, marginTop: 6 }}>{msg}</div>}
+          </details>
         </div>
         <div className="card" style={{ height: 180 }}>
           {pf.allocation.length > 0 ? (
@@ -119,7 +122,8 @@ export default function Holdings() {
         <strong>보유 종목</strong>
         {pf.holdings.length === 0 && <div className="empty">
           보유 종목이 없습니다.<br />
-          아래 <strong>매매 입력</strong>에 체결 내역을 기록하면 평단·수익률·실현손익이 계산됩니다.
+          <Link to="/portfolio/journal"><strong>매매 기록</strong></Link> 탭에 체결 내역을
+          기록하면 평단·수익률·실현손익이 계산됩니다.
         </div>}
         <div className="table-scroll table-cards">
         <table>

@@ -156,6 +156,9 @@ input:focus, select:focus {
   .subtabs { overflow-x: auto; flex-wrap: nowrap; }
   .subtab { padding: 6px 9px; font-size: 12px; white-space: nowrap; }
 }
+.pf-settings { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+.pf-settings > summary { cursor: pointer; font-size: 12px; color: var(--text-dim); }
+.pf-settings > summary:hover { color: var(--text); }
 /* 커맨드 팔레트 */
 .palette-overlay {
   position: fixed; inset: 0; z-index: 100;

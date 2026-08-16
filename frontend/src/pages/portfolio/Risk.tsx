@@ -5,6 +5,15 @@ export default function Risk() {
   const { pf } = usePortfolio()
   return (
     <>
+      {!pf.risk && !pf.open_risk && <div className="card">
+        <strong>계좌 리스크</strong>
+        <div className="empty">
+          아직 계산할 수 있는 리스크 지표가 없습니다.<br />
+          보유 종목이 2개 이상이고 가격 이력이 쌓이면 <strong>연환산 변동성 · 최대 낙폭 ·
+          종목 간 상관 · 계좌 총 미결 리스크</strong>가 여기에 계산됩니다.
+        </div>
+      </div>}
+
       {pf.risk && <div className="card">
         <strong>계좌 리스크</strong>
         <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
