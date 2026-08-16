@@ -62,6 +62,7 @@ export default function BacktestTable({ bt, grades, horizons, missing, caption }
                     const avg = num(pick(g, 'avg_fwd', h))
                     const se = num(pick(g, 'se', h))
                     const net = num(pick(g, 'avg_net', h))
+                    const stress = num(pick(g, 'avg_stress', h))
                     const hold = num(pick(g, 'avg_hold', h))
                     if (pick(g, 'insufficient', h) === true) return (
                       <td key={h} style={{ color: 'var(--text-dim)' }}
@@ -76,6 +77,12 @@ export default function BacktestTable({ bt, grades, horizons, missing, caption }
                           {' '}± {se}%p</span>}
                         {net !== null && <div style={{ color: 'var(--text-dim)', fontSize: 11 }}>
                           순 {signed(net)}</div>}
+                        {/* 비용 가정이 2배 틀렸을 때도 살아남는 엣지인지 — 순수익이
+                            플러스라도 여기서 마이너스면 실집행에서 사라질 수 있다 */}
+                        {stress !== null && <div style={{ fontSize: 11 }}
+                             className={stress >= 0 ? 'pos' : 'warn'}
+                             title={`왕복 비용을 ${bt.cost_breakdown.stress_pct}%p로 가정한 결과`}>
+                          스트레스 {signed(stress)}</div>}
                       </td>
                     )
                   })}

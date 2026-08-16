@@ -361,6 +361,21 @@ export default function TickerDetail() {
               {(detail.risk.held_quantity ?? 0) > 0 && <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
                 이미 {detail.risk.held_quantity?.toLocaleString('ko-KR')} 보유 →
                 {' '}추가 매수 가능 <strong>{detail.risk.addable_quantity?.toLocaleString('ko-KR')}</strong></div>}
+              {/* 소수점 주문이 안 되는 시장에서 5.095주를 제시하면 사용자가 매번
+                  스스로 잘라야 하고, 그 과정에서 리스크 한도가 흐려진다 */}
+              {detail.risk.lot_size === 1 && (detail.risk.position_size_raw ?? 0) > detail.risk.position_size_1pct &&
+                <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                  1주 단위로 내림 (계산값 {detail.risk.position_size_raw?.toLocaleString('ko-KR')})</div>}
+              {detail.risk.position_size_1pct === 0 && <div className="warn" style={{ fontSize: 11 }}>
+                ⚠ 1% 리스크로는 1주도 살 수 없습니다 — 변동성 대비 계좌가 작습니다</div>}
+              {/* 중소형주에서는 주문 크기 자체가 체결가를 밀어버린다. 반올림해서 0%가
+                  되면 계산이 깨진 것처럼 보이므로 "미미함"으로 말한다. */}
+              {detail.risk.liquidity_pct !== null && <div style={{ fontSize: 11,
+                color: detail.risk.liquidity_pct >= 1 ? 'var(--warn)' : 'var(--text-dim)' }}>
+                {detail.risk.liquidity_pct < 0.01
+                  ? '일평균 거래대금 대비 0.01% 미만 — 체결 영향 미미'
+                  : `일평균 거래대금의 ${detail.risk.liquidity_pct}%`}
+                {detail.risk.liquidity_pct >= 1 && ' — 이 크기는 체결가를 밀 수 있습니다'}</div>}
             </div>}
             <div>
               <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
@@ -399,6 +414,11 @@ export default function TickerDetail() {
             저변동성 구간에서 계좌 전액을 넘길 수 있다. */}
         {detail.risk?.position_size_capped && <div className="warn-box" style={{ marginTop: 12 }}>
           ⚠ {detail.risk.cap_reason}</div>}
+        {/* -21% 손절을 제시하면 실제로 그걸 지키는 사람은 없고 손절 없는 매매가 된다 */}
+        {detail.risk?.stop_too_wide && <div className="warn-box" style={{ marginTop: 12 }}>
+          ⚠ 2×ATR 손절폭이 {Math.abs(detail.risk.stop_pct)}%로 스윙 타임프레임에 과대합니다
+          (기준 {detail.risk.max_stop_pct}%). 이 폭을 실제로 견딜 수 있는지 먼저 판단하세요 —
+          못 지킬 손절은 없는 손절과 같습니다. 더 긴 보유 기간을 전제하거나 종목을 거르는 편이 낫습니다.</div>}
         {/* 목표가가 매물대 위면 그 구간을 뚫어야 도달한다 — 손익비가 종이 위에서만 성립한다 */}
         {detail.risk?.target_above_resistance && <div className="warn-box" style={{ marginTop: 12 }}>
           ⚠ 목표가가 60일 고점({unit}{detail.risk.resistance_60d?.toLocaleString('ko-KR')}) 위입니다 —
@@ -478,6 +498,11 @@ export default function TickerDetail() {
         <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
           진입 {backtest.entry_rule} · 청산 {backtest.exit_rule} ·
           {' '}순·승률은 왕복 비용 {backtest.cost_pct}%p 차감 후 기준
+          {/* 비용이 무엇을 포함하는지 밝히지 않으면 5일 +0.3%대 엣지가 실집행에서
+              사라질 수 있다는 사실이 화면 어디에도 없다 */}
+          <br />{backtest.cost_breakdown.note} 각 칸의 <strong>스트레스</strong> 값이
+          {' '}비용 {backtest.cost_breakdown.stress_pct}%p 가정 결과이며, 여기서
+          {' '}마이너스면 그 엣지는 실집행에서 사라질 수 있습니다.
           <br />±1σ는 <strong>비중첩 에피소드</strong> 기준 표준오차입니다 — 인접일 신호는 구간이
           겹쳐 독립 표본이 아니므로, 신호일 수로 계산한 오차는 실제보다 작게 나옵니다.
           독립 표본 {backtest.min_episodes}개 미만인 칸은 수치를 감춥니다.

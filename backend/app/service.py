@@ -398,6 +398,9 @@ def _atr_map(price_frames: dict) -> dict:
 
 MAX_WEIGHT = 0.20  # 한 종목이 총자산에서 차지할 수 있는 상한
 TARGET_R = 2.0     # 목표가 = 손절 폭의 몇 배 (손익비 2:1)
+# 2×ATR 손절이 주가의 이 비율을 넘으면 스윙 타임프레임에 안 맞는다. 화면이 -21%
+# 손절을 제시하면 실제로 그걸 지키는 사람은 없고, 결국 손절 없는 매매가 된다.
+MAX_STOP_PCT = 15.0
 
 
 def _target_block(enriched: pd.DataFrame, close: float, atr: float, stop: float) -> dict:
@@ -465,6 +468,11 @@ def _risk_block(conn, enriched: pd.DataFrame, currency: str,
         "position_size_capped": False, "cap_reason": None,
         "position_notional_krw": None, "held_quantity": None, "addable_quantity": None,
         "exit_plan": None,
+        # 손절폭이 이 타임프레임에 맞는가 — 안 맞으면 손절 자체가 지켜지지 않는다
+        "stop_too_wide": abs((stop / close - 1) * 100) > MAX_STOP_PCT,
+        "max_stop_pct": MAX_STOP_PCT,
+        "lot_size": None, "position_size_raw": None,
+        "turnover_krw": None, "liquidity_pct": None,
     }
     held = next((h["quantity"] for h in pf["holdings"] if h["symbol"] == symbol), 0.0)
     avg = next((h["avg_price"] for h in pf["holdings"] if h["symbol"] == symbol), 0.0)
@@ -479,18 +487,30 @@ def _risk_block(conn, enriched: pd.DataFrame, currency: str,
         return out
     risk_qty = risk_krw / (2 * atr * fx)
     cap_qty = total * MAX_WEIGHT / (close * fx)
-    size = min(risk_qty, cap_qty)
+    raw = min(risk_qty, cap_qty)
+    # 주문 가능한 단위로 내린다 — 국내주식에 5.095주를 제시하면 사용자가 매번
+    # 스스로 잘라야 하고, 그 과정에서 계산해 둔 리스크 한도가 흐려진다
+    market = t["market"] if t else ""
+    size = costs.round_to_lot(raw, market)
+    notional = size * close * fx
+    # 일평균 거래대금 대비 주문 크기 — 중소형주에서는 이게 체결가를 밀어버린다
+    recent = enriched.tail(20)
+    turnover = float((recent["close"] * recent["volume"]).median()) * fx if len(recent) else 0.0
     out.update({
-        "position_size_1pct": round(size, 4),
+        "position_size_1pct": round(size, 8),
+        "position_size_raw": round(raw, 4),
+        "lot_size": costs.lot_size(market),
         "risk_budget_krw": round(risk_krw, 0),
         "position_size_capped": cap_qty < risk_qty,
         "cap_reason": (f"1% 룰 수량 {risk_qty:,.2f}주는 총자산의 "
                        f"{risk_qty * close * fx / total * 100:.0f}% — "
                        f"종목 상한 {MAX_WEIGHT * 100:.0f}%로 잘랐습니다"
                        if cap_qty < risk_qty else None),
-        "position_notional_krw": round(size * close * fx, 0),
+        "position_notional_krw": round(notional, 0),
         "held_quantity": round(held, 4),
-        "addable_quantity": round(max(size - held, 0.0), 4),
+        "addable_quantity": round(costs.round_to_lot(max(size - held, 0.0), market), 8),
+        "turnover_krw": round(turnover, 0),
+        "liquidity_pct": round(notional / turnover * 100, 2) if turnover else None,
     })
     return out
 

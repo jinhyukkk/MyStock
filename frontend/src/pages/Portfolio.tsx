@@ -209,25 +209,47 @@ export default function Portfolio() {
           보유 종목이 없습니다.<br />
           아래 <strong>매매 입력</strong>에 체결 내역을 기록하면 평단·수익률·실현손익이 계산됩니다.
         </div>}
-        <div className="table-scroll">
+        <div className="table-scroll table-cards">
         <table>
           <thead><tr><th>종목</th><th>수량</th><th>평단가</th><th>현재가</th>
-            <th>평가액</th><th>KRW 환산</th><th>비중</th><th>손익</th><th>수익률</th></tr></thead>
+            <th>평가액</th><th>KRW 환산</th><th>비중</th>
+            {/* 비용 반영 여부를 안 밝히면 -0.13%를 본전으로 읽고 청산해 손실을 확정한다 */}
+            <th title="매도 수수료·세금 차감 전">손익 (비용 전)</th>
+            <th title="지금 전량 매도했을 때 실제로 들어오는 금액과 확정 손익">
+              전량 청산 시</th>
+            <th>수익률</th></tr></thead>
           <tbody>
             {pf.holdings.map(h => (
               <tr key={h.symbol}>
                 <td><Link to={`/ticker/${h.symbol}`}><strong>{h.name}</strong>
                   <span style={{ color: 'var(--text-dim)', fontSize: 12 }}> {h.currency}</span></Link></td>
-                <td>{fmt(h.quantity)}</td>
-                <td>{cur(h.currency, h.avg_price)}</td>
-                <td>{cur(h.currency, h.close)}</td>
-                <td>{cur(h.currency, h.value)}</td>
+                <td data-label="수량">{fmt(h.quantity)}</td>
+                <td data-label="평단가">{cur(h.currency, h.avg_price)}</td>
+                <td data-label="현재가">{cur(h.currency, h.close)}</td>
+                <td data-label="평가액">{cur(h.currency, h.value)}</td>
                 {/* 통화가 섞이면 종목 통화만으로는 포지션 크기를 나란히 볼 수 없다 */}
-                <td>₩{fmt(h.value_krw)}</td>
-                <td className={(h.weight_pct ?? 0) >= 20 ? 'neg' : ''}>
+                <td data-label="KRW 환산">₩{fmt(h.value_krw)}</td>
+                <td data-label="비중" className={(h.weight_pct ?? 0) >= 20 ? 'neg' : ''}>
                   {h.weight_pct === null ? '—' : `${h.weight_pct}%`}</td>
-                <td className={(h.pnl ?? 0) >= 0 ? 'pos' : 'neg'}>{cur(h.currency, h.pnl)}</td>
-                <td className={(h.pnl_pct ?? 0) >= 0 ? 'pos' : 'neg'}>
+                <td data-label="손익 (비용 전)" className={(h.pnl ?? 0) >= 0 ? 'pos' : 'neg'}
+                    title={h.currency === 'USD' && h.fx_pnl_krw !== null
+                      ? `원화 손익 ₩${fmt(h.pnl_krw)} = 주가 ₩${fmt(h.price_pnl_krw)} + 환 ₩${fmt(h.fx_pnl_krw)}`
+                      : ''}>
+                  {cur(h.currency, h.pnl)}
+                  {/* 미국주식 비중이 큰 계좌는 원화 손익의 상당 부분이 환이다 —
+                      나눠 보지 않으면 '달러 자산이 잘 버텼다'는 착시가 생긴다.
+                      매수 환율이 없으면 0이 아니라 '미상'으로 말해야 한다. */}
+                  {h.currency === 'USD' && (h.fx_pnl_krw === null
+                    ? <div style={{ fontSize: 11, color: 'var(--text-dim)' }}
+                           title="매수 시점 환율이 원장에 없어 환 기여를 분리할 수 없습니다 — 환 영향이 없다는 뜻이 아닙니다">
+                        환 기여 미상</div>
+                    : h.fx_pnl_krw !== 0 && <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                        환 {h.fx_pnl_krw >= 0 ? '+' : ''}₩{fmt(h.fx_pnl_krw)}</div>)}</td>
+                <td data-label="전량 청산 시" className={(h.net_pnl ?? 0) >= 0 ? 'pos' : 'neg'}>
+                  {cur(h.currency, h.net_pnl)}
+                  <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                    회수 {cur(h.currency, h.net_proceeds)}</div></td>
+                <td data-label="수익률" className={(h.pnl_pct ?? 0) >= 0 ? 'pos' : 'neg'}>
                   {h.pnl_pct === null ? '—' : `${h.pnl_pct >= 0 ? '+' : ''}${h.pnl_pct}%`}</td>
               </tr>
             ))}
@@ -529,7 +551,12 @@ export default function Portfolio() {
                 <td style={{ color: 'var(--text-dim)' }}
                     title={tr.fee === null && tr.tax === null ? '미기록 — 시장 요율로 추정' : '입력된 실제 비용'}>
                   {tr.fee === null && tr.tax === null ? '추정' : fmt((tr.fee ?? 0) + (tr.tax ?? 0))}</td>
-                <td>{tr.grade_at_trade ?? '—'}</td>
+                {/* 전 행이 '—'면 기능이 고장난 것처럼 보인다 — 실제로는 시그널을
+                    수집하기 전에 임포트된 건이라는 사실을 알린다 */}
+                <td title={tr.grade_at_trade ? '' :
+                  '이 체결이 기록될 당시 해당 종목의 시그널이 아직 없었습니다 (임포트분 등). '
+                  + '앱에서 매매를 기록하면 그 시점 등급이 자동으로 남습니다.'}>
+                  {tr.grade_at_trade ?? '—'}</td>
                 <td style={{ textAlign: 'left', maxWidth: 220, overflow: 'hidden',
                              textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                     title={tr.note ?? ''}>{tr.note ?? ''}</td>

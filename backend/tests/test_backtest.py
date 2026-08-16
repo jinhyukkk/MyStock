@@ -237,3 +237,20 @@ def test_discrimination_is_json_serializable_with_numpy_values():
     json.dumps(d)  # 여기서 TypeError가 나면 백테스트 API 전체가 500이 된다
     assert isinstance(d["discriminates"], bool)
     assert isinstance(d["spread"], float)
+
+
+def test_cost_breakdown_separates_fees_from_spread(ohlcv_up):
+    """왕복 비용만 한 숫자로 고지하면 슬리피지가 포함됐는지 알 수 없다.
+    5일 +0.3%대 엣지는 스프레드 가정 하나로 사라질 수 있다."""
+    out = backtest.backtest_ticker(ohlcv_up, cost_pct=0.42)
+    b = out["cost_breakdown"]
+    assert b["total_pct"] == 0.42
+    assert b["stress_pct"] == 0.84            # 비용 2배 가정
+    assert "슬리피지" in b["note"]
+
+
+def test_stress_net_is_reported_per_grade(ohlcv_up):
+    """비용이 가정의 2배였다면 이 등급이 여전히 플러스인가 — 표에서 바로 보여야 한다."""
+    out = backtest.backtest_ticker(ohlcv_up, cost_pct=0.42)
+    g = next(g for g in out["grades"] if g["avg_fwd20"] is not None)
+    assert g["avg_stress20"] == round(g["avg_fwd20"] - 0.84, 2)

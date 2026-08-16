@@ -26,7 +26,7 @@ GRADE_ORDER = ["강력매수", "매수", "중립", "매도", "강력매도"]
 COST_PCT = 0.3  # 시장·유동성을 모를 때의 폴백 (%p). 실제로는 costs.backtest_cost_pct 사용
 STOP_ATR_MULT = 2.0  # service._risk_block의 손절 폭과 동일하게 유지할 것
 MIN_EPISODES = 20  # 비중첩 에피소드가 이보다 적으면 수치를 신뢰 구간째로 숨긴다
-VERSION = 6  # 결과 스키마 버전 — 올리면 저장된 백테스트 캐시가 무효화된다
+VERSION = 7  # 결과 스키마 버전 — 올리면 저장된 백테스트 캐시가 무효화된다
 
 
 def _exit_price(o, h_, l_, c_, entry_i: int, exit_i: int, stop: float | None):
@@ -73,14 +73,17 @@ def _aggregate(records: list[dict], grade_key: str, horizons, cost_pct: float) -
             idxs = [r["i"] for r in rows if r.get(f"fwd{h}") is not None]
             entry[f"episodes{h}"] = _episodes(idxs, h)
             if not vals:
-                for k in ("avg_fwd", "avg_net", "avg_hold", "win", "win_gross",
-                          "se", "stop_rate", "avg_excess"):
+                for k in ("avg_fwd", "avg_net", "avg_stress", "avg_hold", "win",
+                          "win_gross", "se", "stop_rate", "avg_excess"):
                     entry[f"{k}{h}"] = None
                 entry[f"insufficient{h}"] = True
                 continue
             avg = sum(vals) / len(vals)
             entry[f"avg_fwd{h}"] = round(avg, 2)
             entry[f"avg_net{h}"] = round(avg - cost_pct, 2)
+            # 비용 가정이 2배였다면 이 등급이 여전히 플러스인가. 5일 +0.3%대 엣지는
+            # 스프레드 가정 하나로 사라진다 — 그 취약함을 표에서 바로 보이게 한다.
+            entry[f"avg_stress{h}"] = round(avg - cost_pct * 2, 2)
             # 손절 없이 h일 보유했을 때 — 손절이 얼마를 깎았는지 비교용
             holds = [r[f"hold{h}"] for r in rows if r.get(f"hold{h}") is not None]
             entry[f"avg_hold{h}"] = round(sum(holds) / len(holds), 2) if holds else None
@@ -199,6 +202,14 @@ def backtest_ticker(df: pd.DataFrame, bench: pd.DataFrame | pd.Series | None = N
         "end": enriched.index[-1].strftime("%Y-%m-%d"),
         "bench_label": bench_label if b_close is not None else None,
         "cost_pct": cost_pct,
+        # 왕복 비용을 한 숫자로만 고지하면 슬리피지가 들어갔는지 알 수 없다.
+        # 들어갔다는 사실과, 그 가정이 틀렸을 때의 결과를 함께 밝힌다.
+        "cost_breakdown": {
+            "total_pct": cost_pct,
+            "stress_pct": round(cost_pct * 2, 4),
+            "note": ("수수료·세금에 유동성 기반 호가 슬리피지를 더한 값입니다. "
+                     "실제 체결은 이보다 밀릴 수 있어 비용 2배 가정도 함께 봅니다."),
+        },
         "stop_atr_mult": STOP_ATR_MULT,
         "min_episodes": MIN_EPISODES,
         "max_episodes": max_episodes,

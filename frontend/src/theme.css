@@ -177,6 +177,33 @@ input:focus, select:focus {
   .sig-tags, .signal-summary { max-width: none; }
 }
 
+/* ── 좁은 화면: 표를 카드로 ──
+   가로 스크롤은 "스크롤해야 나머지가 있다"는 사실 자체가 안 보인다. 폰에서
+   손익·비중처럼 판단에 필요한 열이 화면 밖에 있으면 없는 것과 같다.
+   .table-cards 가 붙은 표만 좁은 화면에서 행 단위 카드로 쌓는다.
+   각 <td>는 data-label 로 자기 열 이름을 들고 있어야 한다. */
+@media (max-width: 860px) {
+  .table-cards > table, .table-cards thead, .table-cards tbody,
+  .table-cards tr, .table-cards td { display: block; width: auto; }
+  .table-cards { overflow-x: visible; }
+  .table-cards > table { min-width: 0; }
+  .table-cards thead { display: none; }
+  .table-cards tr {
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 8px;
+  }
+  .table-cards td {
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: 12px; text-align: right; border: none; padding: 3px 0;
+  }
+  .table-cards td::before {
+    content: attr(data-label);
+    color: var(--text-dim); font-size: 12px; text-align: left; flex-shrink: 0;
+  }
+  /* 라벨 없는 칸(종목명·삭제 버튼)은 한 줄 전체를 쓴다 */
+  .table-cards td:not([data-label]) { justify-content: flex-start; text-align: left; }
+}
+
 /* ── 필터 칩 ──
    종목이 늘면 표 전체를 눈으로 훑게 된다. 개수를 함께 보여줘서
    "매도 신호 0건"을 클릭하기 전에 알 수 있게 한다. */

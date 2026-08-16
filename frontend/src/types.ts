@@ -55,6 +55,12 @@ export interface TickerRisk {
   position_notional_krw: number | null;
   held_quantity: number | null; addable_quantity: number | null;
   account_open_risk: OpenRisk | null;
+  // 2×ATR 손절폭이 이 타임프레임에 안 맞으면 손절 자체가 지켜지지 않는다
+  stop_too_wide: boolean; max_stop_pct: number;
+  // 주문 가능한 단위로 내린 수량과, 내리기 전 원값
+  lot_size: number | null; position_size_raw: number | null;
+  // 일평균 거래대금 대비 주문 크기 — 중소형주에서는 이게 체결가를 밀어버린다
+  turnover_krw: number | null; liquidity_pct: number | null;
   // 보유 중일 때만 채워진다 — 진입 정보만 있으면 나가는 판단이 매번 즉흥이 된다
   exit_plan: ExitPlan | null;
 }
@@ -90,6 +96,10 @@ export interface Holding {
   value: number | null; pnl: number | null; pnl_pct: number | null;
   // 통화가 섞이면 종목 통화 표시만으로는 포지션 크기를 나란히 볼 수 없다
   value_krw: number | null; weight_pct: number | null;
+  // 지금 전량 팔면 실제로 들어오는 금액 — 수익률만 보고 본전으로 읽는 것을 막는다
+  exit_cost: number | null; net_proceeds: number | null; net_pnl: number | null;
+  // 원화 손익을 주가 기여와 환 기여로 분리
+  price_pnl_krw: number | null; fx_pnl_krw: number | null; pnl_krw: number | null;
 }
 export interface RealizedEntry {
   symbol: string; trade_date: string; quantity: number;
@@ -149,6 +159,8 @@ export interface BacktestGrade {
 export interface Backtest {
   version: number; samples: number; start: string; end: string;
   bench_label: string | null; cost_pct: number; stop_atr_mult: number;
+  // 비용 가정이 무엇을 포함하는지, 그 가정이 2배 틀렸을 때 어떻게 되는지
+  cost_breakdown: { total_pct: number; stress_pct: number; note: string };
   min_episodes: number; horizons: number[]; long_horizons: number[];
   // horizon별로 이 관측 기간이 만들 수 있는 비중첩 표본 상한. min_episodes보다 작으면
   // 데이터가 더 쌓여서 채워질 칸이 아니라 애초에 검증이 불가능한 구간이다.

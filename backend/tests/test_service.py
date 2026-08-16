@@ -237,6 +237,41 @@ def test_risk_block_subtracts_existing_holding(conn):
     assert after["addable_quantity"] < after["position_size_1pct"]
 
 
+def test_suggested_quantity_is_orderable(conn):
+    """국내주식에 5.095주를 제시하면 그대로 낼 수 없는 주문이다 — 정수로 내린다."""
+    service.refresh_all(conn)
+    db.set_meta(conn, "cash_krw", "100000000")
+    r = service.get_ticker_detail(conn, "005930")["risk"]
+    assert r["position_size_1pct"] == int(r["position_size_1pct"])
+    assert r["addable_quantity"] == int(r["addable_quantity"])
+    assert r["lot_size"] == 1.0
+    # 잘리기 전 값도 남긴다 — 얼마가 깎였는지 보이지 않으면 계산이 틀린 것처럼 읽힌다
+    assert r["position_size_raw"] >= r["position_size_1pct"]
+
+
+def test_wide_stop_is_flagged_as_unsuitable_for_swing(conn):
+    """2×ATR 손절이 -21%면 그 손절을 지킬 트레이더가 없다 — 결국 손절 없는 매매가 된다."""
+    service.refresh_all(conn)
+    full = service.indicators.compute_indicators(db.load_prices(conn, "005930"))
+    full.loc[full.index[-1], "atr14"] = full["close"].iloc[-1] * 0.09  # 2×ATR = 주가의 18%
+    r = service._risk_block(conn, full, "KRW", "005930")
+    assert r["stop_too_wide"] is True
+
+    full.loc[full.index[-1], "atr14"] = full["close"].iloc[-1] * 0.02  # 2×ATR = 4%
+    assert service._risk_block(conn, full, "KRW", "005930")["stop_too_wide"] is False
+
+
+def test_risk_block_reports_liquidity_share(conn):
+    """중소형주에서 제안 수량이 하루 거래대금 대비 과대하면 체결 자체가 밀린다."""
+    service.refresh_all(conn)
+    db.set_meta(conn, "cash_krw", "100000000")
+    r = service.get_ticker_detail(conn, "005930")["risk"]
+    assert r["turnover_krw"] > 0
+    # 제안 노셔널이 일평균 거래대금에서 차지하는 비중
+    assert r["liquidity_pct"] == pytest.approx(
+        r["position_notional_krw"] / r["turnover_krw"] * 100, rel=1e-3)
+
+
 def test_detail_and_portfolio_carry_last_refresh(conn):
     """갱신시각이 대시보드에만 있으면 상세·포트폴리오에서는 표시된 숫자가
     언제 것인지 알 수 없다 — 낡은 가격으로 주문을 낸다."""

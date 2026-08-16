@@ -185,7 +185,7 @@ export default function Dashboard() {
             스윙·중장기 시그널이 여기에 표시됩니다.
           </div>
         ) : (
-        <div className="table-scroll">
+        <div className="table-scroll table-cards">
         <table>
           <thead><tr>
             <th>종목</th><th>현재가</th><th>등락</th><th>평단 대비</th><th>스윙</th><th>중장기</th>
@@ -240,20 +240,21 @@ export default function Dashboard() {
                     </details>
                   )}
                 </td>
-                <td>{fmt(sig.close, sig.currency)}</td>
-                <td className={(sig.change_pct ?? 0) >= 0 ? 'pos' : 'neg'}>
+                <td data-label="현재가">{fmt(sig.close, sig.currency)}</td>
+                <td data-label="등락" className={(sig.change_pct ?? 0) >= 0 ? 'pos' : 'neg'}>
                   {sig.change_pct === null ? '—' : `${sig.change_pct >= 0 ? '+' : ''}${sig.change_pct}%`}</td>
-                <td className={sig.holding_pnl_pct === null ? '' : sig.holding_pnl_pct >= 0 ? 'pos' : 'neg'}>
+                <td data-label="평단 대비"
+                    className={sig.holding_pnl_pct === null ? '' : sig.holding_pnl_pct >= 0 ? 'pos' : 'neg'}>
                   {sig.holding_pnl_pct === null ? '—' : <>
                     <strong>{sig.holding_pnl_pct >= 0 ? '+' : ''}{sig.holding_pnl_pct}%</strong>
                     <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
                       평단 {fmt(sig.avg_price, sig.currency)}</div></>}</td>
-                <td><div className="signal-cell">
+                <td data-label="스윙"><div className="signal-cell">
                   <SignalBadge grade={sig.swing_grade} />
                   <span style={{ color: 'var(--text-dim)', fontSize: 12, minWidth: 28 }}>
                     {sig.swing_score > 0 ? '+' : ''}{sig.swing_score.toFixed(0)}</span>
                 </div></td>
-                <td><div className="signal-cell">
+                <td data-label="중장기"><div className="signal-cell">
                   <SignalBadge grade={sig.longterm_grade} />
                   <span style={{ color: 'var(--text-dim)', fontSize: 12, minWidth: 28 }}>
                     {sig.longterm_score > 0 ? '+' : ''}{sig.longterm_score.toFixed(0)}</span>

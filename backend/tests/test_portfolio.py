@@ -278,6 +278,66 @@ def test_holdings_carry_krw_value_and_weight():
     assert rows["005930"]["weight_pct"] == 17.1
 
 
+def test_holdings_report_net_proceeds_on_full_exit():
+    """'손익 +4.82%'를 본전으로 읽고 청산하면 거래세·수수료 차감 후 실제로는 손실이다.
+    지금 전량 팔면 계좌에 얼마가 들어오는지를 화면이 알아야 한다."""
+    holdings = {"005930": {"quantity": 10, "avg_price": 50_000.0}}
+    tickers = {"005930": {"name": "삼성전자", "market": "KR", "currency": "KRW"}}
+    out = portfolio.build_portfolio(holdings, {"005930": 60_000.0}, tickers, usdkrw=None)
+    h = out["holdings"][0]
+    # 60만원 매도 — 수수료 0.015% + 거래세 0.15% = 990원
+    assert h["exit_cost"] == 990.0
+    assert h["net_proceeds"] == 599_010.0
+    assert h["net_pnl"] == 99_010.0        # 평단 50만 대비 비용 차감 후
+
+
+def test_usd_holding_splits_price_and_fx_contribution():
+    """미국주식 비중이 큰 계좌는 원화 손익의 절반이 환일 수 있다 —
+    '달러 자산이 잘 버텼다'는 착시 없이 배분을 판단하려면 나눠 봐야 한다."""
+    holdings = {"AAPL": {"quantity": 10, "avg_price": 100.0, "avg_fx": 1000.0,
+                         "fx_known": True}}
+    tickers = {"AAPL": {"name": "Apple", "market": "US", "currency": "USD"}}
+    out = portfolio.build_portfolio(holdings, {"AAPL": 120.0}, tickers, usdkrw=1200.0)
+    h = out["holdings"][0]
+    # 주가 기여 = (120-100)×10 × 현재환율 1200 = 240,000
+    assert h["price_pnl_krw"] == 240_000.0
+    # 환 기여 = 원금 100×10 × (1200-1000) = 200,000
+    assert h["fx_pnl_krw"] == 200_000.0
+    assert h["pnl_krw"] == 440_000.0
+
+
+def test_fx_contribution_is_unknown_without_recorded_buy_rate():
+    """매수 환율이 원장에 없으면 매수 시점 환율을 현재 환율로 폴백한다 —
+    그 상태의 환 기여 0은 '환 영향이 없었다'가 아니라 '알 수 없다'이다.
+    0으로 표기하면 사용자가 환 리스크가 없다고 읽는다."""
+    trades = [{"symbol": "AAPL", "side": "BUY", "quantity": 10, "price": 100.0,
+               "trade_date": "2026-01-01", "fee": 0.0, "tax": 0.0}]  # fx_rate 미기록
+    tickers = {"AAPL": {"name": "Apple", "market": "US", "currency": "USD"}}
+    h = portfolio.compute_holdings(trades, tickers, usdkrw=1200.0)["AAPL"]
+    assert h["fx_known"] is False
+
+    out = portfolio.build_portfolio({"AAPL": h}, {"AAPL": 120.0}, tickers, usdkrw=1200.0)
+    assert out["holdings"][0]["fx_pnl_krw"] is None      # 0이 아니라 미상
+    assert out["holdings"][0]["price_pnl_krw"] == 240_000.0
+
+
+def test_fx_contribution_known_when_every_lot_has_rate():
+    trades = [{"symbol": "AAPL", "side": "BUY", "quantity": 10, "price": 100.0,
+               "trade_date": "2026-01-01", "fee": 0.0, "tax": 0.0, "fx_rate": 1000.0}]
+    tickers = {"AAPL": {"name": "Apple", "market": "US", "currency": "USD"}}
+    h = portfolio.compute_holdings(trades, tickers, usdkrw=1200.0)["AAPL"]
+    assert h["fx_known"] is True
+    out = portfolio.build_portfolio({"AAPL": h}, {"AAPL": 120.0}, tickers, usdkrw=1200.0)
+    assert out["holdings"][0]["fx_pnl_krw"] == 200_000.0
+
+
+def test_krw_holding_has_no_fx_contribution():
+    holdings = {"A": {"quantity": 10, "avg_price": 100.0, "avg_fx": 1.0}}
+    out = portfolio.build_portfolio(holdings, {"A": 120.0},
+                                    {"A": {"market": "KR", "currency": "KRW"}}, usdkrw=1200.0)
+    assert out["holdings"][0]["fx_pnl_krw"] == 0.0
+
+
 def test_holding_weight_is_none_without_price():
     holdings = {"A": {"quantity": 10, "avg_price": 100.0}}
     out = portfolio.build_portfolio(holdings, {}, {"A": {"currency": "KRW"}}, usdkrw=None)

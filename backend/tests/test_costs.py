@@ -48,3 +48,18 @@ def test_backtest_cost_includes_fees_and_spread():
 def test_unknown_market_falls_back_without_raising():
     out = costs.estimate("XX", "SELL", 1_000_000)
     assert out["fee"] >= 0 and out["tax"] >= 0
+
+
+def test_lot_size_by_market():
+    """국내·미국 주식은 소수점 주문이 안 된다 — 제안 수량이 5.095주면 그대로는 못 낸다."""
+    assert costs.lot_size("KR") == 1.0
+    assert costs.lot_size("US") == 1.0
+    assert costs.lot_size("CRYPTO") < 1.0   # 코인은 소수점 주문 가능
+
+
+def test_round_to_lot_floors_never_rounds_up():
+    """올림하면 계산한 리스크 한도를 넘는 수량이 나온다 — 항상 내림."""
+    assert costs.round_to_lot(5.095, "KR") == 5.0
+    assert costs.round_to_lot(5.999, "US") == 5.0
+    assert costs.round_to_lot(0.095, "KR") == 0.0     # 한 주도 못 사는 상황을 숨기지 않는다
+    assert costs.round_to_lot(0.09512345, "CRYPTO") == 0.09512345

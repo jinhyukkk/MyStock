@@ -34,6 +34,29 @@ def estimate(market: str, side: str, notional: float, is_etf: int = 0) -> dict:
     return {"fee": fee, "tax": tax}
 
 
+# 최소 주문 단위. 국내·미국 주식은 정수 주문만 가능하다 — 화면이 5.095주를
+# 제시하면 그대로는 낼 수 없는 주문이라 사용자가 매번 스스로 잘라야 한다.
+LOT_SIZES = {"KR": 1.0, "US": 1.0, "CRYPTO": 1e-8}
+_FALLBACK_LOT = 1.0
+
+
+def lot_size(market: str) -> float:
+    return LOT_SIZES.get(market, _FALLBACK_LOT)
+
+
+def round_to_lot(quantity: float, market: str) -> float:
+    """주문 가능한 수량으로 **내림**. 올림하면 계산해 둔 리스크 한도를 넘는다.
+
+    0.095주처럼 한 주도 못 사는 결과는 0으로 남긴다 — 1주로 올려주면
+    그 1주가 1% 룰을 넘는다는 사실이 화면에서 사라진다.
+    """
+    lot = lot_size(market)
+    if lot <= 0:
+        return quantity
+    n = int(quantity / lot + 1e-9)  # 부동소수 오차로 한 단위를 잃지 않게
+    return round(n * lot, 8)
+
+
 def roundtrip_pct(market: str, is_etf: int = 0) -> float:
     """왕복 수수료·세금(%p) — 스프레드는 뺀 값."""
     return round((fee_rate(market) * 2 + sell_tax_rate(market, is_etf)) * 100, 4)

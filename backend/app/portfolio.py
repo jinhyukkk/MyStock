@@ -48,10 +48,14 @@ def _walk_trades(trades: list, tickers: dict | None = None,
                 h["entry_grade"] = t.get("grade_at_trade")
                 h["cost_estimated"] = False
                 h["basis_adjusted"] = False
+                h["fx_known"] = True
             h["cost_estimated"] = h.get("cost_estimated", False) or estimated
             # 평단 맞춤용 보정 로트는 평단에는 반영하되(그게 목적이다) 그 원가로
             # 만들어진 실현손익은 실제 체결이 아니라는 사실을 포지션에 남긴다
             h["basis_adjusted"] = h.get("basis_adjusted", False) or excluded
+            # 매수 환율이 한 로트라도 비어 있으면 avg_fx는 현재 환율로 메운 값이다.
+            # 그걸 근거로 낸 환 기여 0은 "영향 없음"이 아니라 "알 수 없음"이다.
+            h["fx_known"] = h.get("fx_known", True) and t.get("fx_rate") is not None
             prev_cost = h["avg_price"] * h["quantity"]
             add_cost = t["price"] * t["quantity"] + fee + tax
             h["avg_fx"] = ((h["avg_fx"] * prev_cost + fx * add_cost) / (prev_cost + add_cost)
@@ -240,6 +244,8 @@ def build_portfolio(holdings: dict, prices: dict, tickers: dict, usdkrw,
         close = prices.get(symbol)
         rate = fx if currency == "USD" else 1.0
         value = pnl = pnl_pct = None
+        exit_cost = net_proceeds = net_pnl = None
+        price_pnl_krw = fx_pnl_krw = pnl_krw = None
         if close is not None:
             value = close * h["quantity"]
             pnl = (close - h["avg_price"]) * h["quantity"]
@@ -248,10 +254,34 @@ def build_portfolio(holdings: dict, prices: dict, tickers: dict, usdkrw,
             total_cost += h["avg_price"] * h["quantity"] * rate
             label = MARKET_LABELS.get(info.get("market"), "기타")
             alloc[label] = alloc.get(label, 0.0) + value * rate
+            # "수익률 -0.13%"를 본전으로 읽고 청산하면 거래세·수수료 차감 후엔
+            # 손실이 확정된다. 지금 팔면 실제로 얼마가 들어오는지를 함께 낸다.
+            est = costs.estimate(info.get("market", ""), "SELL", value,
+                                 is_etf=info.get("is_etf", 0) or 0)
+            exit_cost = round(est["fee"] + est["tax"], 4)
+            net_proceeds = round(value - exit_cost, 4)
+            net_pnl = round(pnl - exit_cost, 4)
+            # 원화 손익을 주가 기여와 환 기여로 나눈다 — 미국주식 비중이 큰 계좌는
+            # 원화 손익의 상당 부분이 환이라 배분 판단이 통째로 어긋난다.
+            buy_fx = float(h.get("avg_fx", 1.0)) if currency == "USD" else 1.0
+            basis = h["avg_price"] * h["quantity"]
+            price_pnl_krw = round(pnl * rate, 0)
+            if currency != "USD":
+                fx_pnl_krw = 0.0
+            elif h.get("fx_known", False):
+                fx_pnl_krw = round(basis * (rate - buy_fx), 0)
+            else:
+                fx_pnl_krw = None  # 매수 환율 미기록 — 0으로 쓰면 "영향 없음"으로 읽힌다
+            pnl_krw = (round(price_pnl_krw + fx_pnl_krw, 0)
+                       if fx_pnl_krw is not None else None)
         rows.append({"symbol": symbol, "name": info.get("name", symbol),
                      "market": info.get("market"), "currency": currency,
                      "quantity": h["quantity"], "avg_price": h["avg_price"],
                      "close": close, "value": value, "pnl": pnl, "pnl_pct": pnl_pct,
+                     "exit_cost": exit_cost, "net_proceeds": net_proceeds,
+                     "net_pnl": net_pnl,
+                     "price_pnl_krw": price_pnl_krw, "fx_pnl_krw": fx_pnl_krw,
+                     "pnl_krw": pnl_krw,
                      # 통화가 섞이면 종목 통화 표시만으로는 크기를 나란히 못 본다
                      "value_krw": round(value * rate, 0) if value is not None else None,
                      "weight_pct": None})
