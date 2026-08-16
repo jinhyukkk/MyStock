@@ -70,12 +70,20 @@ def create_app(db_path: str | None = None, refresh_on_start: bool = True) -> Fas
     if dist.exists():
         app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
 
+        # 진입점은 매번 재검증시킨다. index.html이 캐시되면 새 빌드를 올려도
+        # 브라우저가 옛 진입점을 계속 써서 해시가 바뀐 청크를 아예 요청하지 않는다
+        # — 사용자는 갱신했다고 믿는 채로 옛 화면을 본다.
+        INDEX_HEADERS = {"Cache-Control": "no-cache, must-revalidate"}
+
         @app.get("/{path:path}")
         def spa(path: str):
             safe = _safe_static_path(dist, path)
             if safe:
+                # 해시 없는 최상위 파일(index.html 등)은 캐시하면 같은 문제가 생긴다
+                if safe.name == "index.html":
+                    return FileResponse(safe, headers=INDEX_HEADERS)
                 return FileResponse(safe)
-            return FileResponse(dist / "index.html")
+            return FileResponse(dist / "index.html", headers=INDEX_HEADERS)
 
     return app
 

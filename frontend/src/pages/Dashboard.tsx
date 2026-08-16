@@ -23,11 +23,29 @@ function conflictHint(sig: SignalRow): string | null {
     : '단기 매도 · 장기 매수 — 눌림목인지 추세 이탈인지 먼저 정하세요'
 }
 
+type FilterKey = 'all' | 'holding' | 'buy' | 'sell' | 'changed'
+const FILTERS: { key: FilterKey; label: string }[] = [
+  { key: 'all', label: '전체' },
+  { key: 'holding', label: '보유' },
+  { key: 'buy', label: '매수 신호' },
+  { key: 'sell', label: '매도 신호' },
+  { key: 'changed', label: '등급변경' },
+]
+const matches: Record<FilterKey, (s: SignalRow) => boolean> = {
+  all: () => true,
+  holding: s => s.is_holding,
+  buy: s => dir(s.swing_grade) > 0,
+  sell: s => dir(s.swing_grade) < 0,
+  changed: s => s.grade_changed,
+}
+
 export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [now, setNow] = useState(Date.now())
+  // 종목이 늘면 20행을 눈으로 훑게 된다 — 오늘 볼 것만 남기는 필터
+  const [filter, setFilter] = useState<'all' | 'holding' | 'buy' | 'sell' | 'changed'>('all')
 
   const load = useCallback(() => get<DashboardData>('/api/dashboard')
     .then(d => { setData(d); setError(null); setNow(Date.now()) })
@@ -75,6 +93,7 @@ export default function Dashboard() {
   const { sentiment: s, portfolio_summary: pf } = data
   const pnlCls = pf.total_pnl_krw >= 0 ? 'pos' : 'neg'
   const stale = isStale(data.last_refresh, now)
+  const shown = data.signals.filter(matches[filter])
 
   return (
     <div className="grid">
@@ -146,6 +165,19 @@ export default function Dashboard() {
         {data.failed_sources.length > 0 && <div className="warn-box" style={{ marginBottom: 10 }}>
           일부 소스 갱신 실패: {data.failed_sources.join(', ')} — 해당 종목 값이 낡았을 수 있습니다.</div>}
 
+        {data.signals.length > 0 && <div className="filter-chips">
+          {FILTERS.map(f => {
+            const n = data.signals.filter(matches[f.key]).length
+            return (
+              <button key={f.key} className={`chip${filter === f.key ? ' on' : ''}`}
+                      aria-pressed={filter === f.key}
+                      onClick={() => setFilter(f.key)}>
+                {f.label} <span className="chip-n">{n}</span>
+              </button>
+            )
+          })}
+        </div>}
+
         {data.signals.length === 0 ? (
           <div className="empty">
             아직 추적 중인 종목이 없습니다.<br />
@@ -159,9 +191,9 @@ export default function Dashboard() {
             <th>종목</th><th>현재가</th><th>등락</th><th>평단 대비</th><th>스윙</th><th>중장기</th>
           </tr></thead>
           <tbody>
-            {data.signals.map((sig, idx) => {
+            {shown.map((sig, idx) => {
               // 보유 → 관심 경계에 구분선. 보유 종목이 먼저 오도록 백엔드가 정렬한다.
-              const boundary = !sig.is_holding && idx > 0 && data.signals[idx - 1].is_holding
+              const boundary = !sig.is_holding && idx > 0 && shown[idx - 1].is_holding
               const hint = conflictHint(sig)
               const tags = sig.summary_tags ?? []
               return (
@@ -174,7 +206,13 @@ export default function Dashboard() {
                   <Link to={`/ticker/${sig.symbol}`}>
                     <strong>{sig.name}</strong>
                     {sig.is_holding && <span style={{ color: 'var(--accent)', fontSize: 11 }}> 보유</span>}
-                    {sig.grade_changed && <span style={{ color: 'var(--buy-strong)', fontSize: 11 }}> 등급변경</span>}
+                    {/* 강등에도 상승색이 붙으면 나쁜 소식이 좋은 소식으로 읽힌다 */}
+                    {sig.grade_changed && <span style={{ fontSize: 11,
+                      color: sig.grade_change_dir > 0 ? 'var(--buy-strong)'
+                           : sig.grade_change_dir < 0 ? 'var(--sell)' : 'var(--text-dim)' }}
+                      title={`${sig.prev_grade ?? '—'} → ${sig.swing_grade}`}>
+                      {' '}{sig.grade_change_dir > 0 ? '▲' : sig.grade_change_dir < 0 ? '▼' : ''}
+                      {sig.prev_grade ?? ''}→{sig.swing_grade}</span>}
                     {/* 장중 미완성 봉 기반 등급 — 마감 때 뒤집힐 수 있다 */}
                     {sig.bar_complete === false && <span className="warn" style={{ fontSize: 11 }}
                       title={`${sig.bar_date} 봉이 마감 전입니다. 종가 확정 시 등급이 바뀔 수 있고, 백테스트는 확정 종가 신호만 검증했습니다.`}> 미확정</span>}
@@ -227,6 +265,11 @@ export default function Dashboard() {
         </table>
         </div>
         )}
+        {/* 필터가 걸린 채 빈 화면이면 "종목이 없다"로 읽힌다 — 필터 탓임을 알린다 */}
+        {data.signals.length > 0 && shown.length === 0 && <div className="empty">
+          이 조건에 해당하는 종목이 없습니다.{' '}
+          <button className="ghost" onClick={() => setFilter('all')}>전체 보기</button>
+        </div>}
       </div>
     </div>
   )

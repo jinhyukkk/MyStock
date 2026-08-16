@@ -237,6 +237,32 @@ def test_risk_block_subtracts_existing_holding(conn):
     assert after["addable_quantity"] < after["position_size_1pct"]
 
 
+def test_detail_and_portfolio_carry_last_refresh(conn):
+    """갱신시각이 대시보드에만 있으면 상세·포트폴리오에서는 표시된 숫자가
+    언제 것인지 알 수 없다 — 낡은 가격으로 주문을 낸다."""
+    service.refresh_all(conn)
+    stamp = db.get_meta(conn, "last_refresh")
+    assert service.get_ticker_detail(conn, "005930")["last_refresh"] == stamp
+    assert service.get_portfolio_view(conn)["last_refresh"] == stamp
+
+
+def test_watchlist_signals_sort_buy_first(conn, monkeypatch):
+    """관심 종목 구간을 -abs(점수)로 정렬하면 강력매도가 강력매수와 같은 높이로
+    올라온다. 살 자리를 찾는 화면에서 팔 수도 없는 종목이 맨 위에 오면 안 된다."""
+    rows = [{"symbol": "S1", "score": -80}, {"symbol": "S2", "score": 30},
+            {"symbol": "S3", "score": 75}, {"symbol": "S4", "score": -10}]
+    ordered = sorted(rows, key=lambda r: service._signal_sort_key(
+        {"is_holding": False, "swing_score": r["score"]}))
+    assert [r["symbol"] for r in ordered] == ["S3", "S2", "S4", "S1"]
+
+
+def test_holdings_still_come_before_watchlist(conn):
+    """보유 종목은 방향과 무관하게 먼저 온다 — 장중 가장 먼저 볼 것은 내 포지션이다."""
+    held_sell = service._signal_sort_key({"is_holding": True, "swing_score": -80})
+    watch_buy = service._signal_sort_key({"is_holding": False, "swing_score": 90})
+    assert held_sell < watch_buy
+
+
 def test_ticker_detail_exposes_cost_rates(conn):
     """주문 프리뷰가 비용을 추정하려면 요율이 필요하다. 프론트에 상수를 복제하면
     요율이 바뀔 때 화면과 원장이 서로 다른 비용을 말하게 된다."""

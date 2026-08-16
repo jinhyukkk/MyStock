@@ -278,6 +278,13 @@ def test_safe_static_path_allows_real_file(fake_dist):
     assert result == (fake_dist / "assets" / "app.js").resolve()
 
 
+def test_index_html_must_revalidate(client):
+    """index.html이 캐시되면 배포 후에도 사용자가 옛 프론트를 계속 쓴다.
+    해시 붙은 청크는 그대로여도 진입점이 옛 청크를 가리키기 때문이다."""
+    res = client.get("/")
+    assert "no-cache" in res.headers.get("cache-control", "")
+
+
 def test_set_cash_with_usd(client):
     r = client.put("/api/cash", json={"amount": 300000, "amount_usd": 200})
     assert r.status_code == 200

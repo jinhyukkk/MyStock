@@ -1,6 +1,6 @@
 import pytest
 from app import indicators as ind
-from app import scoring
+from app import scoring, service
 
 def test_grade_thresholds():
     # 임계값은 실측 재보정으로 바뀐다 — 숫자가 아니라 경계 동작을 고정한다
@@ -99,3 +99,18 @@ def test_pos_52w_uses_high_low_range():
 def test_insufficient_data_raises(ohlcv_up):
     with pytest.raises(ValueError):
         scoring.score_ticker(ind.compute_indicators(ohlcv_up.head(50)))
+
+
+def test_grade_change_direction():
+    """'등급변경' 배지가 강등에도 초록이면 나쁜 소식이 좋은 소식으로 읽힌다.
+    상향/하향을 숫자로 구분해 화면이 색을 고를 수 있게 한다."""
+    assert service.grade_change_dir("중립", "강력매수") == 1
+    assert service.grade_change_dir("매수", "매도") == -1
+    assert service.grade_change_dir("매수", "매수") == 0
+    assert service.grade_change_dir(None, "매수") == 0  # 첫 관측은 '변경'이 아니다
+
+
+def test_grade_change_direction_uses_severity_not_sign():
+    """매수 → 강력매수도 상향이고, 강력매도 → 매도는 완화이므로 상향이다."""
+    assert service.grade_change_dir("매수", "강력매수") == 1
+    assert service.grade_change_dir("강력매도", "매도") == 1

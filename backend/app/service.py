@@ -271,6 +271,34 @@ def summary_tags(details: dict) -> list[dict]:
     return tags
 
 
+def grade_change_dir(prev: str | None, cur: str) -> int:
+    """등급 변화의 방향 (+1 상향 / -1 하향 / 0 변화 없음).
+
+    "등급변경"을 불리언으로만 내려보내면 화면이 색을 고를 수 없어 강등에도
+    상승색 배지가 붙는다. 나쁜 소식이 좋은 소식으로 읽히는 건 배지의 실패다.
+    강력매도→매도처럼 강도가 누그러진 것도 상향으로 본다.
+    """
+    order = backtest.GRADE_ORDER[::-1]  # 강력매도 … 강력매수 (낮을수록 약세)
+    if prev is None or prev == cur or prev not in order or cur not in order:
+        return 0
+    return 1 if order.index(cur) > order.index(prev) else -1
+
+
+def _signal_sort_key(s: dict):
+    """보유 종목 우선, 그다음 관심 종목은 매수 신호 순.
+
+    보유가 먼저인 이유: 장중 가장 먼저 확인해야 할 것은 "내가 들고 있는 것 중
+    매도 신호"다. 워치리스트가 길면 점수순 정렬만으로는 보유가 스크롤 아래로 밀린다.
+    보유 구간은 절대값 정렬을 유지한다 — 강한 매도도 똑같이 급한 소식이다.
+
+    관심 종목 구간은 점수 내림차순이다. 절대값으로 정렬하면 살 수도 없고 팔
+    수도 없는 강력매도 종목이 강력매수와 같은 높이로 올라온다.
+    """
+    if s["is_holding"]:
+        return (0, -abs(s["swing_score"]))
+    return (1, -s["swing_score"])
+
+
 def get_dashboard(conn) -> dict:
     senti = get_sentiment_view(conn)
     holdings = _holdings_map(conn)
@@ -297,6 +325,8 @@ def get_dashboard(conn) -> dict:
             "longterm_score": sig["longterm_score"],
             "longterm_grade": scoring.grade(sig["longterm_score"], "longterm"),
             "grade_changed": prev_grade is not None and prev_grade != sig["grade"],
+            "grade_change_dir": grade_change_dir(prev_grade, sig["grade"]),
+            "prev_grade": prev_grade,
             "is_holding": held is not None,
             "in_watchlist": bool(t["in_watchlist"]),
             "avg_price": avg_price,
@@ -309,9 +339,7 @@ def get_dashboard(conn) -> dict:
             "bar_complete": details.get("bar_complete", True),
             "bar_date": details.get("bar_date", sig["date"]),
         })
-    # 보유 종목 우선 — 장중 가장 먼저 확인해야 할 것은 "내가 들고 있는 것 중 매도 신호"다.
-    # 워치리스트가 길면 점수순 정렬만으로는 보유 종목이 스크롤 아래로 밀린다.
-    signals.sort(key=lambda s: (not s["is_holding"], -abs(s["swing_score"])))
+    signals.sort(key=_signal_sort_key)
     tickers_map = {t["symbol"]: dict(t) for t in active}
     pf = portfolio.build_portfolio(holdings, prices, tickers_map, senti.get("usdkrw"),
                                    cash_krw=get_cash_krw(conn), cash_usd=get_cash_usd(conn))
@@ -351,6 +379,8 @@ def get_portfolio_view(conn) -> dict:
     pf["open_risk"] = portfolio.open_risk(
         holdings, _atr_map(price_frames), tickers_map, fx,
         pf["totals"]["total_asset_krw"])
+    # 이 숫자들이 언제 기준인지 화면이 알 수 있어야 한다
+    pf["last_refresh"] = db.get_meta(conn, "last_refresh")
     return pf
 
 
@@ -545,6 +575,7 @@ def get_ticker_detail(conn, symbol) -> dict | None:
         "currency": t["currency"], "is_etf": t["is_etf"],
         "fundamentals": json.loads(fund_raw) if fund_raw else None,
         "signal": signal, "candles": candles, "risk": risk,
+        "last_refresh": db.get_meta(conn, "last_refresh"),
         # 주문 프리뷰가 체결 비용을 추정하는 근거 — 화면과 원장이 같은 요율을 쓰게 한다
         "cost_rates": {
             "fee_pct": round(costs.fee_rate(t["market"]) * 100, 6),

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { del, get, post, put } from '../api'
 import type { Portfolio as PF } from '../types'
 import { cashClampWarning, type TradeResult } from '../trade'
+import { isStale, relativeTime } from '../time'
 import SymbolInput from '../components/SymbolInput'
 
 const PIE_COLORS = ['#4f8ef7', '#2ecc71', '#f7c948', '#b06ef7', '#ff8a65']
@@ -65,6 +66,7 @@ export default function Portfolio() {
   const [cashInput, setCashInput] = useState<string>('')
   const [cashUsdInput, setCashUsdInput] = useState<string>('')
   const [cashWarn, setCashWarn] = useState<string | null>(null)
+  const [now, setNow] = useState(Date.now())
 
   // 빈 입력은 "변경 없음". 빈 값을 0으로 보내면 예수금이 소리 없이 사라지고,
   // 총자산을 분모로 쓰는 1% 리스크 포지션 사이징까지 틀어진다.
@@ -97,7 +99,7 @@ export default function Portfolio() {
     get<PF>('/api/portfolio'),
     get<Trade[]>('/api/trades'),
   ]).then(([p, tr]) => {
-    setPf(p); setTrades(tr); setError(null)
+    setPf(p); setTrades(tr); setError(null); setNow(Date.now())
     // 현재 저장된 값을 프리필 — 한쪽만 고치려다 다른 쪽을 날리는 일이 없게
     setCashInput(String(p.totals.cash_krw))
     setCashUsdInput(String(p.totals.cash_usd ?? 0))
@@ -152,11 +154,19 @@ export default function Portfolio() {
     </div>
   )
   const t = pf.totals
+  const stale = isStale(pf.last_refresh, now)
   return (
     <div className="grid">
       <div className="grid-2">
         <div className="card">
-          <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>총자산 (평가액 + 예수금, KRW 환산)</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+            <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>총자산 (평가액 + 예수금, KRW 환산)</div>
+            {/* 이 계좌 숫자가 언제 가격 기준인지 — 낡은 값으로 사이즈를 정하면 안 된다 */}
+            <div className={stale ? 'warn' : ''} style={{ fontSize: 11,
+                   color: stale ? undefined : 'var(--text-dim)' }}
+                 title={pf.last_refresh ?? ''}>
+              {stale && '⚠ '}기준: {relativeTime(pf.last_refresh, now)}</div>
+          </div>
           <div style={{ fontSize: 26, fontWeight: 700 }}>₩{fmt(t.total_asset_krw)}</div>
           {/* 같은 손익을 두 분모로 나눠 함께 보여준다 — 하나만 두면 현금 비중이 큰 계좌에서
               체감 손실이 부풀려 읽히고 포지션 사이즈 판단이 통째로 틀어진다. */}
@@ -202,7 +212,7 @@ export default function Portfolio() {
         <div className="table-scroll">
         <table>
           <thead><tr><th>종목</th><th>수량</th><th>평단가</th><th>현재가</th>
-            <th>평가액</th><th>손익</th><th>수익률</th></tr></thead>
+            <th>평가액</th><th>KRW 환산</th><th>비중</th><th>손익</th><th>수익률</th></tr></thead>
           <tbody>
             {pf.holdings.map(h => (
               <tr key={h.symbol}>
@@ -212,6 +222,10 @@ export default function Portfolio() {
                 <td>{cur(h.currency, h.avg_price)}</td>
                 <td>{cur(h.currency, h.close)}</td>
                 <td>{cur(h.currency, h.value)}</td>
+                {/* 통화가 섞이면 종목 통화만으로는 포지션 크기를 나란히 볼 수 없다 */}
+                <td>₩{fmt(h.value_krw)}</td>
+                <td className={(h.weight_pct ?? 0) >= 20 ? 'neg' : ''}>
+                  {h.weight_pct === null ? '—' : `${h.weight_pct}%`}</td>
                 <td className={(h.pnl ?? 0) >= 0 ? 'pos' : 'neg'}>{cur(h.currency, h.pnl)}</td>
                 <td className={(h.pnl_pct ?? 0) >= 0 ? 'pos' : 'neg'}>
                   {h.pnl_pct === null ? '—' : `${h.pnl_pct >= 0 ? '+' : ''}${h.pnl_pct}%`}</td>
@@ -258,6 +272,26 @@ export default function Portfolio() {
             ))}
           </tbody>
         </table>
+        {/* 최대 종목 비중 9.3%는 안전해 보이지만 상관 0.7+ 로 묶인 종목들이
+            동반 하락하면 계좌가 맞는 타격은 그 합에 가깝다. */}
+        {pf.risk.clusters.length > 0 && <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+            상관 {pf.risk.cluster_threshold} 이상으로 묶인 그룹 — 사실상 하나의 포지션</div>
+          <table style={{ marginTop: 6 }}>
+            <thead><tr><th>그룹</th><th>합산 비중</th></tr></thead>
+            <tbody>
+              {pf.risk.clusters.map(c => (
+                <tr key={c.symbols.join()}>
+                  <td style={{ textAlign: 'left' }}>{c.names.join(' · ')}</td>
+                  <td className={c.weight_pct >= 30 ? 'neg' : ''}>{c.weight_pct}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {(pf.risk.max_cluster_pct ?? 0) >= 30 && <div className="warn-box" style={{ marginTop: 8 }}>
+            ⚠ 가장 큰 그룹이 총자산의 {pf.risk.max_cluster_pct}%입니다 — 종목별 비중은
+            분산돼 보여도 동반 하락 시에는 한 종목에 그만큼 걸어둔 것과 같습니다.</div>}
+        </div>}
         {pf.risk.corr && <>
           <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 12 }}>
             보유 종목 간 일간수익률 상관계수 — 0.7 이상이면 사실상 같은 포지션</div>

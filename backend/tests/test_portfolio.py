@@ -209,6 +209,43 @@ def test_exit_plan_applies_fx_to_usd_position():
     assert p["slices"][-1]["label"] == "전량" and p["slices"][-1]["quantity"] == 10.0
 
 
+def test_exit_plan_reports_r_multiple():
+    """+27.91% 보다 +2.1R 이 익절·추격 판단에 직결된다.
+
+    1R은 이 앱이 사이징에 쓰는 리스크 단위(현재가에서 손절선까지 = 2×ATR)로 잰다.
+    '평단 − 손절선'으로 재면 수익 중인 포지션(손절선이 평단 위로 올라간 경우)에서
+    값이 사라지는데, 익절 판단이 가장 필요한 순간이 바로 그때다.
+    """
+    # 1R = 130 - 110 = 20, 평단 대비 +30 → +1.5R
+    p = portfolio.exit_plan(held=10, avg_price=100.0, close=130.0, stop_price=110.0,
+                            market="KR")
+    assert p["r_unit"] == 20.0 and p["r_multiple"] == 1.5
+
+
+def test_r_multiple_is_negative_while_underwater():
+    # 1R = 95 - 90 = 5, 평단 대비 -5 → -1R
+    p = portfolio.exit_plan(held=10, avg_price=100.0, close=95.0, stop_price=90.0,
+                            market="KR")
+    assert p["r_multiple"] == -1.0
+
+
+def test_r_multiple_none_when_stop_at_or_above_price():
+    """손절선이 현재가 이상이면 리스크 단위가 0 이하 — 억지로 내지 않는다."""
+    p = portfolio.exit_plan(held=10, avg_price=100.0, close=110.0, stop_price=110.0,
+                            market="KR")
+    assert p["r_multiple"] is None and p["r_unit"] is None
+
+
+def test_exit_plan_flags_stop_above_average():
+    """손절선이 평단 위면 그 손절은 손실 확정이 아니라 이익 확정이다.
+    같은 숫자를 붉게 칠하면 좋은 소식이 나쁜 소식으로 읽힌다."""
+    p = portfolio.exit_plan(held=10, avg_price=100.0, close=130.0, stop_price=110.0,
+                            market="KR")
+    assert p["stop_locks_profit"] is True
+    assert portfolio.exit_plan(held=10, avg_price=100.0, close=95.0, stop_price=90.0,
+                               market="KR")["stop_locks_profit"] is False
+
+
 def test_exit_plan_none_without_holding():
     assert portfolio.exit_plan(held=0, avg_price=100.0, close=80.0,
                                stop_price=72.0, market="KR") is None
@@ -222,6 +259,30 @@ def test_build_portfolio_usd_conversion():
     assert h["pnl"] == 500.0 and h["pnl_pct"] == 50.0
     assert out["totals"]["total_value_krw"] == 1_500_000.0
     assert out["allocation"][0]["label"] == "미국 주식"
+
+
+def test_holdings_carry_krw_value_and_weight():
+    """종목 통화로만 표시하면 $150짜리와 ₩10,000짜리의 크기를 나란히 볼 수 없다.
+    비중은 총자산(현금 포함) 기준이어야 '이 종목에 얼마나 걸었나'에 답한다."""
+    holdings = {"AAPL": {"quantity": 10, "avg_price": 100.0},
+                "005930": {"quantity": 10, "avg_price": 50_000.0}}
+    tickers = {"AAPL": {"name": "Apple", "market": "US", "currency": "USD"},
+               "005930": {"name": "삼성전자", "market": "KR", "currency": "KRW"}}
+    out = portfolio.build_portfolio(holdings, {"AAPL": 150.0, "005930": 60_000.0},
+                                    tickers, usdkrw=1000.0, cash_krw=1_400_000.0)
+    rows = {h["symbol"]: h for h in out["holdings"]}
+    assert rows["AAPL"]["value_krw"] == 1_500_000.0   # $1,500 × 1,000
+    assert rows["005930"]["value_krw"] == 600_000.0
+    # 총자산 = 150만 + 60만 + 현금 140만 = 350만
+    assert rows["AAPL"]["weight_pct"] == 42.9
+    assert rows["005930"]["weight_pct"] == 17.1
+
+
+def test_holding_weight_is_none_without_price():
+    holdings = {"A": {"quantity": 10, "avg_price": 100.0}}
+    out = portfolio.build_portfolio(holdings, {}, {"A": {"currency": "KRW"}}, usdkrw=None)
+    assert out["holdings"][0]["value_krw"] is None
+    assert out["holdings"][0]["weight_pct"] is None
 
 
 def test_build_portfolio_cash():
@@ -289,6 +350,44 @@ def test_account_risk():
     assert out["weights"][0]["weight_pct"] == 33.3
     assert out["corr"]["matrix"][0][1] == 1.0
     assert out["mdd_pct"] == 0.0  # 단조 상승 → 낙폭 없음
+
+
+def test_clusters_group_highly_correlated_holdings():
+    """종목별 비중이 낮아도 상관 0.7+ 로 묶인 종목들은 실질 단일 베팅이다.
+    최대 종목 비중만 보면 '집중 없음'으로 읽힌다."""
+    import pandas as pd
+    idx = pd.date_range("2026-01-01", periods=60)
+    a = pd.Series(range(100, 160), index=idx, dtype=float)
+    holdings = {"A": {"quantity": 1, "avg_price": 100.0},
+                "B": {"quantity": 2, "avg_price": 50.0}}
+    closes = {"A": a, "B": a * 0.5}  # 완전 동행 → 상관 1.0
+    tickers = {"A": {"name": "가", "currency": "KRW"}, "B": {"name": "나", "currency": "KRW"}}
+    out = portfolio.account_risk(holdings, closes, tickers, usdkrw=None, cash_krw=159.0)
+    c = out["clusters"][0]
+    assert sorted(c["symbols"]) == ["A", "B"]
+    assert c["weight_pct"] == 66.6            # 33.3 + 33.3 — 실질 하나의 포지션
+    assert out["max_cluster_pct"] == 66.6
+
+
+def test_uncorrelated_holdings_are_not_clustered():
+    """음의 상관이면 묶지 않는다 — 묶어버리면 경고가 늘 켜져 있어 의미를 잃는다."""
+    import pandas as pd
+    idx = pd.date_range("2026-01-01", periods=60)
+    # 서로 반대로 움직이는 일간 수익률 — 단조 상승/하락 계열은 수익률로 보면
+    # 둘 다 완만해지는 방향이라 오히려 양의 상관이 나온다
+    a, b = [100.0], [100.0]
+    for i in range(59):
+        step = 0.01 if i % 2 == 0 else -0.01
+        a.append(a[-1] * (1 + step))
+        b.append(b[-1] * (1 - step))
+    holdings = {"A": {"quantity": 1, "avg_price": 100.0},
+                "B": {"quantity": 1, "avg_price": 100.0}}
+    tickers = {"A": {"name": "가", "currency": "KRW"}, "B": {"name": "나", "currency": "KRW"}}
+    out = portfolio.account_risk(holdings, {"A": pd.Series(a, index=idx),
+                                            "B": pd.Series(b, index=idx)},
+                                 tickers, usdkrw=None)
+    assert out["corr"]["matrix"][0][1] < 0   # 픽스처가 실제로 음의 상관인지 먼저 확인
+    assert out["clusters"] == []
 
 
 def test_account_risk_uses_trading_day_intersection():

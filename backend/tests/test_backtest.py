@@ -190,3 +190,50 @@ def test_longterm_grades_are_backtested(ohlcv_up):
         assert "episodes60" in g and "insufficient120" in g
     observed = {g["grade"] for g in out["longterm_grades"]}
     assert set(out["missing_longterm_grades"]) == set(backtest.GRADE_ORDER) - observed
+
+
+def _g(grade, net20, insufficient=False, n=50):
+    return {"grade": grade, "n": n, "avg_net20": net20, "insufficient20": insufficient}
+
+
+def test_discrimination_positive_when_buy_beats_sell():
+    """등급이 방향을 가르는가 — 매수 등급 성적에서 매도 등급 성적을 뺀 값."""
+    d = backtest.discrimination(
+        [_g("강력매수", 3.0), _g("매수", 2.0), _g("중립", 0.5),
+         _g("매도", -1.0), _g("강력매도", -2.0)], 20)
+    assert d["buy_net"] == 2.5 and d["sell_net"] == -1.5
+    assert d["spread"] == 4.0 and d["discriminates"] is True
+
+
+def test_discrimination_flags_inverted_grades():
+    """매도 등급이 매수보다 성적이 좋으면 이 종목에서 시그널은 방향을 못 가른다.
+    승률만 크게 보여주면 이 사실이 표에 묻힌다."""
+    d = backtest.discrimination(
+        [_g("강력매수", 0.2), _g("매수", 1.5), _g("매도", 1.9), _g("강력매도", 2.5)], 20)
+    assert d["spread"] < 0 and d["discriminates"] is False
+
+
+def test_discrimination_ignores_insufficient_grades():
+    """표본이 모자라 수치를 감춘 칸은 스프레드 계산에도 쓰지 않는다."""
+    d = backtest.discrimination(
+        [_g("강력매수", 99.0, insufficient=True), _g("매수", 2.0),
+         _g("매도", -1.0)], 20)
+    assert d["buy_net"] == 2.0
+
+
+def test_discrimination_none_when_one_side_missing():
+    assert backtest.discrimination([_g("매수", 2.0), _g("중립", 0.1)], 20) is None
+
+
+def test_discrimination_is_json_serializable_with_numpy_values():
+    """집계값은 numpy float으로 들어온다 — 그대로 비교하면 numpy.bool_ 이 나와
+    결과를 캐시에 저장할 때 JSON 직렬화가 깨진다(화면에는 500으로 보인다)."""
+    import json
+    import numpy as np
+    d = backtest.discrimination(
+        [{"grade": "매수", "n": 50, "avg_net20": np.float64(2.0), "insufficient20": False},
+         {"grade": "매도", "n": 50, "avg_net20": np.float64(-1.0), "insufficient20": False}],
+        20)
+    json.dumps(d)  # 여기서 TypeError가 나면 백테스트 API 전체가 500이 된다
+    assert isinstance(d["discriminates"], bool)
+    assert isinstance(d["spread"], float)

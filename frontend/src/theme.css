@@ -177,6 +177,19 @@ input:focus, select:focus {
   .sig-tags, .signal-summary { max-width: none; }
 }
 
+/* ── 필터 칩 ──
+   종목이 늘면 표 전체를 눈으로 훑게 된다. 개수를 함께 보여줘서
+   "매도 신호 0건"을 클릭하기 전에 알 수 있게 한다. */
+.filter-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.chip {
+  font-size: 12px; padding: 4px 10px; border-radius: 999px;
+  background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+}
+.chip:hover { color: var(--text); }
+.chip.on { border-color: var(--accent); color: var(--text); background: var(--bg); }
+.chip-n { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.chip.on .chip-n { color: var(--accent); }
+
 /* ── 근거 디스클로저 ──
    title 속성 툴팁은 터치 기기에서 열리지 않는다. 탭으로 펼치는 요약으로 대체. */
 .reason-toggle {

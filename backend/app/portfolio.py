@@ -158,13 +158,23 @@ def exit_plan(held: float, avg_price: float, close: float, stop_price: float,
             "proceeds_krw": round((notional - cost) * fx, 2),
             "realized_pnl_krw": round(((close - avg_price) * qty - cost) * fx, 2),
         })
+    # 1R = 현재가에서 손절선까지(2×ATR) — 이 앱이 포지션 사이징에 쓰는 리스크 단위.
+    # 손익을 %가 아니라 "감수하는 리스크의 몇 배"로 재면 익절·추격 판단이 직접 나온다
+    # (+27%보다 +2.1R이 행동에 가깝다). '평단 − 손절선'으로 재면 손절선이 평단 위로
+    # 올라간 수익 포지션에서 값이 사라지는데, 익절 판단이 가장 필요한 순간이 그때다.
+    r_unit = close - stop_price
     return {
         "held_quantity": round(held, 4),
         "avg_price": round(avg_price, 4),
+        "r_unit": round(r_unit, 4) if r_unit > 0 else None,
+        "r_multiple": round((close - avg_price) / r_unit, 2) if r_unit > 0 else None,
         "unrealized_pnl_pct": round((close / avg_price - 1) * 100, 2),
         "unrealized_pnl_krw": round((close - avg_price) * held * fx, 2),
         # 손절선이 평단 대비 어디인지 — 현재가 대비만 보면 이미 물린 폭이 안 보인다
         "stop_from_avg_pct": round((stop_price / avg_price - 1) * 100, 2),
+        # 손절선이 평단 위면 그 손절은 손실 확정이 아니라 이익 확정이다 —
+        # 같은 숫자를 붉게 칠하면 좋은 소식이 나쁜 소식으로 읽힌다
+        "stop_locks_profit": stop_price > avg_price,
         "risk_to_stop_krw": round(max(close - stop_price, 0.0) * held * fx, 2),
         "slices": slices,
     }
@@ -241,8 +251,14 @@ def build_portfolio(holdings: dict, prices: dict, tickers: dict, usdkrw,
         rows.append({"symbol": symbol, "name": info.get("name", symbol),
                      "market": info.get("market"), "currency": currency,
                      "quantity": h["quantity"], "avg_price": h["avg_price"],
-                     "close": close, "value": value, "pnl": pnl, "pnl_pct": pnl_pct})
+                     "close": close, "value": value, "pnl": pnl, "pnl_pct": pnl_pct,
+                     # 통화가 섞이면 종목 통화 표시만으로는 크기를 나란히 못 본다
+                     "value_krw": round(value * rate, 0) if value is not None else None,
+                     "weight_pct": None})
     total_asset = total_value + cash_total_krw
+    for r in rows:  # 비중 분모는 현금 포함 총자산 — 평가액만 쓰면 현금 비중만큼 부풀려진다
+        if r["value_krw"] is not None and total_asset:
+            r["weight_pct"] = round(r["value_krw"] / total_asset * 100, 1)
     totals = {"total_value_krw": round(total_value, 0),
               "total_cost_krw": round(total_cost, 0),
               "total_pnl_krw": round(total_value - total_cost, 0),
@@ -270,6 +286,47 @@ def _periods_per_year(index) -> float:
     if span_days <= 0:
         return 252.0
     return max(len(index) - 1, 1) / (span_days / 365.25)
+
+
+CLUSTER_CORR = 0.7  # 이 이상 동행하면 사실상 같은 포지션으로 본다
+
+
+def _corr_clusters(frame, weights: list, tickers: dict) -> list[dict]:
+    """상관 CLUSTER_CORR 이상으로 이어진 종목들을 한 묶음으로 합친다.
+
+    "최대 종목 비중 9.3%"는 안전해 보이지만 반도체 5종목이 0.7 이상으로 묶여
+    있으면 실제로 걸린 베팅은 그 합이다. 동반 하락 때 계좌가 맞는 타격은
+    종목별 비중이 아니라 이 묶음 크기에 가깝다.
+
+    이어짐(transitive)으로 묶는다 — A-B가 0.8, B-C가 0.8이면 A와 C가 직접
+    높지 않아도 같은 흐름을 타는 하나의 덩어리다.
+    """
+    m = frame.pct_change().corr()
+    symbols = list(m.columns)
+    parent = {s: s for s in symbols}
+
+    def find(s):
+        while parent[s] != s:
+            parent[s] = parent[parent[s]]
+            s = parent[s]
+        return s
+
+    for i, a in enumerate(symbols):
+        for b in symbols[i + 1:]:
+            v = float(m.loc[a, b])
+            if v >= CLUSTER_CORR:
+                parent[find(a)] = find(b)
+
+    w = {x["symbol"]: x["weight_pct"] for x in weights}
+    groups: dict[str, list] = {}
+    for s in symbols:
+        groups.setdefault(find(s), []).append(s)
+    out = [{"symbols": g,
+            "names": [tickers.get(s, {}).get("name", s) for s in g],
+            "weight_pct": round(sum(w.get(s, 0.0) for s in g), 1)}
+           for g in groups.values() if len(g) >= 2]
+    out.sort(key=lambda c: -c["weight_pct"])
+    return out
 
 
 def account_risk(holdings: dict, closes: dict, tickers: dict, usdkrw,
@@ -304,6 +361,7 @@ def account_risk(holdings: dict, closes: dict, tickers: dict, usdkrw,
           "weight_pct": round(v / total_asset * 100, 1)} for s, v in last_vals.items()],
         key=lambda w: -w["weight_pct"])
 
+    clusters = _corr_clusters(frame, weights, tickers) if len(frame.columns) >= 2 else []
     corr = None
     if len(frame.columns) >= 2:
         m = frame.pct_change().corr()
@@ -316,6 +374,10 @@ def account_risk(holdings: dict, closes: dict, tickers: dict, usdkrw,
         "days": len(frame),
         "weights": weights,
         "max_weight_pct": weights[0]["weight_pct"] if weights else None,
+        # 종목별 비중이 낮아도 상관 높은 묶음의 합산이 실제로 걸린 베팅 크기다
+        "clusters": clusters,
+        "max_cluster_pct": clusters[0]["weight_pct"] if clusters else None,
+        "cluster_threshold": CLUSTER_CORR,
         "volatility_pct": round(float(rets.std() * (ppy ** 0.5) * 100), 1),
         "periods_per_year": round(ppy, 1),
         "mdd_pct": round(mdd, 2),

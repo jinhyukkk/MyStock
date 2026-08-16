@@ -26,7 +26,7 @@ GRADE_ORDER = ["강력매수", "매수", "중립", "매도", "강력매도"]
 COST_PCT = 0.3  # 시장·유동성을 모를 때의 폴백 (%p). 실제로는 costs.backtest_cost_pct 사용
 STOP_ATR_MULT = 2.0  # service._risk_block의 손절 폭과 동일하게 유지할 것
 MIN_EPISODES = 20  # 비중첩 에피소드가 이보다 적으면 수치를 신뢰 구간째로 숨긴다
-VERSION = 5  # 결과 스키마 버전 — 올리면 저장된 백테스트 캐시가 무효화된다
+VERSION = 6  # 결과 스키마 버전 — 올리면 저장된 백테스트 캐시가 무효화된다
 
 
 def _exit_price(o, h_, l_, c_, entry_i: int, exit_i: int, stop: float | None):
@@ -98,6 +98,35 @@ def _aggregate(records: list[dict], grade_key: str, horizons, cost_pct: float) -
             entry[f"avg_excess{h}"] = round(sum(exs) / len(exs), 2) if exs else None
         grades.append(entry)
     return grades, missing
+
+
+BUY_GRADES = ("강력매수", "매수")
+SELL_GRADES = ("매도", "강력매도")
+
+
+def discrimination(grades: list[dict], horizon: int) -> dict | None:
+    """등급 판별력 — 매수 등급 성적에서 매도 등급 성적을 뺀 값(%p, 비용 차감 후).
+
+    상승장 구간에서는 모든 등급의 h일 평균이 플러스로 나온다. 요약 카드가
+    "이 등급 승률 62%"만 보여주면 그 62%가 중립 등급 50%와 다를 게 없다는 사실,
+    나아가 매도 등급이 매수보다 나았다는 사실이 아래 표 속에 묻힌다.
+    표본이 모자라 수치를 감춘 칸은 계산에서도 뺀다 — 감춘 값을 근거로 쓸 수는 없다.
+    """
+    def side(names):
+        vals = [g[f"avg_net{horizon}"] for g in grades
+                if g["grade"] in names
+                and g.get(f"insufficient{horizon}") is not True
+                and g.get(f"avg_net{horizon}") is not None]
+        # 집계값은 numpy float으로 들어온다 — 그대로 두면 비교 결과가 numpy.bool_ 이
+        # 되어 결과를 캐시에 저장할 때 JSON 직렬화가 깨지고 API 전체가 500이 된다
+        return round(float(sum(vals) / len(vals)), 2) if vals else None
+
+    buy, sell = side(BUY_GRADES), side(SELL_GRADES)
+    if buy is None or sell is None:
+        return None
+    spread = round(buy - sell, 2)
+    return {"horizon": horizon, "buy_net": buy, "sell_net": sell,
+            "spread": spread, "discriminates": bool(spread > 0)}
 
 
 def backtest_ticker(df: pd.DataFrame, bench: pd.DataFrame | pd.Series | None = None,
@@ -178,6 +207,8 @@ def backtest_ticker(df: pd.DataFrame, bench: pd.DataFrame | pd.Series | None = N
         "entry_rule": "신호 다음 거래일 시가 체결",
         "exit_rule": f"{STOP_ATR_MULT:g}×ATR 손절 터치 시 청산, 아니면 보유 기간 종가",
         "grades": grades,
+        # 등급이 방향을 가르는지 한 숫자로 — 상승장에서는 전 등급이 플러스로 나온다
+        "discrimination": {str(h): discrimination(grades, h) for h in HORIZONS},
         "missing_grades": missing,
         "longterm_grades": long_grades,
         "missing_longterm_grades": long_missing,

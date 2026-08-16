@@ -10,6 +10,8 @@ export interface SignalRow {
   swing_score: number; swing_grade: string;
   longterm_score: number; longterm_grade: string;
   grade_changed: boolean; is_holding: boolean; in_watchlist: boolean;
+  // 상향(+1)/하향(-1) — 불리언만으로는 강등에도 상승색 배지가 붙는다
+  grade_change_dir: number; prev_grade: string | null;
   avg_price: number | null; holding_pnl_pct: number | null;
   context_note: string | null; summary: string | null;
   summary_tags: { label: string; score: number; warn: boolean }[];
@@ -58,8 +60,10 @@ export interface TickerRisk {
 }
 export interface ExitPlan {
   held_quantity: number; avg_price: number;
+  // 손익을 '감수한 리스크의 몇 배'로 잰 값 — 손절선이 평단 위면 null
+  r_unit: number | null; r_multiple: number | null;
   unrealized_pnl_pct: number; unrealized_pnl_krw: number;
-  stop_from_avg_pct: number; risk_to_stop_krw: number;
+  stop_from_avg_pct: number; risk_to_stop_krw: number; stop_locks_profit: boolean;
   slices: { label: string; quantity: number;
             proceeds_krw: number; realized_pnl_krw: number }[];
 }
@@ -78,11 +82,14 @@ export interface TickerDetail {
   cost_rates: { fee_pct: number; sell_tax_pct: number };
   history: { date: string; swing_score: number; longterm_score: number; grade: string }[];
   rules: { id: number; symbol: string; rule_type: string; value: number }[];
+  last_refresh: string | null;
 }
 export interface Holding {
   symbol: string; name: string; market: string; currency: string;
   quantity: number; avg_price: number; close: number | null;
   value: number | null; pnl: number | null; pnl_pct: number | null;
+  // 통화가 섞이면 종목 통화 표시만으로는 포지션 크기를 나란히 볼 수 없다
+  value_krw: number | null; weight_pct: number | null;
 }
 export interface RealizedEntry {
   symbol: string; trade_date: string; quantity: number;
@@ -112,11 +119,20 @@ export interface Portfolio {
   realized: { entries: RealizedEntry[]; stats: RealizedStats };
   risk: AccountRisk | null;
   open_risk: OpenRisk | null;
+  last_refresh: string | null;
+}
+/** 등급이 방향을 가르는가 — 매수 등급 성적 − 매도 등급 성적 (%p, 비용 차감 후) */
+export interface Discrimination {
+  horizon: number; buy_net: number; sell_net: number;
+  spread: number; discriminates: boolean;
 }
 export interface AccountRisk {
   days: number;
   weights: { symbol: string; name: string; weight_pct: number }[];
   max_weight_pct: number | null;
+  // 상관 0.7+ 로 묶인 종목들 — 종목별 비중이 낮아도 이 합이 실제 베팅 크기다
+  clusters: { symbols: string[]; names: string[]; weight_pct: number }[];
+  max_cluster_pct: number | null; cluster_threshold: number;
   volatility_pct: number;
   periods_per_year: number;  // 거래일 교집합에서 실측한 연간 관측 수 (주식 ~252, 코인 ~365)
   mdd_pct: number;
@@ -139,6 +155,7 @@ export interface Backtest {
   max_episodes: Record<string, number>;
   entry_rule: string; exit_rule: string;
   grades: BacktestGrade[];
+  discrimination: Record<string, Discrimination | null>;
   longterm_grades: BacktestGrade[];
   // 관측 기간 중 0회 — 빈 행을 "아직 안 쌓임"으로 오해하지 않도록 명시한다
   missing_grades: string[];

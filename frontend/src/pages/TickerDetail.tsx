@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { createChart, CandlestickSeries, LineSeries, HistogramSeries, LineStyle, type IChartApi } from 'lightweight-charts'
 import { del, get, post } from '../api'
+import { isStale, relativeTime } from '../time'
 import type { Backtest, TickerDetail as Detail } from '../types'
 import SignalBadge from '../components/SignalBadge'
 import ScoreBar from '../components/ScoreBar'
@@ -123,10 +124,27 @@ export default function TickerDetail() {
   const [ruleValue, setRuleValue] = useState('')
   const [ruleMsg, setRuleMsg] = useState<string | null>(null)
   const [tradeOpen, setTradeOpen] = useState<'BUY' | 'SELL' | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [now, setNow] = useState(Date.now())
   const { mainRef, rsiRef, macdRef } = useCandleChart(detail)
 
   const load = () => get<Detail>(`/api/tickers/${symbol}`)
-    .then(d => { setDetail(d); setError(null) }).catch(e => setError(String(e)))
+    .then(d => { setDetail(d); setError(null); setNow(Date.now()) })
+    .catch(e => setError(String(e)))
+
+  /** 이 종목만 갱신 — 전체 갱신은 수 초 걸린다. 백테스트도 새 봉으로 다시 받는다. */
+  const refresh = async () => {
+    setBusy(true)
+    try {
+      await post(`/api/refresh?symbol=${encodeURIComponent(symbol!)}`)
+      await load()
+      setBtLoading(true); setBtError(null)
+      await get<Backtest>(`/api/tickers/${symbol}/backtest`)
+        .then(setBacktest).catch(e => setBtError(String(e)))
+        .finally(() => setBtLoading(false))
+    } catch (e) { setError(String(e)) }
+    finally { setBusy(false) }
+  }
   useEffect(() => {
     load()
     setBacktest(null); setBtError(null); setBtLoading(true)
@@ -162,6 +180,8 @@ export default function TickerDetail() {
     && dir(sig.swing_grade) !== dir(sig.longterm_grade)
   const hasStopRule = detail.rules.some(r => r.rule_type === 'STOP')
   const v = verdict(detail)
+  const disc = backtest?.discrimination?.['20'] ?? null
+  const stale = isStale(detail.last_refresh, now)
   const plan = detail.risk?.exit_plan ?? null
   // 보유 + 매도 신호에서 '추가 매수 가능'을 띄우는 것은 물타기 유도다 — 그 줄만 접는다
   const holdingSellSignal = !!plan && !!sig && dir(sig.swing_grade) < 0
@@ -218,7 +238,18 @@ export default function TickerDetail() {
                 미검증</div>}
             </div>
           </>}
-          <button onClick={() => setTradeOpen(holdingSellSignal ? 'SELL' : 'BUY')}>매매 기록</button>
+          {/* 갱신시각이 대시보드에만 있으면 이 화면의 가격이 언제 것인지 알 수 없다 */}
+          <div style={{ textAlign: 'right' }}>
+            <div className={stale ? 'warn' : ''} style={{ fontSize: 12,
+                   color: stale ? undefined : 'var(--text-dim)' }}
+                 title={detail.last_refresh ?? ''}>
+              {stale && '⚠ '}기준: {relativeTime(detail.last_refresh, now)}</div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+              <button className="ghost" onClick={refresh} disabled={busy}>
+                {busy ? '갱신 중…' : '새로고침'}</button>
+              <button onClick={() => setTradeOpen(holdingSellSignal ? 'SELL' : 'BUY')}>매매 기록</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -247,7 +278,11 @@ export default function TickerDetail() {
                                border: '1px solid var(--border)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between',
                         flexWrap: 'wrap', gap: 8 }}>
-            <strong>청산 플랜 — 보유 {plan.held_quantity.toLocaleString('ko-KR')}</strong>
+            <strong>청산 플랜 — 보유 {plan.held_quantity.toLocaleString('ko-KR')}
+              {/* +27%보다 +2.1R이 익절·추격 판단에 직접 닿는다 */}
+              {plan.r_multiple !== null && <span className={plan.r_multiple >= 0 ? 'pos' : 'neg'}
+                title={`1R = ${unit}${plan.r_unit?.toLocaleString('ko-KR')} (평단에서 손절선까지)`}>
+                {' '}{plan.r_multiple >= 0 ? '+' : ''}{plan.r_multiple}R</span>}</strong>
             <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>
               평단 {unit}{plan.avg_price.toLocaleString('ko-KR')}</span>
           </div>
@@ -261,11 +296,16 @@ export default function TickerDetail() {
                   {' '}(₩{Math.round(plan.unrealized_pnl_krw).toLocaleString('ko-KR')})</span></div>
             </div>
             <div>
-              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>손절선 (평단 대비)</div>
-              <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--sell)' }}>
-                {plan.stop_from_avg_pct}%</div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+                {/* 손절선이 평단 위면 그 손절은 손실 확정이 아니라 이익 확정이다 */}
+                {plan.stop_locks_profit ? '손절선 (이익 확정 구간)' : '손절선 (평단 대비)'}</div>
+              <div style={{ fontWeight: 700, fontSize: 18,
+                            color: plan.stop_locks_profit ? 'var(--buy)' : 'var(--sell)' }}>
+                {plan.stop_from_avg_pct >= 0 ? '+' : ''}{plan.stop_from_avg_pct}%</div>
               <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
-                여기서 손절까지 ₩{Math.round(plan.risk_to_stop_krw).toLocaleString('ko-KR')} 추가 손실</div>
+                {plan.stop_locks_profit
+                  ? `손절에 닿아도 평단 위에서 청산됩니다 · 여기서 ₩${Math.round(plan.risk_to_stop_krw).toLocaleString('ko-KR')} 되돌림`
+                  : `여기서 손절까지 ₩${Math.round(plan.risk_to_stop_krw).toLocaleString('ko-KR')} 추가 손실`}</div>
             </div>
           </div>
           <table style={{ marginTop: 10 }}>
@@ -324,7 +364,15 @@ export default function TickerDetail() {
             </div>}
             <div>
               <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
-                이 등급의 과거 성적 (20일)</div>
+                이 등급의 과거 성적 (20일)
+                {/* 승률 62%만 크게 보여주면 그 62%가 중립 등급 50%와 다를 게 없다는
+                    사실, 나아가 매도 등급이 더 나았다는 사실이 아래 표 속에 묻힌다 */}
+                {disc && !disc.discriminates && <span className="warn" title={
+                  `매수 등급 ${disc.buy_net}% vs 매도 등급 ${disc.sell_net}% (20일 순수익)`}>
+                  {' '}· ⚠ 등급이 방향을 못 가름 ({disc.spread}%p)</span>}
+                {disc && disc.discriminates && <span style={{ color: 'var(--text-dim)' }} title={
+                  `매수 등급 ${disc.buy_net}% vs 매도 등급 ${disc.sell_net}% (20일 순수익)`}>
+                  {' '}· 판별력 +{disc.spread}%p</span>}</div>
               <div style={{ fontWeight: 700, fontSize: 18 }}>
                 {gradeStat && gradeStat.insufficient20 !== true && typeof gradeStat.win20 === 'number'
                   ? <>승률 {gradeStat.win20}%
