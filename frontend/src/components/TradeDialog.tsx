@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { post } from '../api'
 import { cashClampWarning, type TradeResult } from '../trade'
-import type { ExitPlan } from '../types'
+import type { EntryReview, ExitPlan } from '../types'
 
 /** 종목 상세에서 바로 매매를 기록하는 모달.
  *  기록이 포트폴리오 탭 최하단에만 있으면 "판단 → 주문 → 기록" 사이에 탭 이동과
@@ -9,7 +9,7 @@ import type { ExitPlan } from '../types'
  *  실현손익·진입 등급별 성과 같은 이 앱의 복기 기능이 통째로 비어버린다. */
 export default function TradeDialog({ symbol, name, currency, defaultPrice, defaultSide,
                                       defaultQuantity, costRates, exitPlan, suggestedQuantity,
-                                      cash, onClose, onSaved }: {
+                                      cash, entryReview, position, onClose, onSaved }: {
   symbol: string
   name: string
   currency: string
@@ -26,6 +26,11 @@ export default function TradeDialog({ symbol, name, currency, defaultPrice, defa
   defaultQuantity?: number | null
   /** 예수금 — 체결 후 잔액을 미리 보여준다 */
   cash?: { krw: number; usd: number }
+  /** 이 포지션을 처음 열었을 때의 근거 — 물타기 판단의 실제 재료 */
+  entryReview?: EntryReview | null
+  /** 체결 후 손실액·비중을 낼 근거. 손절선은 화면이 쓰는 값과 같아야 한다. */
+  position?: { stopPrice: number; stopSource: 'rule' | 'atr';
+               totalAssetKrw: number; fxRate: number; maxWeightPct: number } | null
   onClose: () => void
   onSaved: () => void
 }) {
@@ -60,6 +65,9 @@ export default function TradeDialog({ symbol, name, currency, defaultPrice, defa
   const save = async () => {
     const q = Number(quantity), p = Number(price)
     if (!(q > 0) || !(p > 0)) { setMsg('수량·단가를 확인하세요 (0 이하 불가)'); return }
+    if (side === 'BUY' && (exitPlan?.held_quantity ?? 0) > 0 && !note.trim()) {
+      setMsg('추가매수는 "왜 아직 보유 중인지"를 남겨야 기록됩니다'); return
+    }
     setBusy(true)
     try {
       const res = await post<TradeResult>('/api/trades',
@@ -95,6 +103,25 @@ export default function TradeDialog({ symbol, name, currency, defaultPrice, defa
   const cashAfter = cashNow !== null && notional !== null
     ? cashNow + (side === 'BUY' ? -(notional + (estCost ?? 0)) : notional - (estCost ?? 0))
     : null
+
+  // ── 물타기(기존 포지션 추가매수) ──
+  // 화면이 평단 대비 %만 보여주면 판단은 "얼마나 물렸나"로 좁혀진다. 물타기를
+  // 결정하는 질문은 그게 아니라 "처음 산 이유가 아직 서 있나"이고, 그 답에
+  // 필요한 재료(진입 메모·진입 시 등급)는 원장에 있는데 꺼내 쓴 적이 없었다.
+  const averagingDown = side === 'BUY' && held > 0
+  const avgNow = exitPlan?.avg_price ?? null
+  const newAvg = averagingDown && avgNow !== null && q > 0 && p > 0
+    ? (avgNow * held + p * q) / (held + q) : null
+  // 손절선은 추가매수로 움직이지 않는다 — 움직이는 건 그 선에 닿았을 때 잃는 돈이다.
+  // "손절폭이 줄었다"는 착시가 물타기를 정당화하는 가장 흔한 자리다.
+  const stop = position?.stopPrice ?? null
+  const lossAtStop = stop !== null && avgNow !== null ? (avgNow - stop) * held : null
+  const lossAtStopAfter = stop !== null && newAvg !== null ? (newAvg - stop) * (held + q) : null
+  const weightAfter = position && notional !== null && position.totalAssetKrw > 0
+    ? ((held + q) * p * position.fxRate) / position.totalAssetKrw * 100 : null
+  const overWeight = weightAfter !== null && weightAfter > position!.maxWeightPct
+  // 근거를 적지 않고 크기를 키우는 것이 이 계좌의 실패 방식이었다면, 마찰은 기능이다.
+  const reasonRequired = averagingDown && !note.trim()
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
@@ -154,10 +181,56 @@ export default function TradeDialog({ symbol, name, currency, defaultPrice, defa
           </div>
         </div>
         <div className="modal-row">
-          <label htmlFor="td-note">메모 — 진입/청산 근거를 남기면 나중에 복기할 수 있다</label>
+          <label htmlFor="td-note">
+            {averagingDown
+              ? '왜 아직 보유 중인가 — 최초 진입 논리가 지금도 유효한 이유 (필수)'
+              : '메모 — 진입/청산 근거를 남기면 나중에 복기할 수 있다'}</label>
           <input id="td-note" value={note} onChange={e => setNote(e.target.value)}
-                 placeholder="예: 20일선 돌파, 손절 -5%" />
+                 placeholder={averagingDown
+                   ? '예: 실적 가이던스 유지, 20일선 지지 확인 — 진입 근거 그대로'
+                   : '예: 20일선 돌파, 손절 -5%'} />
         </div>
+
+        {/* 물타기 재검증 — 크기를 키우기 전에 처음 산 이유를 다시 읽는 자리 */}
+        {averagingDown && <div className="warn-box" style={{ marginTop: 12, fontSize: 12,
+          borderColor: entryReview?.grade_downgraded ? 'var(--warn)' : undefined }}>
+          <strong>이미 보유 중인 종목입니다 — 추가매수 전 진입 논리 확인</strong>
+          <div style={{ marginTop: 6, color: 'var(--text)' }}>
+            {entryReview ? <>
+              <div>최초 진입 {entryReview.first_entry_date} · {unit}{fmt(entryReview.first_entry_price)}
+                {entryReview.buy_count > 1 &&
+                  <span style={{ color: 'var(--text-dim)' }}> · 이미 {entryReview.buy_count}회 매수</span>}</div>
+              {/* 메모를 빈칸으로 두면 근거가 있었던 것처럼 읽힌다 */}
+              <div style={{ marginTop: 2 }}>진입 근거: {entryReview.entry_note
+                ? <em>“{entryReview.entry_note}”</em>
+                : <span className="warn">기록되지 않았습니다 — 지금 확인할 방법이 없습니다</span>}</div>
+              <div style={{ marginTop: 2 }}>
+                진입 시 등급 {entryReview.entry_grade ?? '기록 없음'} → 현재 {entryReview.current_grade ?? '—'}
+                {entryReview.grade_downgraded &&
+                  <span className="warn"> · 진입 때보다 약해졌습니다</span>}</div>
+            </> : <div>진입 기록을 불러오지 못했습니다.</div>}
+          </div>
+          {/* 손절선은 추가매수로 움직이지 않는다 — 커지는 건 그 선에서 잃을 돈이다.
+              "평단이 내려가서 손절폭이 줄었다"는 착시가 물타기를 정당화하는 자리다. */}
+          {newAvg !== null && <div style={{ marginTop: 8, color: 'var(--text)' }}>
+            <div>평단 {unit}{fmt(avgNow!)} → <strong>{unit}{fmt(newAvg)}</strong>
+              {' · '}수량 {fmt(held)} → {fmt(held + q)}</div>
+            {lossAtStop !== null && lossAtStopAfter !== null && stop !== null && (
+              <div style={{ marginTop: 2 }}>
+                손절선 {unit}{fmt(stop)}
+                <span style={{ color: 'var(--text-dim)' }}>
+                  {position?.stopSource === 'atr' ? ' (2×ATR 가정, 룰 미등록)' : ' (등록 룰)'}</span>
+                {' '}도달 시 손실 {unit}{fmt(Math.max(lossAtStop, 0))}
+                {' → '}<strong className="warn">{unit}{fmt(Math.max(lossAtStopAfter, 0))}</strong>
+              </div>)}
+            {weightAfter !== null && <div style={{ marginTop: 2 }}>
+              체결 후 비중 {weightAfter.toFixed(1)}%
+              {overWeight && <span className="warn"> — 종목 상한 {position!.maxWeightPct}% 초과</span>}
+            </div>}
+          </div>}
+          {reasonRequired && <div style={{ marginTop: 8 }}>
+            위 메모 칸에 <strong>왜 아직 보유 중인지</strong> 적어야 기록할 수 있습니다.</div>}
+        </div>}
 
         {/* 주문 프리뷰 — 체결금액과 비용을 기록 전에 보여주지 않으면
             사이즈 오류를 원장에 남긴 뒤에야 알게 된다. */}
@@ -195,7 +268,10 @@ export default function TradeDialog({ symbol, name, currency, defaultPrice, defa
             ? <button onClick={onClose}>확인</button>
             : <>
                 <button className="ghost" onClick={onClose}>취소</button>
-                <button onClick={save} disabled={busy}>{busy ? '저장 중…' : '기록'}</button>
+                <button onClick={save} disabled={busy || reasonRequired}
+                        title={reasonRequired
+                          ? '추가매수는 보유 근거를 남겨야 기록됩니다' : undefined}>
+                  {busy ? '저장 중…' : '기록'}</button>
               </>}
         </div>
       </div>

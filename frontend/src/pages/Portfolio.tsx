@@ -73,6 +73,9 @@ export default function Portfolio() {
   const [cashInput, setCashInput] = useState<string>('')
   const [cashUsdInput, setCashUsdInput] = useState<string>('')
   const [cashWarn, setCashWarn] = useState<string | null>(null)
+  // 목표 종목 수 — 스타일이 바뀌면 룰도 바뀌어야 한다. 상수로 박아두면
+  // 화면이 남의 규율을 강요하게 되고, 그런 경고는 며칠 만에 무시된다.
+  const [posRule, setPosRule] = useState({ min: '', max: '' })
   const [now, setNow] = useState(Date.now())
 
   // 빈 입력은 "변경 없음". 빈 값을 0으로 보내면 예수금이 소리 없이 사라지고,
@@ -102,12 +105,23 @@ export default function Portfolio() {
     catch (e) { setMsg(String(e)) }
   }
 
+  const savePositionRule = async () => {
+    const min = Number(posRule.min), max = Number(posRule.max)
+    if (!Number.isInteger(min) || !Number.isInteger(max) || min < 1 || min > max) {
+      setMsg('목표 종목 수는 1 이상이어야 하고 최소 ≤ 최대여야 합니다'); return
+    }
+    try { await put('/api/position-rule', { min, max }); setMsg(null); load() }
+    catch (e) { setMsg(String(e)) }
+  }
+
   const load = () => Promise.all([
     get<PF>('/api/portfolio'),
     get<Trade[]>('/api/trades'),
     get<CashFlow[]>('/api/cash-flows'),
-  ]).then(([p, tr, fl]) => {
+    get<{ min: number; max: number }>('/api/position-rule'),
+  ]).then(([p, tr, fl, pr]) => {
     setPf(p); setTrades(tr); setFlows(fl); setError(null); setNow(Date.now())
+    setPosRule({ min: String(pr.min), max: String(pr.max) })
     // 현재 저장된 값을 프리필 — 한쪽만 고치려다 다른 쪽을 날리는 일이 없게
     setCashInput(String(p.totals.cash_krw))
     setCashUsdInput(String(p.totals.cash_usd ?? 0))
@@ -238,6 +252,22 @@ export default function Portfolio() {
                    style={{ flex: '1 1 140px', minWidth: 0 }} />
             <button onClick={saveCash}>저장</button>
             <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>비우면 변경 없음</span>
+          </div>
+          {/* 목표 종목 수 — 비중 상한도 총 리스크도 지키면서 종목 수만 두 배가 된
+              계좌는 어떤 한도에도 걸리지 않는다. 추적 가능한 개수가 규율의 전제다. */}
+          <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center',
+                        flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>목표 종목 수</span>
+            <input type="number" min={1} value={posRule.min} aria-label="목표 종목 수 최소"
+                   onChange={e => setPosRule(r => ({ ...r, min: e.target.value }))}
+                   style={{ width: 64 }} />
+            <span style={{ color: 'var(--text-dim)' }}>~</span>
+            <input type="number" min={1} value={posRule.max} aria-label="목표 종목 수 최대"
+                   onChange={e => setPosRule(r => ({ ...r, max: e.target.value }))}
+                   style={{ width: 64 }} />
+            <button className="ghost" onClick={savePositionRule}>저장</button>
+            <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>
+              현재 {pf.holdings.length}종목 — 범위를 벗어나면 대시보드가 경고합니다</span>
           </div>
           {/* 예수금이 조용히 0으로 잘리면 총자산과 1% 리스크 수량이 함께 어긋난다 */}
           {cashWarn && <div className="warn-box" style={{ marginTop: 8 }}>⚠ {cashWarn}

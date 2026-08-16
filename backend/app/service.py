@@ -136,6 +136,20 @@ def get_cash_usd(conn) -> float:
     return float(raw) if raw else 0.0
 
 
+def get_target_positions(conn) -> tuple[int, int]:
+    """목표 보유 종목 수 (최소, 최대). 미설정이면 집중 투자 기본값."""
+    lo = db.get_meta(conn, "target_positions_min")
+    hi = db.get_meta(conn, "target_positions_max")
+    default_lo, default_hi = portfolio.DEFAULT_TARGET_POSITIONS
+    return (int(lo) if lo else default_lo, int(hi) if hi else default_hi)
+
+
+def set_target_positions(conn, target_min: int, target_max: int) -> tuple[int, int]:
+    db.set_meta(conn, "target_positions_min", str(int(target_min)))
+    db.set_meta(conn, "target_positions_max", str(int(target_max)))
+    return get_target_positions(conn)
+
+
 def apply_trade_to_cash(conn, trade: dict, ticker_row, reverse: bool = False) -> dict:
     """체결 금액만큼 예수금을 증감한다 (매수 −, 매도 +). 삭제 시 reverse=True로 되돌린다.
 
@@ -386,9 +400,27 @@ def get_dashboard(conn) -> dict:
     pf = portfolio.build_portfolio(holdings, prices, tickers_map, senti.get("usdkrw"),
                                    cash_krw=get_cash_krw(conn), cash_usd=get_cash_usd(conn))
     avg_prices = {s: h["avg_price"] for s, h in holdings.items()}
+    # 종목 수 룰은 비중·리스크 한도를 모두 통과하는 계좌에서도 깨진다 —
+    # 추적할 수 있는 개수를 넘기면 손절 규율이 비중과 무관하게 무너진다.
+    swing = {s["symbol"]: s["swing_score"] for s in signals}
+    lo, hi = get_target_positions(conn)
+    pos_rule = portfolio.position_rule(
+        [{"symbol": r["symbol"], "name": r["name"], "weight_pct": r["weight_pct"],
+          "swing_score": swing.get(r["symbol"])} for r in pf["holdings"]], lo, hi)
     return {
         "sentiment": senti,
         "portfolio_summary": {**pf["totals"], "holdings_count": len(holdings)},
+        "position_rule": pos_rule,
+        # 점수만 던지면 -21이 얼마나 나쁜지 화면에 눈금이 없다. 게다가 스윙과
+        # 중장기는 컷이 서로 달라(+11 vs +36) 같은 자로 읽으면 반드시 오독된다.
+        "score_scale": {k: dict(zip(("strong_buy", "buy", "sell", "strong_sell"), cuts))
+                        for k, cuts in (("swing", scoring.SWING_CUTS),
+                                        ("longterm", scoring.LONGTERM_CUTS))},
+        # 룰을 등록하지 않은 보유는 알림이 울리지 않는다. 종목 옆의 '룰 미등록'
+        # 표기만으로는 몇 개가 무방비인지 세어보게 되지 않는다.
+        "unstopped": [{"symbol": s, "name": tickers_map.get(s, {}).get("name", s),
+                       "atr_stop_price": price}
+                      for s, (price, src) in stops.items() if src == "atr"],
         "signals": signals,
         "rule_alerts": check_rules(conn, bars, avg_prices),
         "last_refresh": db.get_meta(conn, "last_refresh"),
@@ -565,6 +597,10 @@ def _risk_block(conn, enriched: pd.DataFrame, currency: str,
         "mdd_pct": round(indicators.max_drawdown_pct(enriched["close"]), 2),
         **_target_block(enriched, close, atr, stop),
         "max_weight_pct": round(MAX_WEIGHT * 100, 1),
+        # 화면이 '체결 후 비중'을 낼 때 쓸 분모와 환율. 프론트가 다른 값에서
+        # 역산하게 두면 사이징 규칙이 바뀌는 순간 비중만 조용히 틀려진다.
+        "total_asset_krw": total,
+        "fx_rate": round(fx, 4),
         "account_open_risk": pf.get("open_risk"),
         "position_size_1pct": None, "risk_budget_krw": None,
         "position_size_capped": False, "cap_reason": None,
@@ -725,4 +761,44 @@ def get_ticker_detail(conn, symbol) -> dict | None:
                      "longterm_score": r["longterm_score"], "grade": r["grade"]}
                     for r in db.load_signal_history(conn, symbol)],
         "rules": [dict(r) for r in db.list_rules(conn, symbol)],
+        # 물타기 직전에 필요한 것은 평단 대비 %가 아니라 "왜 샀는지가 아직 유효한가"다
+        "entry_review": _entry_review(conn, symbol, sig),
+    }
+
+
+def _entry_review(conn, symbol: str, sig) -> dict | None:
+    """이 포지션을 처음 열었을 때의 근거와, 그 근거가 지금도 서 있는지.
+
+    추가매수 화면이 평단과 손익률만 보여주면 판단은 "얼마나 물렸나"로 좁혀진다.
+    물타기를 결정하는 질문은 그게 아니라 최초 진입 논리가 아직 유효한가이고,
+    그 답에 필요한 재료(진입 메모·진입 시 등급)는 이미 원장에 있는데 화면이
+    한 번도 꺼내 쓰지 않았다.
+
+    최초 진입은 **현재 포지션이 시작된 시점**이다. 전량 매도했다가 다시 산
+    종목의 근거를 몇 달 전 청산된 포지션에서 가져오면 남의 논리로 물타기한다.
+    """
+    trades = [dict(r) for r in db.list_trades(conn, symbol)]
+    qty, first = 0.0, None
+    for t in trades:
+        if qty <= 1e-9:  # 포지션이 비어 있던 자리에서 새로 열린 진입
+            first = t if t["side"] == "BUY" else None
+        qty += t["quantity"] if t["side"] == "BUY" else -t["quantity"]
+    if qty <= 1e-9 or first is None:
+        return None
+    buys = [t for t in trades if t["side"] == "BUY"
+            and t["trade_date"] >= first["trade_date"]]
+    current = sig["grade"] if sig else None
+    entry_grade = first.get("grade_at_trade")
+    order = backtest.GRADE_ORDER[::-1]  # 강력매도 … 강력매수
+    downgraded = bool(entry_grade and current and entry_grade in order and current in order
+                      and order.index(current) < order.index(entry_grade))
+    return {
+        "first_entry_date": first["trade_date"],
+        "first_entry_price": first["price"],
+        "entry_note": first.get("note") or None,
+        "entry_grade": entry_grade,
+        "current_grade": current,
+        "grade_downgraded": downgraded,
+        # 이미 여러 번 탄 포지션이면 이번이 첫 물타기가 아니다
+        "buy_count": len(buys),
     }

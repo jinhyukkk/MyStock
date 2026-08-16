@@ -5,6 +5,44 @@ from app import costs
 MARKET_LABELS = {"KR": "한국 주식", "US": "미국 주식", "CRYPTO": "암호화폐"}
 DEFAULT_USDKRW = 1400.0
 MAX_ACCOUNT_RISK_PCT = 6.0  # 모든 보유의 2×ATR 손실을 합친 계좌 총 리스크 상한
+DEFAULT_TARGET_POSITIONS = (4, 7)  # 집중 투자 스타일의 목표 종목 수 (설정에서 변경 가능)
+MIN_TRIM_CANDIDATES = 3  # 초과분이 1개여도 고를 여지를 남긴다
+
+
+def position_rule(rows: list[dict], target_min: int, target_max: int) -> dict:
+    """보유 종목 수가 목표 범위 안에 있는지, 벗어났다면 무엇을 덜어낼지.
+
+    종목별 비중 상한(MAX_WEIGHT)과 계좌 총 리스크(MAX_ACCOUNT_RISK_PCT)는 이미
+    보고 있지만, 둘 다 통과하면서 종목 수만 두 배가 되는 계좌는 아무 경고도
+    받지 않는다. 12종목은 각각 8%씩이라 비중 위반이 아니고, 손절폭이 작으면
+    총 리스크도 한도 안이다. 그런데 12종목을 매일 추적하지 못하면 손절 규율은
+    비중과 무관하게 무너진다 — 그래서 개수 자체를 룰로 둔다.
+
+    rows: [{symbol, name, weight_pct, swing_score}]
+    """
+    count = len(rows)
+    status = "over" if count > target_max else "under" if count < target_min else "ok"
+    # 후보 순서: ① 스윙 매도 신호 — 시그널이 이미 나가라고 말한 것,
+    # ② 비중 하위 — 계좌 수익엔 기여 못 하면서 주의만 나눠 갖는 포지션.
+    # 비중만으로 줄을 세우면 "비중 큰 강력매도"가 후보에서 빠진다.
+    def order(r):
+        score, weight = r.get("swing_score") or 0.0, r.get("weight_pct") or 0.0
+        return (0, score) if score < 0 else (1, weight)
+
+    excess = max(count - target_max, 0)
+    candidates = []
+    if status == "over":
+        n = min(max(excess, MIN_TRIM_CANDIDATES), count)
+        candidates = [{"symbol": r["symbol"], "name": r.get("name", r["symbol"]),
+                       "weight_pct": r.get("weight_pct"),
+                       "swing_score": r.get("swing_score"),
+                       # 왜 이 종목이 목록에 올라왔는지 — 이유 없는 명단은 따르지 않는다
+                       "reason": ("스윙 매도 신호" if (r.get("swing_score") or 0) < 0
+                                  else "비중 하위")}
+                      for r in sorted(rows, key=order)[:n]]
+    return {"count": count, "min": target_min, "max": target_max, "status": status,
+            "excess": excess, "shortfall": max(target_min - count, 0),
+            "trim_candidates": candidates}
 
 
 def _trade_costs(t: dict, info: dict) -> tuple[float, float, bool]:

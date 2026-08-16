@@ -25,12 +25,29 @@ export interface RuleAlert {
   symbol: string; name: string; rule_type: string; value: number; message: string;
   intraday_only: boolean;  // 장중에만 터치하고 종가는 되돌아온 경우
 }
+/** 보유 종목 수 룰. 비중·리스크 한도를 다 지키면서 종목 수만 두 배가 된 계좌는
+ *  지금까지 어떤 경고도 받지 못했다 — 추적 가능한 개수 자체가 규율의 전제다. */
+export interface PositionRule {
+  count: number; min: number; max: number;
+  status: 'ok' | 'over' | 'under';
+  excess: number; shortfall: number;
+  trim_candidates: { symbol: string; name: string; weight_pct: number | null;
+                     swing_score: number | null; reason: string }[];
+}
+/** 등급 컷 — 점수 옆에 눈금이 없으면 -21이 얼마나 나쁜지 화면에 나타나지 않는다 */
+export interface ScoreCuts {
+  strong_buy: number; buy: number; sell: number; strong_sell: number;
+}
 export interface Dashboard {
   sentiment: Sentiment;
   portfolio_summary: { total_value_krw: number; total_pnl_krw: number;
     total_pnl_pct: number; total_pnl_pct_of_asset: number; holdings_count: number;
     cash_krw: number; cash_usd: number; cash_usd_krw: number;
     total_asset_krw: number; cash_pct: number };
+  position_rule: PositionRule;
+  /** 보유 중인데 STOP 룰이 없는 종목 — 알림이 울리지 않는 자리다 */
+  unstopped: { symbol: string; name: string; atr_stop_price: number }[];
+  score_scale: { swing: ScoreCuts; longterm: ScoreCuts };
   signals: SignalRow[]; rule_alerts: RuleAlert[];
   last_refresh: string | null; failed_sources: string[];
 }
@@ -62,6 +79,9 @@ export interface TickerRisk {
   position_size_1pct: number | null; risk_budget_krw: number | null;
   // 1% 룰 수량이 종목 상한을 넘어 잘렸는지 — 잘리지 않은 수량은 계좌 전액을 넘길 수 있다
   position_size_capped: boolean; cap_reason: string | null; max_weight_pct: number;
+  // 화면이 '체결 후 비중'을 낼 때 쓰는 분모와 환율 — 프론트가 역산하면 규칙이
+  // 바뀌는 순간 비중만 조용히 틀려진다
+  total_asset_krw: number; fx_rate: number;
   position_notional_krw: number | null;
   held_quantity: number | null; addable_quantity: number | null;
   account_open_risk: OpenRisk | null;
@@ -111,7 +131,16 @@ export interface TickerDetail {
   dividends: DividendView;
   history: { date: string; swing_score: number; longterm_score: number; grade: string }[];
   rules: { id: number; symbol: string; rule_type: string; value: number }[];
+  /** 현재 포지션을 열었을 때의 근거. 물타기는 "얼마나 물렸나"가 아니라
+   *  "그때 산 이유가 아직 서 있나"로 결정해야 한다. 보유가 없으면 null. */
+  entry_review: EntryReview | null;
   last_refresh: string | null;
+}
+export interface EntryReview {
+  first_entry_date: string; first_entry_price: number;
+  entry_note: string | null; entry_grade: string | null;
+  current_grade: string | null; grade_downgraded: boolean;
+  buy_count: number;
 }
 export interface Holding {
   symbol: string; name: string; market: string; currency: string;

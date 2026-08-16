@@ -428,3 +428,20 @@ def test_portfolio_reports_dividends_and_total_return(client):
     row = next(h for h in pf["holdings"] if h["symbol"] == "005930")
     assert row["dividend_krw"] == 846
     assert row["total_return_krw"] == row["pnl_krw"] + 846
+
+def test_position_rule_target_is_settable(client):
+    assert client.get("/api/dashboard").json()["position_rule"]["max"] == 7
+    res = client.put("/api/position-rule", json={"min": 3, "max": 6})
+    assert res.status_code == 200 and res.json() == {"min": 3, "max": 6}
+    assert client.get("/api/dashboard").json()["position_rule"]["min"] == 3
+
+def test_position_rule_rejects_inverted_range(client):
+    """min > max면 어떤 개수든 위반이 된다 — 늘 빨간 화면은 곧 무시되는 화면이다."""
+    assert client.put("/api/position-rule", json={"min": 8, "max": 3}).status_code == 422
+    assert client.put("/api/position-rule", json={"min": 0, "max": 3}).status_code == 422
+
+def test_position_rule_is_readable_without_the_dashboard(client):
+    """설정 화면이 현재 목표를 프리필하려고 대시보드 전체를 다시 계산할 이유는 없다."""
+    assert client.get("/api/position-rule").json() == {"min": 4, "max": 7}
+    client.put("/api/position-rule", json={"min": 2, "max": 5})
+    assert client.get("/api/position-rule").json() == {"min": 2, "max": 5}

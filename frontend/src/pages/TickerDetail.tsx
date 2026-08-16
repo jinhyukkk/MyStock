@@ -332,6 +332,12 @@ export default function TickerDetail() {
         costRates={detail.cost_rates} exitPlan={detail.risk?.exit_plan}
         suggestedQuantity={detail.risk?.addable_quantity ?? detail.risk?.position_size_1pct}
         cash={detail.cash}
+        entryReview={detail.entry_review}
+        position={detail.risk ? { stopPrice: detail.risk.stop_price,
+                                  stopSource: detail.risk.stop_source,
+                                  totalAssetKrw: detail.risk.total_asset_krw,
+                                  fxRate: detail.risk.fx_rate,
+                                  maxWeightPct: detail.risk.max_weight_pct } : null}
         onClose={() => { setTradeOpen(null); setSellQuantity(null) }} onSaved={load} />}
 
       {/* 행동 요약 — 차트보다 위에 둔다. 차트 3개(600px)가 먼저 오면

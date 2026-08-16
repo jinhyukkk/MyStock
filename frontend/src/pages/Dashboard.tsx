@@ -4,6 +4,7 @@ import { get, post } from '../api'
 import type { Dashboard as DashboardData, SignalRow } from '../types'
 import SentimentGauge from '../components/SentimentGauge'
 import SignalBadge from '../components/SignalBadge'
+import ScoreScale from '../components/ScoreScale'
 import { isStale, relativeTime } from '../time'
 
 const fmt = (n: number | null, cur = 'KRW') =>
@@ -23,24 +24,36 @@ function conflictHint(sig: SignalRow): string | null {
     : '단기 매도 · 장기 매수 — 눌림목인지 추세 이탈인지 먼저 정하세요'
 }
 
-type FilterKey = 'all' | 'holding' | 'buy' | 'sell' | 'changed'
+type FilterKey = 'action' | 'all' | 'holding' | 'buy' | 'sell' | 'changed'
 // 손절선까지 이 거리 안에 들어오면 "임박"으로 본다. 하루 변동폭 안에 손절선이
 // 들어왔다는 뜻이라 다음 장에서 결정을 강요받을 수 있다.
 const STOP_NEAR_PCT = 2
 
 const FILTERS: { key: FilterKey; label: string }[] = [
+  { key: 'action', label: '액션 필요' },
   { key: 'all', label: '전체' },
   { key: 'holding', label: '보유' },
   { key: 'buy', label: '매수 신호' },
   { key: 'sell', label: '매도 신호' },
   { key: 'changed', label: '등급변경' },
 ]
-const matches: Record<FilterKey, (s: SignalRow) => boolean> = {
-  all: () => true,
-  holding: s => s.is_holding,
-  buy: s => dir(s.swing_grade) > 0,
-  sell: s => dir(s.swing_grade) < 0,
-  changed: s => s.grade_changed,
+
+/** 필터 술어. '액션 필요'는 오늘의 행동 카드와 같은 근거를 써야 한다 —
+ *  위에서 경고한 종목이 아래 표에서 필터에 걸러지면 화면이 자기 말을 뒤집는다. */
+function matchers(d: DashboardData): Record<FilterKey, (s: SignalRow) => boolean> {
+  const alerted = new Set(d.rule_alerts.map(a => a.symbol))
+  const unstopped = new Set(d.unstopped.map(u => u.symbol))
+  const trim = new Set(d.position_rule.trim_candidates.map(c => c.symbol))
+  return {
+    action: s => alerted.has(s.symbol) || trim.has(s.symbol) || unstopped.has(s.symbol)
+      || s.grade_changed
+      || (s.stop_distance_pct !== null && s.stop_distance_pct > -STOP_NEAR_PCT),
+    all: () => true,
+    holding: s => s.is_holding,
+    buy: s => dir(s.swing_grade) > 0,
+    sell: s => dir(s.swing_grade) < 0,
+    changed: s => s.grade_changed,
+  }
 }
 
 export default function Dashboard() {
@@ -48,8 +61,10 @@ export default function Dashboard() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [now, setNow] = useState(Date.now())
-  // 종목이 늘면 20행을 눈으로 훑게 된다 — 오늘 볼 것만 남기는 필터
-  const [filter, setFilter] = useState<'all' | 'holding' | 'buy' | 'sell' | 'changed'>('all')
+  // 종목이 늘면 20행을 눈으로 훑게 된다 — 오늘 볼 것만 남기는 필터.
+  // 기본값이 '전체'면 매일 15행을 다시 훑어야 하고, 그 스캔은 며칠 만에
+  // 형식적인 확인으로 바뀐다. 기본은 결정이 필요한 것만 남긴다.
+  const [filter, setFilter] = useState<FilterKey>('action')
 
   const load = useCallback(() => get<DashboardData>('/api/dashboard')
     .then(d => { setData(d); setError(null); setNow(Date.now()) })
@@ -97,11 +112,8 @@ export default function Dashboard() {
   const { sentiment: s, portfolio_summary: pf } = data
   const pnlCls = pf.total_pnl_krw >= 0 ? 'pos' : 'neg'
   const stale = isStale(data.last_refresh, now)
+  const matches = matchers(data)
   const shown = data.signals.filter(matches[filter])
-  // 손절선을 뚫으면 알림이 나지만 그때는 이미 늦다. 임박 구간을 따로 모은다.
-  const nearStop = data.signals
-    .filter(s => s.stop_distance_pct !== null && s.stop_distance_pct > -STOP_NEAR_PCT)
-    .sort((a, b) => (b.stop_distance_pct ?? 0) - (a.stop_distance_pct ?? 0))
 
   return (
     <div className="grid">
@@ -134,41 +146,6 @@ export default function Dashboard() {
           <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 4 }}>
             평가액 {fmt(pf.total_value_krw)} · 현금 {fmt(pf.cash_krw + (pf.cash_usd_krw ?? 0))} ({pf.cash_pct}%) · 보유 {pf.holdings_count}종목</div>
         </div>
-      </div>
-
-      {/* 카드를 조건부로 숨기면 "확인했는데 할 일이 없다"와 "아직 확인 안 했다"가
-          구분되지 않는다. 빈 상태 자체가 "오늘은 관망해도 된다"는 결론이다. */}
-      <div className="card" style={{ borderColor: nearStop.length || data.rule_alerts.length
-                                       ? 'var(--accent)' : undefined }}>
-        <strong>오늘의 행동</strong>
-        {data.rule_alerts.map((a, i) => (
-          <div key={i} style={{ marginTop: 6 }}>
-            <Link to={`/ticker/${a.symbol}`}>🔔 {a.message}</Link>
-            {/* 장중 관통 후 회복은 종가만 보면 잡히지 않는다. 손절선이 지켜졌다고
-                믿는 것과 관통 사실을 아는 것은 다음 주문 크기를 바꾼다. */}
-            {a.intraday_only && <span className="warn" style={{ fontSize: 11 }}> · 종가는 되돌아옴</span>}
-          </div>
-        ))}
-        {/* 도달 전에 알리는 유일한 자리 — 룰 알림은 뚫려야 난다 */}
-        {nearStop.map(s => (
-          <div key={s.symbol} style={{ marginTop: 6 }}>
-            <Link to={`/ticker/${s.symbol}`} className="warn">
-              ⚠ {s.name} 손절선까지 {s.stop_distance_pct}%
-              {' '}({fmt(s.stop_price, s.currency)}
-              {s.stop_source === 'atr' ? ' · 2×ATR 가정, 룰 미등록' : ''})</Link>
-          </div>
-        ))}
-        {nearStop.length === 0 && data.rule_alerts.length === 0 && (
-          <div className="empty" style={{ padding: '12px 0' }}>
-            오늘 손댈 것 없습니다 — 룰 도달 0건, 손절 임박({STOP_NEAR_PCT}% 이내) 0건.
-            {data.signals.some(s => s.grade_changed)
-              ? ' 다만 아래 표에 등급이 바뀐 종목이 있습니다.'
-              : ' 등급이 바뀐 종목도 없습니다.'}
-          </div>
-        )}
-        <div style={{ color: 'var(--text-dim)', fontSize: 11, marginTop: 8 }}>
-          일봉 고저가 기준 판정입니다. 손절가는 자동 예약주문이 아니며, 갭 하락 시
-          체결가는 손절선보다 낮을 수 있습니다.</div>
       </div>
 
       <div className="card">
@@ -247,12 +224,23 @@ export default function Dashboard() {
                   {/* 행 요소를 줄이기 위해 근거는 2개까지만 노출하고 나머지는 접어둔다.
                       title 툴팁은 터치 기기에서 열리지 않으므로 <details> 로 대체. */}
                   <div className="sig-tags">
-                    {tags.slice(0, 2).map((t, i) => (
-                      <span key={i} className={
-                        `sig-tag ${t.score > 0 ? 'buy' : 'sell'}${Math.abs(t.score) >= 60 ? ' strong' : ''}`}>
-                        {t.score > 0 ? '▲' : '▼'} {t.label}{t.warn && ' ⚠'}
+                    {tags.length > 0 && <span className="sig-tags-label">근거</span>}
+                    {tags.slice(0, 2).map((t, i) => {
+                      // 태그는 결론이 아니라 결론에 들어간 재료다. 최종 등급과
+                      // 반대 방향인 태그가 같은 무게로 보이면 "MACD 상승 모멘텀"과
+                      // "강력매도"가 나란히 서서 어느 쪽이 판단인지 사라진다.
+                      const against = dir(sig.swing_grade) !== 0
+                        && Math.sign(t.score) !== dir(sig.swing_grade)
+                      return (
+                      <span key={i} title={against
+                              ? `이 근거는 최종 판단(${sig.swing_grade})과 반대 방향입니다 — 다른 지표에 밀린 소수 의견입니다`
+                              : undefined}
+                            className={`sig-tag ${t.score > 0 ? 'buy' : 'sell'}`
+                              + (Math.abs(t.score) >= 60 && !against ? ' strong' : '')
+                              + (against ? ' against' : '')}>
+                        {against ? '↔ ' : t.score > 0 ? '▲ ' : '▼ '}{t.label}{t.warn && ' ⚠'}
                       </span>
-                    ))}
+                    )})}
                     {tags.length === 0 &&
                       <span className="signal-summary">{sig.summary ?? '뚜렷한 시그널 없음'}</span>}
                   </div>
@@ -285,15 +273,20 @@ export default function Dashboard() {
                     <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
                       {sig.stop_source === 'rule' ? '' : '2×ATR '}
                       {fmt(sig.stop_price, sig.currency)}</div></>}</td>
+                {/* 점수 옆 눈금 — 숫자만 있으면 -21이 얼마나 나쁜지 읽을 수 없고,
+                    스윙과 중장기의 컷이 다르다는 사실도 화면에 나타나지 않는다 */}
                 <td data-label="스윙"><div className="signal-cell">
                   <SignalBadge grade={sig.swing_grade} />
                   <span style={{ color: 'var(--text-dim)', fontSize: 12, minWidth: 28 }}>
                     {sig.swing_score > 0 ? '+' : ''}{sig.swing_score.toFixed(0)}</span>
+                  <ScoreScale score={sig.swing_score} cuts={data.score_scale.swing} kind="swing" />
                 </div></td>
                 <td data-label="중장기"><div className="signal-cell">
                   <SignalBadge grade={sig.longterm_grade} />
                   <span style={{ color: 'var(--text-dim)', fontSize: 12, minWidth: 28 }}>
                     {sig.longterm_score > 0 ? '+' : ''}{sig.longterm_score.toFixed(0)}</span>
+                  <ScoreScale score={sig.longterm_score} cuts={data.score_scale.longterm}
+                              kind="longterm" />
                 </div></td>
               </tr>
               </Fragment>
@@ -304,7 +297,9 @@ export default function Dashboard() {
         )}
         {/* 필터가 걸린 채 빈 화면이면 "종목이 없다"로 읽힌다 — 필터 탓임을 알린다 */}
         {data.signals.length > 0 && shown.length === 0 && <div className="empty">
-          이 조건에 해당하는 종목이 없습니다.{' '}
+          {filter === 'action'
+            ? '오늘 결정이 필요한 종목이 없습니다 — 룰 도달·손절 임박·등급 변경·손절 룰 미등록 모두 0건.'
+            : '이 조건에 해당하는 종목이 없습니다.'}{' '}
           <button className="ghost" onClick={() => setFilter('all')}>전체 보기</button>
         </div>}
       </div>

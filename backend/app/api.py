@@ -1,7 +1,7 @@
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app import db, fetchers, service
 
@@ -168,6 +168,31 @@ def set_cash(c: CashIn, request: Request):
     if c.amount_usd is not None:
         db.set_meta(conn, "cash_usd", str(c.amount_usd))
     return {"cash_krw": service.get_cash_krw(conn), "cash_usd": service.get_cash_usd(conn)}
+
+
+class PositionRuleIn(BaseModel):
+    # 뒤집힌 범위(min>max)는 어떤 개수든 위반으로 만든다. 늘 빨간 화면은
+    # 며칠 만에 무시되고, 그러면 진짜 위반도 함께 지나친다.
+    min: int = Field(ge=1, le=50)
+    max: int = Field(ge=1, le=50)
+
+    @model_validator(mode="after")
+    def _ordered(self):
+        if self.min > self.max:
+            raise ValueError("최소 종목 수가 최대보다 클 수 없습니다")
+        return self
+
+
+@router.get("/position-rule")
+def get_position_rule(request: Request):
+    lo, hi = service.get_target_positions(_conn(request))
+    return {"min": lo, "max": hi}
+
+
+@router.put("/position-rule")
+def set_position_rule(r: PositionRuleIn, request: Request):
+    lo, hi = service.set_target_positions(_conn(request), r.min, r.max)
+    return {"min": lo, "max": hi}
 
 
 class CashFlowIn(BaseModel):

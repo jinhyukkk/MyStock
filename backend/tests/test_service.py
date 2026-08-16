@@ -3,7 +3,7 @@ from datetime import datetime
 
 import pandas as pd
 import pytest
-from app import db, service, fetchers, portfolio, sentiment
+from app import db, service, fetchers, portfolio, scoring, sentiment
 
 FAKE_SENTI = {"vix": 20.0, "vkospi": None, "cnn_fg": 40, "crypto_fg": 55,
               "usdkrw": 1300.0, "failed": ["vkospi"]}
@@ -473,3 +473,95 @@ def test_dashboard_has_no_stop_distance_for_unheld(conn):
     service.refresh_all(conn)
     row = next(r for r in service.get_dashboard(conn)["signals"] if r["symbol"] == "005930")
     assert row["is_holding"] is False and row["stop_distance_pct"] is None
+
+
+def test_dashboard_reports_position_count_rule(conn):
+    """비중 상한도 총 리스크도 통과하면서 종목 수만 두 배가 된 계좌는
+    지금까지 아무 경고도 받지 못했다."""
+    service.refresh_all(conn)
+    db.set_meta(conn, "cash_krw", "10000000")
+    db.insert_trade(conn, "005930", "BUY", 10, 100.0, "2026-01-05", fx_rate=1.0)
+    db.insert_trade(conn, "AAPL", "BUY", 10, 100.0, "2026-01-05", fx_rate=1300.0)
+    r = service.get_dashboard(conn)["position_rule"]
+    assert (r["min"], r["max"]) == portfolio.DEFAULT_TARGET_POSITIONS
+    assert r["count"] == 2 and r["status"] == "under"
+
+    service.set_target_positions(conn, 1, 1)
+    r = service.get_dashboard(conn)["position_rule"]
+    assert r["status"] == "over" and r["excess"] == 1
+    assert {c["symbol"] for c in r["trim_candidates"]} == {"005930", "AAPL"}
+
+
+def test_target_positions_survive_a_restart(conn, tmp_path):
+    service.set_target_positions(conn, 3, 6)
+    assert service.get_target_positions(conn) == (3, 6)
+
+
+def test_dashboard_lists_holdings_without_a_registered_stop(conn):
+    """'룰 미등록'을 종목 옆에 적어두기만 하면 몇 개가 무방비인지 세어보지 않는다."""
+    service.refresh_all(conn)
+    db.set_meta(conn, "cash_krw", "10000000")
+    db.insert_trade(conn, "005930", "BUY", 10, 100.0, "2026-01-05", fx_rate=1.0)
+    db.insert_trade(conn, "AAPL", "BUY", 10, 100.0, "2026-01-05", fx_rate=1300.0)
+    un = service.get_dashboard(conn)["unstopped"]
+    assert {u["symbol"] for u in un} == {"005930", "AAPL"}
+    # 등록 버튼이 쓸 값 — 화면이 이미 계산해 둔 2×ATR을 그대로 넘긴다
+    assert all(u["atr_stop_price"] > 0 for u in un)
+
+    db.insert_rule(conn, "005930", "STOP", 1.0)
+    assert [u["symbol"] for u in service.get_dashboard(conn)["unstopped"]] == ["AAPL"]
+
+
+def test_entry_review_carries_the_original_reason_and_grade(conn):
+    """물타기 판단에 필요한 것은 평단 대비 %가 아니라 '왜 샀는지가 아직 유효한가'다."""
+    service.refresh_all(conn)
+    db.set_meta(conn, "cash_krw", "10000000")
+    db.insert_trade(conn, "005930", "BUY", 10, 100.0, "2026-01-05", fx_rate=1.0,
+                    note="20일선 돌파", grade_at_trade="강력매수")
+    er = service.get_ticker_detail(conn, "005930")["entry_review"]
+    assert er["first_entry_date"] == "2026-01-05"
+    assert er["first_entry_price"] == 100.0
+    assert er["entry_note"] == "20일선 돌파"
+    assert er["entry_grade"] == "강력매수"
+    assert er["buy_count"] == 1
+    # 진입 시 강력매수였는데 지금 등급이 그보다 낮으면 논리가 약해진 것이다
+    assert er["grade_downgraded"] is (er["current_grade"] != "강력매수")
+
+
+def test_entry_review_says_the_reason_was_never_recorded(conn):
+    """메모를 안 남긴 진입을 빈칸으로 두면 근거가 있었던 것처럼 읽힌다."""
+    service.refresh_all(conn)
+    db.set_meta(conn, "cash_krw", "10000000")
+    db.insert_trade(conn, "005930", "BUY", 10, 100.0, "2026-01-05", fx_rate=1.0)
+    er = service.get_ticker_detail(conn, "005930")["entry_review"]
+    assert er["entry_note"] is None and er["entry_grade"] is None
+
+
+def test_entry_review_is_absent_for_symbols_never_bought(conn):
+    service.refresh_all(conn)
+    assert service.get_ticker_detail(conn, "005930")["entry_review"] is None
+
+
+def test_dashboard_ships_the_scale_behind_the_scores(conn):
+    """스윙 -21과 중장기 +39는 눈금이 다른 자로 잰 값이다. 컷을 함께 내려보내지
+    않으면 화면은 두 숫자를 같은 자로 그릴 수밖에 없다."""
+    service.refresh_all(conn)
+    scale = service.get_dashboard(conn)["score_scale"]
+    assert scale["swing"]["buy"] == scoring.SWING_CUTS[1]
+    assert scale["longterm"]["buy"] == scoring.LONGTERM_CUTS[1]
+    assert scale["swing"]["buy"] != scale["longterm"]["buy"]  # 같은 자가 아니다
+    for kind in ("swing", "longterm"):
+        cuts = scale[kind]
+        assert cuts["strong_sell"] < cuts["sell"] < cuts["buy"] < cuts["strong_buy"]
+
+
+def test_risk_block_exposes_the_denominator_behind_its_own_percentages(conn):
+    """물타기 프리뷰가 '체결 후 비중'을 내려면 분모(총자산)와 환율이 필요하다.
+    프론트가 risk_budget_krw ÷ 0.01 같은 역산으로 분모를 되찾게 두면, 사이징
+    규칙이 바뀌는 순간 화면의 비중만 조용히 틀린 값이 된다."""
+    service.refresh_all(conn)
+    db.set_meta(conn, "cash_krw", "10000000")
+    r = service.get_ticker_detail(conn, "005930")["risk"]
+    assert r["total_asset_krw"] == service.get_portfolio_view(conn)["totals"]["total_asset_krw"]
+    assert r["fx_rate"] == 1.0
+    assert service.get_ticker_detail(conn, "AAPL")["risk"]["fx_rate"] == 1300.0

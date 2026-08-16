@@ -763,3 +763,44 @@ def test_account_yield_is_null_when_no_symbol_can_be_scored():
     v = portfolio.dividend_view([F("A", 3000)], KR_T, year=2026,
                                 cost_krw={"A": 100_000}, traded_this_year={"A"})
     assert v["yield_on_cost_pct"] is None
+
+
+def P(symbol, weight, score):
+    return {"symbol": symbol, "name": symbol, "weight_pct": weight, "swing_score": score}
+
+
+def test_position_rule_flags_count_over_target():
+    r = portfolio.position_rule([P(str(i), 8.0, 10.0) for i in range(12)], 4, 7)
+    assert r["status"] == "over" and r["count"] == 12 and r["excess"] == 5
+
+
+def test_position_rule_under_target_is_not_a_violation_but_is_reported():
+    r = portfolio.position_rule([P("A", 30.0, 10.0), P("B", 20.0, 5.0)], 4, 7)
+    assert r["status"] == "under" and r["shortfall"] == 2
+
+
+def test_position_rule_within_target_is_ok():
+    r = portfolio.position_rule([P(str(i), 15.0, 10.0) for i in range(5)], 4, 7)
+    assert r["status"] == "ok" and r["trim_candidates"] == []
+
+
+def test_trim_candidates_put_sell_signals_ahead_of_small_positions():
+    """시그널이 이미 나가라고 말한 종목이 먼저다. 그다음이 '계좌에 영향은 없으면서
+    주의만 나눠 갖는' 소액 포지션이다."""
+    rows = [P("BIG_SELL", 25.0, -30.0), P("TINY", 1.0, 20.0),
+            P("SMALL", 3.0, 15.0), P("CORE", 30.0, 40.0)]
+    r = portfolio.position_rule(rows, 1, 2)
+    assert [c["symbol"] for c in r["trim_candidates"][:3]] == ["BIG_SELL", "TINY", "SMALL"]
+
+
+def test_trim_candidates_show_at_least_three_even_when_one_over():
+    """1개 초과라고 후보를 1개만 주면 그 하나를 팔라는 지시로 읽힌다 —
+    고르라고 주는 목록이므로 여유를 둔다."""
+    rows = [P(str(i), 10.0, float(i)) for i in range(6)]
+    r = portfolio.position_rule(rows, 4, 5)
+    assert r["excess"] == 1 and len(r["trim_candidates"]) == 3
+
+
+def test_trim_candidates_never_exceed_holdings():
+    r = portfolio.position_rule([P("A", 50.0, 1.0), P("B", 50.0, 2.0)], 0, 1)
+    assert len(r["trim_candidates"]) == 2

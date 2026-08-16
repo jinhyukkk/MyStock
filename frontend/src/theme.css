@@ -96,6 +96,35 @@ input:focus, select:focus {
 .sig-tag.buy.strong { color: var(--buy); font-weight: 600; background: rgba(46, 229, 157, 0.10); }
 .sig-tag.sell.strong { color: var(--sell); font-weight: 600; background: rgba(255, 92, 122, 0.10); }
 .sig-tag.note { color: var(--text-dim); }
+/* 최종 등급과 방향이 반대인 근거. "MACD 상승 모멘텀"과 "강력매도"가 나란히
+   같은 무게로 보이면 어느 쪽이 결론인지 화면이 말해주지 않은 것이다.
+   태그는 결론이 아니라 결론에 들어간 재료이므로, 진 쪽은 물러나 보이게 한다. */
+.sig-tag.against { opacity: 0.6; font-weight: 400; background: transparent; }
+.sig-tags-label {
+  font-size: 10px; color: var(--text-dim); align-self: center;
+  letter-spacing: 0.04em; margin-right: 2px;
+}
+
+/* ── 점수 눈금 ──
+   숫자 옆에 척도가 없으면 -21이 얼마나 나쁜지 읽을 방법이 없다. 게다가
+   스윙과 중장기는 컷이 서로 달라(+11 vs +36) 같은 자로 비교하면 반드시 틀린다. */
+.score-scale {
+  position: relative; width: 64px; height: 10px; flex: none;
+  border-radius: 3px; background: var(--border);
+}
+.score-scale-neutral {
+  position: absolute; top: 3px; height: 4px;
+  background: color-mix(in srgb, var(--text-dim) 35%, transparent); border-radius: 2px;
+}
+.score-scale-cut {
+  position: absolute; top: 0; width: 1px; height: 10px;
+  background: color-mix(in srgb, var(--text-dim) 55%, transparent);
+}
+.score-scale-cut.strong { background: color-mix(in srgb, var(--text-dim) 85%, transparent); }
+.score-scale-dot {
+  position: absolute; top: 1px; width: 8px; height: 8px; margin-left: -4px;
+  border-radius: 50%; box-shadow: 0 0 0 1px var(--bg);
+}
 /* 스티키 글래스 헤더 */
 .topbar {
   position: sticky; top: 12px; z-index: 10;
