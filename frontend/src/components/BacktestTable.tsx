@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import SignalBadge from './SignalBadge'
 import type { Backtest, BacktestGrade } from '../types'
 
@@ -14,13 +15,17 @@ const backtestSpan = (bt: Backtest) => `${bt.start}~${bt.end}`
  *  **비중첩 에피소드 수**로 계산된 값을 쓴다. 에피소드가 하한 미만이면 수치를
  *  아예 감춘다 — 표본 6개 평균에 색까지 입히면 강한 사실처럼 읽힌다.
  */
-export default function BacktestTable({ bt, grades, horizons, missing, caption }: {
+export default function BacktestTable({ bt, grades, horizons, missing, caption,
+                                        highlightGrade }: {
   bt: Backtest
   grades: BacktestGrade[]
   horizons: number[]
   missing: string[]
   caption: string
+  /** 지금 이 종목의 등급 — 이 행 하나가 판단에 쓰이고 나머지는 캘리브레이션용이다 */
+  highlightGrade?: string | null
 }) {
+  const [showAll, setShowAll] = useState(false)
   if (grades.length === 0) return (
     <div style={{ color: 'var(--text-dim)', fontSize: 13, marginTop: 8 }}>
       {caption} — 검증 구간을 채울 데이터가 아직 없습니다.</div>
@@ -28,9 +33,23 @@ export default function BacktestTable({ bt, grades, horizons, missing, caption }
   // 관측 기간이 만들 수 있는 비중첩 표본 상한이 하한보다 작으면, 데이터가 더 쌓여서
   // 채워질 칸이 아니다. 그 구분을 안 하면 오지 않을 숫자를 기다리게 된다.
   const unverifiable = horizons.filter(h => (bt.max_episodes?.[String(h)] ?? Infinity) < bt.min_episodes)
+  // 15컬럼 × 셀당 4줄을 전부 펼쳐두면 정작 판단에 쓰는 한 행이 그 안에 묻힌다.
+  // 나머지 등급은 "이 표가 등급을 가르는가"를 확인할 때 필요하므로 지우지 않고 접는다.
+  const focused = highlightGrade && grades.some(g => g.grade === highlightGrade)
+    && !showAll ? grades.filter(g => g.grade === highlightGrade) : grades
   return (
     <>
       <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 12 }}>{caption}</div>
+      {focused.length < grades.length && (
+        <div style={{ fontSize: 12, marginTop: 4 }}>
+          현재 등급 <strong>{highlightGrade}</strong> 행만 보고 있습니다{' '}
+          <button className="ghost" onClick={() => setShowAll(true)}>
+            전체 {grades.length}개 등급 보기</button>
+        </div>)}
+      {showAll && highlightGrade && (
+        <div style={{ fontSize: 12, marginTop: 4 }}>
+          <button className="ghost" onClick={() => setShowAll(false)}>현재 등급만 보기</button>
+        </div>)}
       {unverifiable.length > 0 && <div className="warn" style={{ fontSize: 12, marginTop: 4 }}>
         ⚠ {unverifiable.join('·')}일 구간은 이 관측 기간
         ({backtestSpan(bt)})으로 만들 수 있는 독립 표본이 최대{' '}
@@ -50,7 +69,7 @@ export default function BacktestTable({ bt, grades, horizons, missing, caption }
             {bt.bench_label && horizons.map(h => <th key={h}>{h}일 초과</th>)}
           </tr></thead>
           <tbody>
-            {grades.map(g => {
+            {focused.map(g => {
               return (
                 <tr key={g.grade}>
                   <td><SignalBadge grade={g.grade} /></td>

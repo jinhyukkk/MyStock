@@ -25,6 +25,16 @@ def _trade_fx(t: dict, info: dict, usdkrw) -> float:
     return float(t.get("fx_rate") or usdkrw or DEFAULT_USDKRW)
 
 
+# 평단 맞춤용 보정 로트의 메모 표식. exclude_from_stats 체크박스가 생기기 전에
+# 임포트된 건은 플래그가 0이고 이 문구만 남아 있다 — 플래그만 보면 그런 계좌에서는
+# 경고가 영원히 뜨지 않는다. 원장을 고치지 않고 읽는 쪽에서 같은 사실로 취급한다.
+BASIS_ADJ_MARK = "보정 로트"
+
+
+def _is_basis_adjusted(t: dict) -> bool:
+    return bool(t.get("exclude_from_stats")) or BASIS_ADJ_MARK in (t.get("note") or "")
+
+
 def _walk_trades(trades: list, tickers: dict | None = None,
                  usdkrw=None) -> tuple[dict, list]:
     """매매 내역을 시간순으로 재생해 (현재 보유, 실현손익 원장)을 만든다.
@@ -42,7 +52,7 @@ def _walk_trades(trades: list, tickers: dict | None = None,
         h = holdings.setdefault(s, {"quantity": 0.0, "avg_price": 0.0, "avg_fx": 1.0})
         fee, tax, estimated = _trade_costs(t, info)
         fx = _trade_fx(t, info, usdkrw)
-        excluded = bool(t.get("exclude_from_stats"))
+        excluded = _is_basis_adjusted(t)
         if t["side"] == "BUY":
             if h["quantity"] == 0:  # 신규 진입 — 첫 매수 시점 등급이 복기 기준
                 h["entry_grade"] = t.get("grade_at_trade")
@@ -335,6 +345,9 @@ def build_portfolio(holdings: dict, prices: dict, tickers: dict, usdkrw,
                        if fx_pnl_krw is not None else None)
         rows.append({"symbol": symbol, "name": info.get("name", symbol),
                      "market": info.get("market"), "currency": currency,
+                     # 원가에 평단 보정 로트가 섞였으면 평단 기반 숫자 전체가
+                     # 실거래 산물이 아니다 — 그 사실을 숫자 옆에 남긴다
+                     "basis_adjusted": bool(h.get("basis_adjusted", False)),
                      "quantity": h["quantity"], "avg_price": h["avg_price"],
                      "close": close, "value": value, "pnl": pnl, "pnl_pct": pnl_pct,
                      "exit_cost": exit_cost, "net_proceeds": net_proceeds,
@@ -360,7 +373,11 @@ def build_portfolio(holdings: dict, prices: dict, tickers: dict, usdkrw,
               "cash_usd": round(cash_usd, 2),
               "cash_usd_krw": round(cash_usd_krw, 0),
               "total_asset_krw": round(total_asset, 0),
-              "cash_pct": round(cash_total_krw / total_asset * 100, 1) if total_asset else 0.0}
+              "cash_pct": round(cash_total_krw / total_asset * 100, 1) if total_asset else 0.0,
+              # 원화 환산에 실제로 쓴 환율. 화면에 없으면 사용자가 KRW 숫자에서
+              # 역산해야 하고, 수집 실패로 기본값을 쓴 경우와 구분할 방법도 없다.
+              "usdkrw": round(fx, 2),
+              "usdkrw_estimated": usdkrw is None}
     allocation = [{"label": k, "value_krw": round(v, 0)} for k, v in
                   sorted(alloc.items(), key=lambda x: -x[1])]
     if cash_total_krw > 0:

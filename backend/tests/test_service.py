@@ -451,3 +451,25 @@ def test_portfolio_view_reports_overseas_capital_gains_tax(conn):
     assert tax["rate_pct"] == 22.0
     assert tax["deduction_krw"] == 2_500_000.0
     assert tax["year"] == datetime.now().year
+
+
+def test_dashboard_reports_distance_to_stop_for_holdings(conn):
+    """룰 알림은 손절선을 **뚫어야** 난다 — 그 전에 알 방법이 화면에 있어야 한다."""
+    service.refresh_all(conn)
+    db.set_meta(conn, "cash_krw", "10000000")
+    db.insert_trade(conn, "005930", "BUY", 10, 100.0, "2026-01-05", fx_rate=1.0)
+    row = next(r for r in service.get_dashboard(conn)["signals"] if r["symbol"] == "005930")
+    assert row["stop_price"] is not None and row["stop_source"] == "atr"
+    assert row["stop_distance_pct"] < 0        # 손절선은 현재가 아래
+    # 손절선을 현재가 바로 아래로 등록하면 임박이 숫자로 드러난다
+    close = float(db.load_prices(conn, "005930").iloc[-1]["close"])
+    db.insert_rule(conn, "005930", "STOP", round(close * 0.99, 4))
+    row = next(r for r in service.get_dashboard(conn)["signals"] if r["symbol"] == "005930")
+    assert row["stop_source"] == "rule"
+    assert -1.5 < row["stop_distance_pct"] < -0.5
+
+
+def test_dashboard_has_no_stop_distance_for_unheld(conn):
+    service.refresh_all(conn)
+    row = next(r for r in service.get_dashboard(conn)["signals"] if r["symbol"] == "005930")
+    assert row["is_holding"] is False and row["stop_distance_pct"] is None

@@ -615,3 +615,40 @@ def test_exit_plan_has_no_capital_gains_tax_for_domestic_position():
     assert full["tax_krw"] == 0.0
     assert full["realized_pnl_after_tax_krw"] == full["realized_pnl_krw"]
     assert p["taxable_overseas"] is False
+
+
+def test_holding_flags_basis_adjusted_lots():
+    """평단 맞춤 보정 로트가 원가에 섞이면 평단·평가손익·R·손절선이 전부
+    그 위에 서게 된다. 실현손익 집계에서 빼는 것만으로는 부족하고, 보유 중인
+    종목의 숫자도 실거래 산물이 아니라는 사실을 화면이 말해야 한다."""
+    trades = [dict(T("A", "BUY", 10, 100), exclude_from_stats=1),
+              dict(T("A", "BUY", 10, 120))]
+    h = portfolio.compute_holdings(trades, KR_T)
+    out = portfolio.build_portfolio(h, {"A": 130.0}, KR_T, usdkrw=None)
+    assert out["holdings"][0]["basis_adjusted"] is True
+
+
+def test_holding_without_adjusted_lots_is_not_flagged():
+    h = portfolio.compute_holdings([dict(T("A", "BUY", 10, 100))], KR_T)
+    out = portfolio.build_portfolio(h, {"A": 130.0}, KR_T, usdkrw=None)
+    assert out["holdings"][0]["basis_adjusted"] is False
+
+
+def test_basis_adjusted_lot_is_recognized_from_note():
+    """체크박스가 생기기 전에 임포트된 보정 로트는 플래그가 0이고 메모에만 남아 있다.
+
+    플래그만 보면 이 계좌에서는 경고가 영원히 뜨지 않는다 — 원장을 고치지 않고
+    메모의 표식으로도 같은 사실을 읽어낸다.
+    """
+    trades = [dict(T("A", "BUY", 10, 100), note="증명서 임포트 (시트 평단 맞춤 보정 로트) / ISA"),
+              dict(T("A", "BUY", 10, 120))]
+    out = portfolio.build_portfolio(portfolio.compute_holdings(trades, KR_T),
+                                    {"A": 130.0}, KR_T, usdkrw=None)
+    assert out["holdings"][0]["basis_adjusted"] is True
+
+
+def test_ordinary_note_does_not_mark_a_lot_as_adjusted():
+    trades = [dict(T("A", "BUY", 10, 100), note="추세 눌림목 진입")]
+    out = portfolio.build_portfolio(portfolio.compute_holdings(trades, KR_T),
+                                    {"A": 130.0}, KR_T, usdkrw=None)
+    assert out["holdings"][0]["basis_adjusted"] is False

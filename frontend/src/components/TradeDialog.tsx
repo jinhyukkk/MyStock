@@ -8,8 +8,8 @@ import type { ExitPlan } from '../types'
  *  심볼 재입력이 끼어든다. 그 마찰이 기록 누락을 만들고, 기록이 없으면
  *  실현손익·진입 등급별 성과 같은 이 앱의 복기 기능이 통째로 비어버린다. */
 export default function TradeDialog({ symbol, name, currency, defaultPrice, defaultSide,
-                                      costRates, exitPlan, suggestedQuantity,
-                                      onClose, onSaved }: {
+                                      defaultQuantity, costRates, exitPlan, suggestedQuantity,
+                                      cash, onClose, onSaved }: {
   symbol: string
   name: string
   currency: string
@@ -22,11 +22,16 @@ export default function TradeDialog({ symbol, name, currency, defaultPrice, defa
   exitPlan?: ExitPlan | null
   /** 상세 화면이 계산해 둔 제안 수량 — 옮겨 적다 틀리는 마찰을 없앤다 */
   suggestedQuantity?: number | null
+  /** 청산 플랜의 특정 비중(1/3·1/2)에서 열었을 때 그 수량으로 시작한다 */
+  defaultQuantity?: number | null
+  /** 예수금 — 체결 후 잔액을 미리 보여준다 */
+  cash?: { krw: number; usd: number }
   onClose: () => void
   onSaved: () => void
 }) {
   const [side, setSide] = useState<string>(defaultSide ?? 'BUY')
-  const [quantity, setQuantity] = useState('')
+  const [quantity, setQuantity] = useState(
+    defaultQuantity && defaultQuantity > 0 ? String(defaultQuantity) : '')
   const [price, setPrice] = useState(defaultPrice !== null ? String(defaultPrice) : '')
   const [tradeDate, setTradeDate] = useState(new Date().toISOString().slice(0, 10))
   const [executedAt, setExecutedAt] = useState('')
@@ -84,6 +89,12 @@ export default function TradeDialog({ symbol, name, currency, defaultPrice, defa
     ? (p - exitPlan.avg_price) * Math.min(q, held) - (estCost ?? 0)
     : null
   const oversell = side === 'SELL' && q > 0 && q > held
+  // 체결 후 예수금 — 초과를 사후 클램프 경고로 알면 이미 원장이 틀어진 뒤다.
+  // 백엔드와 같은 계산(매수는 대금+비용이 나가고, 매도는 비용을 뺀 만큼 들어온다).
+  const cashNow = cash ? (currency === 'USD' ? cash.usd : cash.krw) : null
+  const cashAfter = cashNow !== null && notional !== null
+    ? cashNow + (side === 'BUY' ? -(notional + (estCost ?? 0)) : notional - (estCost ?? 0))
+    : null
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
@@ -109,7 +120,11 @@ export default function TradeDialog({ symbol, name, currency, defaultPrice, defa
               <button className="ghost" type="button"
                       onClick={() => setQuantity(String(suggestedQuantity))}>
                 제안 {fmt(suggestedQuantity!)}</button>)}
-            {side === 'SELL' && held > 0 && (
+            {/* 부분 청산은 이 앱이 권장하는 행동인데 유독 손으로 계산해야 했다 */}
+            {side === 'SELL' && held > 0 && exitPlan?.slices.map(s => (
+              <button key={s.label} className="ghost" type="button"
+                      onClick={() => setQuantity(String(s.quantity))}>{s.label}</button>))}
+            {side === 'SELL' && held > 0 && !exitPlan?.slices.length && (
               <button className="ghost" type="button"
                       onClick={() => setQuantity(String(held))}>전량</button>)}
           </div>
@@ -159,6 +174,14 @@ export default function TradeDialog({ symbol, name, currency, defaultPrice, defa
             {/* 이 숫자에는 이듬해 5월에 낼 양도세가 아직 들어 있다 */}
             {exitPlan?.taxable_overseas && sellPnl > 0 && <span style={{ color: 'var(--text-dim)' }}>
               {' '}· 해외 양도세 22%는 미차감</span>}</div>}
+          {cashAfter !== null && <div style={{ marginTop: 4,
+            color: cashAfter < 0 ? 'var(--warn)' : 'var(--text-dim)' }}>
+            체결 후 {currency === 'USD' ? '달러 ' : '원화 '}예수금
+            {' '}{unit}{fmt(Math.max(cashAfter, 0))}
+            <span> (현재 {unit}{fmt(cashNow!)})</span>
+            {/* 음수면 기록 시 0으로 잘린다 — 잘린 뒤에 알면 총자산이 이미 틀어져 있다 */}
+            {cashAfter < 0 && <> — 예수금보다 {unit}{fmt(-cashAfter)} 많습니다.
+              {' '}이대로 기록하면 예수금은 0으로 잘립니다.</>}</div>}
         </div>}
         {oversell && <div className="warn-box" style={{ marginTop: 8, fontSize: 12 }}>
           ⚠ 보유 {fmt(held)}보다 많은 수량입니다 — 이대로는 기록되지 않습니다.</div>}

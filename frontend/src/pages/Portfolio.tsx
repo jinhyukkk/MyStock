@@ -179,6 +179,13 @@ export default function Portfolio() {
           <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
             평가액 ₩{fmt(t.total_value_krw)} · 현금 ₩{fmt(t.cash_krw + (t.cash_usd_krw ?? 0))} ({t.cash_pct}%)
             {(t.cash_usd ?? 0) > 0 && <> — ₩{fmt(t.cash_krw)} + ${fmt(t.cash_usd)}</>}</div>
+          {/* 환율이 화면에 없으면 KRW 숫자에서 역산해야 하고, 수집 실패로 기본값을
+              쓴 경우와 실제 시세를 쓴 경우가 구분되지 않는다 */}
+          <div className={t.usdkrw_estimated ? 'warn' : ''} style={{ fontSize: 11, marginTop: 4,
+                 color: t.usdkrw_estimated ? undefined : 'var(--text-dim)' }}>
+            {t.usdkrw_estimated ? '⚠ 환율 수집 실패 — 기본값 ' : '적용 환율 '}
+            ₩{fmt(t.usdkrw)}/$
+            {t.usdkrw_estimated && ' 로 환산했습니다. USD 종목의 원화 숫자는 참고용입니다.'}</div>
           <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center',
                         flexWrap: 'wrap' }}>
             <input type="number" placeholder="예수금 (KRW)" value={cashInput}
@@ -222,7 +229,11 @@ export default function Portfolio() {
             {pf.holdings.map(h => (
               <tr key={h.symbol}>
                 <td><Link to={`/ticker/${h.symbol}`}><strong>{h.name}</strong>
-                  <span style={{ color: 'var(--text-dim)', fontSize: 12 }}> {h.currency}</span></Link></td>
+                  <span style={{ color: 'var(--text-dim)', fontSize: 12 }}> {h.currency}</span></Link>
+                  {/* 평단이 실거래 산물이 아니면 이 행의 손익·수익률이 전부 그 위에 선다 */}
+                  {h.basis_adjusted && <span className="warn" style={{ fontSize: 11 }}
+                    title="원가에 평단 맞춤용 보정 로트가 섞여 있습니다. 평단·손익·수익률은 실제 체결가만으로 만든 값이 아닙니다.">
+                    {' '}보정 평단</span>}</td>
                 <td data-label="수량">{fmt(h.quantity)}</td>
                 <td data-label="평단가">{cur(h.currency, h.avg_price)}</td>
                 <td data-label="현재가">{cur(h.currency, h.close)}</td>
@@ -487,7 +498,7 @@ export default function Portfolio() {
             </tbody>
           </table>
         </>}
-        <div className="table-scroll" style={{ marginTop: 12 }}>
+        <div className="table-scroll table-cards" style={{ marginTop: 12 }}>
         <table>
           <thead><tr><th>매도일</th><th>심볼</th><th>수량</th><th>평단</th><th>매도가</th>
             <th>비용</th><th>실현손익 (net)</th><th>수익률</th><th>원화 손익</th>
@@ -496,26 +507,26 @@ export default function Portfolio() {
             {pf.realized.entries.map((r, i) => (
               <tr key={i}>
                 <td style={{ textAlign: 'left' }}>{r.trade_date}</td>
-                <td>{r.symbol}</td>
-                <td>{fmt(r.quantity)}</td>
-                <td>{fmt(r.buy_price)}</td>
-                <td>{fmt(r.sell_price)}</td>
-                <td style={{ color: 'var(--text-dim)' }}
+                <td data-label="심볼">{r.symbol}</td>
+                <td data-label="수량">{fmt(r.quantity)}</td>
+                <td data-label="평단">{fmt(r.buy_price)}</td>
+                <td data-label="매도가">{fmt(r.sell_price)}</td>
+                <td data-label="비용" style={{ color: 'var(--text-dim)' }}
                     title={r.cost_estimated ? '시장 기본 요율로 추정한 값' : '입력된 실제 비용'}>
                   {fmt(r.cost)}{r.cost_estimated && '*'}</td>
-                <td className={r.pnl >= 0 ? 'pos' : 'neg'}
+                <td data-label="실현손익 (net)" className={r.pnl >= 0 ? 'pos' : 'neg'}
                     title={`비용 차감 전 ${fmt(r.pnl_gross)}`}>{fmt(r.pnl)}</td>
-                <td className={r.pnl_pct >= 0 ? 'pos' : 'neg'}>
+                <td data-label="수익률" className={r.pnl_pct >= 0 ? 'pos' : 'neg'}>
                   {r.pnl_pct >= 0 ? '+' : ''}{r.pnl_pct}%</td>
                 {/* 매수·매도 환율을 각각 반영한 값. 환손익을 따로 보여야 "달러 자산이 잘 버텼다"는
                     착시 없이 KR/US 배분을 판단할 수 있다. */}
-                <td className={r.pnl_krw >= 0 ? 'pos' : 'neg'}
+                <td data-label="원화 손익" className={r.pnl_krw >= 0 ? 'pos' : 'neg'}
                     title={`가격 ${fmt(r.price_pnl_krw)} + 환 ${fmt(r.fx_pnl_krw)} `
                            + `(매수 ${fmt(r.buy_fx)} → 매도 ${fmt(r.sell_fx)})`}>
                   ₩{fmt(r.pnl_krw)}
                   {r.fx_pnl_krw !== 0 && <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>
                     {' '}(환 {r.fx_pnl_krw >= 0 ? '+' : ''}{fmt(r.fx_pnl_krw)})</span>}</td>
-                <td>{r.entry_grade ?? '—'}</td>
+                <td data-label="진입 등급">{r.entry_grade ?? '—'}</td>
                 <td style={{ textAlign: 'left', maxWidth: 200, overflow: 'hidden',
                              textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                     title={r.note ?? ''}>
@@ -572,7 +583,7 @@ export default function Portfolio() {
         {msg && <div style={{ color: 'var(--sell)', marginTop: 8 }}>{msg}</div>}
         {trades.length === 0 && <div className="empty">
           기록된 매매가 없습니다. 체결 내역을 남기면 진입 등급별 성과까지 복기할 수 있습니다.</div>}
-        <div className="table-scroll" style={{ marginTop: 12 }}>
+        <div className="table-scroll table-cards" style={{ marginTop: 12 }}>
         <table>
           <thead><tr><th>날짜</th><th>심볼</th><th>구분</th><th>수량</th><th>단가</th>
             <th>비용</th><th>체결 시 등급</th><th>메모</th><th></th></tr></thead>
@@ -582,20 +593,22 @@ export default function Portfolio() {
                 <td style={{ textAlign: 'left' }}>{tr.trade_date}
                   {tr.executed_at && <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>
                     {' '}{tr.executed_at}</span>}</td>
-                <td>{tr.symbol}</td>
-                <td className={tr.side === 'BUY' ? 'pos' : 'neg'}>
+                <td data-label="심볼">{tr.symbol}</td>
+                <td data-label="구분" className={tr.side === 'BUY' ? 'pos' : 'neg'}>
                   {tr.side === 'BUY' ? '매수' : '매도'}
-                  {/* 체결가가 인위적인 행은 원장에서 눈으로 구분돼야 한다 */}
-                  {tr.exclude_from_stats === 1 && <div className="warn" style={{ fontSize: 10 }}
+                  {/* 체결가가 인위적인 행은 원장에서 눈으로 구분돼야 한다.
+                      체크박스가 생기기 전 임포트분은 메모에만 표식이 남아 있다. */}
+                  {(tr.exclude_from_stats === 1 || (tr.note ?? '').includes('보정 로트'))
+                    && <div className="warn" style={{ fontSize: 10 }}
                     title="평단 맞춤용 보정 로트 — 승률·실현손익 집계에서 제외됩니다">보정</div>}</td>
-                <td>{fmt(tr.quantity)}</td>
-                <td>{fmt(tr.price)}</td>
-                <td style={{ color: 'var(--text-dim)' }}
+                <td data-label="수량">{fmt(tr.quantity)}</td>
+                <td data-label="단가">{fmt(tr.price)}</td>
+                <td data-label="비용" style={{ color: 'var(--text-dim)' }}
                     title={tr.fee === null && tr.tax === null ? '미기록 — 시장 요율로 추정' : '입력된 실제 비용'}>
                   {tr.fee === null && tr.tax === null ? '추정' : fmt((tr.fee ?? 0) + (tr.tax ?? 0))}</td>
                 {/* 전 행이 '—'면 기능이 고장난 것처럼 보인다 — 실제로는 시그널을
                     수집하기 전에 임포트된 건이라는 사실을 알린다 */}
-                <td title={tr.grade_at_trade ? '' :
+                <td data-label="체결 시 등급" title={tr.grade_at_trade ? '' :
                   '이 체결이 기록될 당시 해당 종목의 시그널이 아직 없었습니다 (임포트분 등). '
                   + '앱에서 매매를 기록하면 그 시점 등급이 자동으로 남습니다.'}>
                   {tr.grade_at_trade ?? '—'}</td>

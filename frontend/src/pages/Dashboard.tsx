@@ -24,6 +24,10 @@ function conflictHint(sig: SignalRow): string | null {
 }
 
 type FilterKey = 'all' | 'holding' | 'buy' | 'sell' | 'changed'
+// 손절선까지 이 거리 안에 들어오면 "임박"으로 본다. 하루 변동폭 안에 손절선이
+// 들어왔다는 뜻이라 다음 장에서 결정을 강요받을 수 있다.
+const STOP_NEAR_PCT = 2
+
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'all', label: '전체' },
   { key: 'holding', label: '보유' },
@@ -94,6 +98,10 @@ export default function Dashboard() {
   const pnlCls = pf.total_pnl_krw >= 0 ? 'pos' : 'neg'
   const stale = isStale(data.last_refresh, now)
   const shown = data.signals.filter(matches[filter])
+  // 손절선을 뚫으면 알림이 나지만 그때는 이미 늦다. 임박 구간을 따로 모은다.
+  const nearStop = data.signals
+    .filter(s => s.stop_distance_pct !== null && s.stop_distance_pct > -STOP_NEAR_PCT)
+    .sort((a, b) => (b.stop_distance_pct ?? 0) - (a.stop_distance_pct ?? 0))
 
   return (
     <div className="grid">
@@ -128,22 +136,40 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {data.rule_alerts.length > 0 && (
-        <div className="card" style={{ borderColor: 'var(--accent)' }}>
-          <strong>알림</strong>
-          {data.rule_alerts.map((a, i) => (
-            <div key={i} style={{ marginTop: 6 }}>
-              <Link to={`/ticker/${a.symbol}`}>🔔 {a.message}</Link>
-              {/* 장중 관통 후 회복은 종가만 보면 잡히지 않는다. 손절선이 지켜졌다고
-                  믿는 것과 관통 사실을 아는 것은 다음 주문 크기를 바꾼다. */}
-              {a.intraday_only && <span className="warn" style={{ fontSize: 11 }}> · 종가는 되돌아옴</span>}
-            </div>
-          ))}
-          <div style={{ color: 'var(--text-dim)', fontSize: 11, marginTop: 8 }}>
-            일봉 고저가 기준 판정입니다. 손절가는 자동 예약주문이 아니며, 갭 하락 시
-            체결가는 손절선보다 낮을 수 있습니다.</div>
-        </div>
-      )}
+      {/* 카드를 조건부로 숨기면 "확인했는데 할 일이 없다"와 "아직 확인 안 했다"가
+          구분되지 않는다. 빈 상태 자체가 "오늘은 관망해도 된다"는 결론이다. */}
+      <div className="card" style={{ borderColor: nearStop.length || data.rule_alerts.length
+                                       ? 'var(--accent)' : undefined }}>
+        <strong>오늘의 행동</strong>
+        {data.rule_alerts.map((a, i) => (
+          <div key={i} style={{ marginTop: 6 }}>
+            <Link to={`/ticker/${a.symbol}`}>🔔 {a.message}</Link>
+            {/* 장중 관통 후 회복은 종가만 보면 잡히지 않는다. 손절선이 지켜졌다고
+                믿는 것과 관통 사실을 아는 것은 다음 주문 크기를 바꾼다. */}
+            {a.intraday_only && <span className="warn" style={{ fontSize: 11 }}> · 종가는 되돌아옴</span>}
+          </div>
+        ))}
+        {/* 도달 전에 알리는 유일한 자리 — 룰 알림은 뚫려야 난다 */}
+        {nearStop.map(s => (
+          <div key={s.symbol} style={{ marginTop: 6 }}>
+            <Link to={`/ticker/${s.symbol}`} className="warn">
+              ⚠ {s.name} 손절선까지 {s.stop_distance_pct}%
+              {' '}({fmt(s.stop_price, s.currency)}
+              {s.stop_source === 'atr' ? ' · 2×ATR 가정, 룰 미등록' : ''})</Link>
+          </div>
+        ))}
+        {nearStop.length === 0 && data.rule_alerts.length === 0 && (
+          <div className="empty" style={{ padding: '12px 0' }}>
+            오늘 손댈 것 없습니다 — 룰 도달 0건, 손절 임박({STOP_NEAR_PCT}% 이내) 0건.
+            {data.signals.some(s => s.grade_changed)
+              ? ' 다만 아래 표에 등급이 바뀐 종목이 있습니다.'
+              : ' 등급이 바뀐 종목도 없습니다.'}
+          </div>
+        )}
+        <div style={{ color: 'var(--text-dim)', fontSize: 11, marginTop: 8 }}>
+          일봉 고저가 기준 판정입니다. 손절가는 자동 예약주문이 아니며, 갭 하락 시
+          체결가는 손절선보다 낮을 수 있습니다.</div>
+      </div>
 
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10,
@@ -188,7 +214,8 @@ export default function Dashboard() {
         <div className="table-scroll table-cards">
         <table>
           <thead><tr>
-            <th>종목</th><th>현재가</th><th>등락</th><th>평단 대비</th><th>스윙</th><th>중장기</th>
+            <th>종목</th><th>현재가</th><th>등락</th><th>평단 대비</th><th>손절까지</th>
+            <th>스윙</th><th>중장기</th>
           </tr></thead>
           <tbody>
             {shown.map((sig, idx) => {
@@ -198,7 +225,7 @@ export default function Dashboard() {
               const tags = sig.summary_tags ?? []
               return (
               <Fragment key={sig.symbol}>
-              {boundary && <tr><td colSpan={6} style={{ padding: '10px 0 4px', textAlign: 'left',
+              {boundary && <tr><td colSpan={7} style={{ padding: '10px 0 4px', textAlign: 'left',
                 fontSize: 11, color: 'var(--text-dim)', borderBottom: '1px solid var(--border)' }}>
                 관심 종목</td></tr>}
               <tr>
@@ -249,6 +276,15 @@ export default function Dashboard() {
                     <strong>{sig.holding_pnl_pct >= 0 ? '+' : ''}{sig.holding_pnl_pct}%</strong>
                     <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
                       평단 {fmt(sig.avg_price, sig.currency)}</div></>}</td>
+                {/* 룰 알림은 손절선을 뚫어야 난다 — 남은 거리를 먼저 보여준다 */}
+                <td data-label="손절까지"
+                    className={sig.stop_distance_pct !== null
+                      && sig.stop_distance_pct > -STOP_NEAR_PCT ? 'warn' : ''}>
+                  {sig.stop_distance_pct === null ? '—' : <>
+                    <strong>{sig.stop_distance_pct}%</strong>
+                    <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                      {sig.stop_source === 'rule' ? '' : '2×ATR '}
+                      {fmt(sig.stop_price, sig.currency)}</div></>}</td>
                 <td data-label="스윙"><div className="signal-cell">
                   <SignalBadge grade={sig.swing_grade} />
                   <span style={{ color: 'var(--text-dim)', fontSize: 12, minWidth: 28 }}>

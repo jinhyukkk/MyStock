@@ -134,6 +134,8 @@ export default function TickerDetail() {
   const [ruleValue, setRuleValue] = useState('')
   const [ruleMsg, setRuleMsg] = useState<string | null>(null)
   const [tradeOpen, setTradeOpen] = useState<'BUY' | 'SELL' | null>(null)
+  // 청산 플랜의 어느 행에서 열었는지 — 그 비중의 수량으로 모달을 채운다
+  const [sellQuantity, setSellQuantity] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [now, setNow] = useState(Date.now())
   const { mainRef, rsiRef, macdRef } = useCandleChart(detail)
@@ -182,6 +184,18 @@ export default function TickerDetail() {
   const unit = detail.currency === 'USD' ? '$' : '₩'
   // 현재 등급이 과거에 어떤 성적을 냈는지 — 등급 배지만으로는 그 등급을 믿을 근거가 없다
   const gradeStat = backtest?.grades.find(g => g.grade === sig?.swing_grade) ?? null
+  /** 이 종목에서 지금 등급이 과거에 등급 방향과 반대로 움직였는가.
+   *  "매도" 배지를 달고도 과거 20일 순수익이 +2%였다면, 그 배지를 따르는 것은
+   *  이 종목의 관측 이력과 반대로 가는 선택이다. 그 사실이 배지 옆에 없으면
+   *  사용자는 검증된 신호를 따르고 있다고 믿는다. */
+  /*  20일만 보면 표본이 모자라 경고가 거의 뜨지 않는다 — 표본이 충분한 가장 짧은
+      구간을 쓴다. 그 구간이 무엇인지는 문구에 함께 적는다. */
+  const gradeH = backtest?.horizons.find(h =>
+    gradeStat?.[`insufficient${h}`] !== true && typeof gradeStat?.[`avg_net${h}`] === 'number') ?? null
+  const gradeNet = gradeH !== null ? gradeStat![`avg_net${gradeH}`] as number : null
+  const gradeContradicts = gradeNet !== null && sig
+    ? (dir(sig.swing_grade) > 0 && gradeNet < 0) || (dir(sig.swing_grade) < 0 && gradeNet > 0)
+    : false
   // 중장기 등급이 통계적으로 뒷받침되는지 — 아니면 배지에 "미검증"을 붙인다
   const longtermStat = backtest?.longterm_grades.find(g => g.grade === sig?.longterm_grade) ?? null
   const longtermUnverified = !!backtest &&
@@ -314,10 +328,11 @@ export default function TickerDetail() {
 
       {tradeOpen && <TradeDialog symbol={detail.symbol} name={detail.name}
         currency={detail.currency} defaultPrice={last?.close ?? null}
-        defaultSide={tradeOpen}
+        defaultSide={tradeOpen} defaultQuantity={sellQuantity}
         costRates={detail.cost_rates} exitPlan={detail.risk?.exit_plan}
         suggestedQuantity={detail.risk?.addable_quantity ?? detail.risk?.position_size_1pct}
-        onClose={() => setTradeOpen(null)} onSaved={load} />}
+        cash={detail.cash}
+        onClose={() => { setTradeOpen(null); setSellQuantity(null) }} onSaved={load} />}
 
       {/* 행동 요약 — 차트보다 위에 둔다. 차트 3개(600px)가 먼저 오면
           손절가·수량·과거 성적이 스크롤 아래로 밀려 "30초 판단"이 성립하지 않는다. */}
@@ -330,6 +345,17 @@ export default function TickerDetail() {
                       fontSize: 15, fontWeight: 600 }}>
           {v.text}
         </div>
+        {/* 판정은 등급에서 나오는데, 이 종목에서 그 등급은 반대로 움직인 이력이 있다.
+            판정 바로 아래가 아니면 사용자는 검증된 신호를 따른다고 믿게 된다. */}
+        {gradeContradicts && sig && <div className="warn-box critical" style={{ marginTop: 8 }}>
+          ⚠ 이 종목에서 <strong>{sig.swing_grade}</strong> 등급의 과거 {gradeH}일 순수익은
+          {' '}{gradeNet! >= 0 ? '+' : ''}{gradeNet}%로 등급 방향과 반대였습니다
+          (독립 표본 {String(gradeStat?.[`episodes${gradeH}`] ?? '—')}개). 이 배지를 따르는 것은
+          이 종목의 관측 이력과 반대로 가는 선택입니다.</div>}
+        {/* 평단이 실거래 산물이 아니면 그 위에 선 숫자가 전부 흔들린다 */}
+        {detail.risk?.basis_adjusted && <div className="warn-box note" style={{ marginTop: 8 }}>
+          ⓘ 이 종목의 원가에는 평단 맞춤용 <strong>보정 로트</strong>가 섞여 있습니다 —
+          평단·평가손익·R·손절선·확정손익은 실제 체결가만으로 만든 값이 아닙니다.</div>}
 
         {/* 보유 중이면 나가는 쪽 숫자를 진입 숫자보다 먼저 놓는다. 매도 신호가 뜬
             종목에서 화면이 '추가 매수 가능 수량'만 보여주면 물타기를 권하는 꼴이 된다. */}
@@ -377,7 +403,8 @@ export default function TickerDetail() {
           <table style={{ marginTop: 10 }}>
             <thead><tr><th>덜어낼 비중</th><th>수량</th><th>순회수액</th>
               {/* 해외 포지션의 확정손익은 5월 양도세를 빼야 실제로 손에 남는 돈이다 */}
-              <th>{plan.taxable_overseas ? '확정 손익 (양도세 후)' : '확정 손익'}</th></tr></thead>
+              <th>{plan.taxable_overseas ? '확정 손익 (양도세 후)' : '확정 손익'}</th>
+              <th></th></tr></thead>
             <tbody>
               {plan.slices.map(s => (
                 <tr key={s.label}>
@@ -390,6 +417,10 @@ export default function TickerDetail() {
                     ₩{Math.round(s.realized_pnl_after_tax_krw).toLocaleString('ko-KR')}
                     {s.tax_krw > 0 && <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
                       양도세 -₩{Math.round(s.tax_krw).toLocaleString('ko-KR')}</div>}</td>
+                  {/* 계산해 둔 수량을 손으로 옮겨 적게 두면 부분 청산만 유독 마찰이 크다 */}
+                  <td><button className="ghost" onClick={() => {
+                    setSellQuantity(s.quantity); setTradeOpen('SELL')
+                  }}>{s.label} 기록</button></td>
                 </tr>
               ))}
             </tbody>
@@ -601,11 +632,14 @@ export default function TickerDetail() {
           겹쳐 독립 표본이 아니므로, 신호일 수로 계산한 오차는 실제보다 작게 나옵니다.
           독립 표본 {backtest.min_episodes}개 미만인 칸은 수치를 감춥니다.
         </div>
+        {/* 이 화면의 판단에 쓰이는 것은 현재 등급 행 하나다 — 나머지는 접어둔다 */}
         <BacktestTable bt={backtest} grades={backtest.grades} horizons={backtest.horizons}
-                       missing={backtest.missing_grades} caption="스윙 등급" />
+                       missing={backtest.missing_grades} caption="스윙 등급"
+                       highlightGrade={sig?.swing_grade} />
         <BacktestTable bt={backtest} grades={backtest.longterm_grades}
                        horizons={backtest.long_horizons}
                        missing={backtest.missing_longterm_grades}
+                       highlightGrade={sig?.longterm_grade}
                        caption="중장기 등급 — 보유 기간이 길어 독립 표본이 훨씬 적습니다" />
       </div>}
 

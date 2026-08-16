@@ -305,6 +305,9 @@ def get_dashboard(conn) -> dict:
     active = _active_tickers(conn)
     bars = _latest_bars(conn, [t["symbol"] for t in active])
     prices, signals = {s: b["close"] for s, b in bars.items()}, []
+    # 룰 알림은 손절선을 **뚫어야** 난다. 그 전에 알 방법이 없으면 -4.7%인 종목을
+    # 그냥 지나쳤다가 다음 날 갭 하락을 맞는다 — 남은 거리를 미리 실어 보낸다.
+    stops = _holding_stops(conn, holdings, prices)
     for t in active:
         bar = bars.get(t["symbol"])
         close = bar["close"] if bar else None
@@ -332,6 +335,11 @@ def get_dashboard(conn) -> dict:
             "avg_price": avg_price,
             "holding_pnl_pct": (round((close / avg_price - 1) * 100, 2)
                                 if avg_price and close else None),
+            "stop_price": stops.get(t["symbol"], (None, None))[0],
+            "stop_source": stops.get(t["symbol"], (None, None))[1],
+            "stop_distance_pct": (
+                round((stops[t["symbol"]][0] / close - 1) * 100, 2)
+                if close and t["symbol"] in stops else None),
             "context_note": details.get("context_note"),
             "summary": details.get("summary"),
             "summary_tags": summary_tags(details),
@@ -352,6 +360,27 @@ def get_dashboard(conn) -> dict:
         "last_refresh": db.get_meta(conn, "last_refresh"),
         "failed_sources": senti.get("failed", []),
     }
+
+
+def _holding_stops(conn, holdings: dict, prices: dict) -> dict:
+    """보유 종목의 유효 손절선 {symbol: (가격, 'rule'|'atr')}.
+
+    등록된 룰이 있으면 그것 — 알림을 울리는 값과 화면의 값이 갈라지면 안 된다.
+    """
+    out = {}
+    for s in holdings:
+        rule = _stop_rule(conn, s)
+        if rule is not None:
+            out[s] = (round(rule, 4), "rule")
+            continue
+        close = prices.get(s)
+        df = db.load_prices(conn, s, limit=250)
+        if close is None or df.empty:
+            continue
+        atr = indicators.compute_indicators(df)["atr14"].iloc[-1]
+        if pd.notna(atr) and atr:
+            out[s] = (round(close - 2 * float(atr), 4), "atr")
+    return out
 
 
 def get_portfolio_view(conn) -> dict:
@@ -505,6 +534,9 @@ def _risk_block(conn, enriched: pd.DataFrame, currency: str,
     }
     held = next((h["quantity"] for h in pf["holdings"] if h["symbol"] == symbol), 0.0)
     avg = next((h["avg_price"] for h in pf["holdings"] if h["symbol"] == symbol), 0.0)
+    # 평단에 보정 로트가 섞였으면 평단·R·손절선·확정손익이 전부 그 위에 서 있다
+    out["basis_adjusted"] = next((bool(h.get("basis_adjusted"))
+                                  for h in pf["holdings"] if h["symbol"] == symbol), False)
     # 보유 중이면 나가는 쪽 숫자를 함께 낸다 — 진입 정보만 있으면 매도 등급이 뜬
     # 종목에서도 화면이 '추가 매수 가능 수량'만 보여주게 된다
     t = db.get_ticker(conn, symbol) if symbol else None
@@ -637,6 +669,9 @@ def get_ticker_detail(conn, symbol) -> dict | None:
             "fee_pct": round(costs.fee_rate(t["market"]) * 100, 6),
             "sell_tax_pct": round(costs.sell_tax_rate(t["market"], t["is_etf"] or 0) * 100, 6),
         },
+        # 주문 프리뷰가 '체결 후 잔액'을 낼 근거 — 예수금 초과를 사후 경고가 아니라
+        # 기록 버튼을 누르기 전에 알 수 있어야 한다
+        "cash": {"krw": get_cash_krw(conn), "usd": get_cash_usd(conn)},
         "history": [{"date": r["date"], "swing_score": r["swing_score"],
                      "longterm_score": r["longterm_score"], "grade": r["grade"]}
                     for r in db.load_signal_history(conn, symbol)],

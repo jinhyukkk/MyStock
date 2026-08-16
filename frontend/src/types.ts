@@ -13,6 +13,9 @@ export interface SignalRow {
   // 상향(+1)/하향(-1) — 불리언만으로는 강등에도 상승색 배지가 붙는다
   grade_change_dir: number; prev_grade: string | null;
   avg_price: number | null; holding_pnl_pct: number | null;
+  // 룰 알림은 손절선을 뚫어야 난다 — 그 전에 알 수 있게 남은 거리를 함께 받는다
+  stop_price: number | null; stop_source: 'rule' | 'atr' | null;
+  stop_distance_pct: number | null;
   context_note: string | null; summary: string | null;
   summary_tags: { label: string; score: number; warn: boolean }[];
   // 장중 미완성 봉으로 계산된 등급인지 — 마감 때 뒤집힐 수 있고 백테스트가 검증한 적 없다
@@ -68,6 +71,8 @@ export interface TickerRisk {
   lot_size: number | null; position_size_raw: number | null;
   // 일평균 거래대금 대비 주문 크기 — 중소형주에서는 이게 체결가를 밀어버린다
   turnover_krw: number | null; liquidity_pct: number | null;
+  // 원가에 평단 보정 로트가 섞였는지 — 평단 기반 숫자 전체의 전제가 달라진다
+  basis_adjusted: boolean;
   // 보유 중일 때만 채워진다 — 진입 정보만 있으면 나가는 판단이 매번 즉흥이 된다
   exit_plan: ExitPlan | null;
 }
@@ -100,6 +105,8 @@ export interface TickerDetail {
   risk: TickerRisk | null;
   // 주문 프리뷰의 비용 추정 근거 — 프론트에 요율 상수를 복제하지 않기 위해 받는다
   cost_rates: { fee_pct: number; sell_tax_pct: number };
+  // 주문 프리뷰의 '체결 후 잔액' — 예수금 초과를 사후 클램프가 아니라 미리 안다
+  cash: { krw: number; usd: number };
   history: { date: string; swing_score: number; longterm_score: number; grade: string }[];
   rules: { id: number; symbol: string; rule_type: string; value: number }[];
   last_refresh: string | null;
@@ -107,6 +114,8 @@ export interface TickerDetail {
 export interface Holding {
   symbol: string; name: string; market: string; currency: string;
   quantity: number; avg_price: number; close: number | null;
+  // 원가에 평단 맞춤 보정 로트가 섞였는지 — 이 행의 숫자 전체의 전제가 달라진다
+  basis_adjusted: boolean;
   value: number | null; pnl: number | null; pnl_pct: number | null;
   // 통화가 섞이면 종목 통화 표시만으로는 포지션 크기를 나란히 볼 수 없다
   value_krw: number | null; weight_pct: number | null;
@@ -138,7 +147,9 @@ export interface Portfolio {
   totals: { total_value_krw: number; total_cost_krw: number;
     total_pnl_krw: number; total_pnl_pct: number; total_pnl_pct_of_asset: number;
     cash_krw: number; cash_usd: number; cash_usd_krw: number;
-    total_asset_krw: number; cash_pct: number };
+    total_asset_krw: number; cash_pct: number;
+    // 원화 환산에 실제로 쓴 환율 — estimated면 수집 실패로 기본값을 쓴 것이다
+    usdkrw: number; usdkrw_estimated: boolean };
   allocation: { label: string; value_krw: number }[];
   realized: { entries: RealizedEntry[]; stats: RealizedStats; overseas_tax: OverseasTax };
   risk: AccountRisk | null;
