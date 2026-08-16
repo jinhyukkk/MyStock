@@ -260,3 +260,10 @@ export interface SearchResult {
   symbol: string; name: string; market: string; is_etf: number;
   yf_symbol: string | null; currency: string;
 }
+export interface Trade {
+  id: number; symbol: string; side: string; quantity: number;
+  price: number; trade_date: string; executed_at: string | null;
+  fee: number | null; tax: number | null;
+  note: string | null; grade_at_trade: string | null;
+  exclude_from_stats: number;
+}
