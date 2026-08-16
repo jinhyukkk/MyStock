@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **동작은 바뀌지 않는다.** 이번 작업은 이동과 분리다. 표시 숫자·경고 문구·계산 로직·주석을 바꾸지 않는다. 예외는 Task 7에 명시된 세 가지(설정 접기, Risk 빈 상태, Journal 안내 링크)뿐이다.
+- **동작은 바뀌지 않는다.** 이번 작업은 이동과 분리다. 표시 숫자·경고 문구·계산 로직·주석을 바꾸지 않는다. 예외는 명시된 다섯 가지뿐이다: 설정 접기(Task 7), Risk 빈 상태(Task 7), 그리고 **같은 화면에 있던 것을 가리키던 문구 세 곳**을 탭 링크로 바꾸는 것(Task 4 Step 3, Task 5 Step 2, Task 6 Step 2). 분할 후에도 "아래 카드"·"위 예수금 칸"이라고 말하면 사용자는 없는 것을 찾는다.
 - **주석을 함께 옮긴다.** 원본의 한글 설명 주석은 그 코드가 왜 그렇게 생겼는지를 담고 있다. 코드를 옮길 때 바로 위 주석도 같이 옮긴다.
 - **백엔드를 건드리지 않는다.** `backend/` 아래 파일은 이 계획에서 수정 대상이 아니다.
 - **검증 명령:** `cd frontend && npm run build` — `tsc -b`가 포함되어 타입 오류가 있으면 실패한다. 모든 태스크의 마지막 검증은 이 명령이다.
@@ -247,7 +247,10 @@ export default function PortfolioLayout() {
 `Portfolio.tsx`의 나머지 전부를 이 파일로 옮긴다.
 
 - `return (<div className="grid"> … </div>)` 안의 205–860줄 JSX를 그대로 가져온다. 단 **최상위 `<div className="grid">` 래퍼는 제거한다** — 레이아웃이 이미 감싸고 있다. 프래그먼트 `<>…</>`로 감싼다.
-- 총자산 카드(208–277)에서 **스트립으로 옮겨간 4줄을 지운다**: 총자산 라벨+금액(210, 217), 평가손익 줄(220–222), 기준시각 줄(211–215), 환율 줄(238–244). 나머지(총자산 대비 %, 배당 포함 총수익, 평가액·현금 상세, 예수금 입력, 목표 종목 수, `msg`)는 남긴다.
+- 총자산 카드(208–277)에서 **스트립으로 옮겨간 부분을 지운다.** 지울 것은 두 덩어리다.
+  - `<div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>` 로 시작하는 헤더 블록부터 평가손익 줄이 끝나는 곳까지(209–222 한 덩어리) — 총자산 라벨·금액·기준시각·평가손익이 여기 모여 있다. 209줄 헤더 div는 기준시각과 짝을 이루므로 **반으로 쪼개지 말고 통째로** 지운다.
+  - 환율 줄(238–244).
+- 나머지는 남긴다: 총자산 대비 % 줄(223–225), 배당 포함 총수익(228–234), 평가액·현금 상세(235–237), 예수금 입력, 목표 종목 수, `msg`. 카드는 이제 `<div className="card">` 다음에 총자산 대비 % 줄로 시작한다.
 - `cashWarn` 렌더(273–275)를 지운다 — 레이아웃이 표시한다. `setCashWarn`은 컨텍스트에서 받아 계속 호출한다.
 - 상태·핸들러는 그대로 가져온다: `form`, `flowForm`, `msg`, `flowMsg`, `cashInput`, `cashUsdInput`, `parseCash`, `saveCash`, `savePositionRule`, `optionalCost`, `addTrade`, `addFlow`, `needsSymbol`.
 - `load()` 호출을 전부 `reload()`로 바꾼다.
@@ -463,13 +466,24 @@ export default function Realized() {
 
 - [ ] **Step 2: `Holdings.tsx`에서 해당 카드 제거**
 
-- [ ] **Step 3: `PortfolioLayout.tsx`의 `SUBTABS`에 항목 추가**
+- [ ] **Step 3: 총자산 카드의 "아래 카드" 참조를 링크로 교체**
+
+`Holdings.tsx` 총자산 카드의 총자산 대비 % 줄은 실현손익을 "아래 카드"로 가리킨다. 이제 다른 탭이므로 링크로 바꾼다. 이 문장만 바뀌고 나머지 문구는 그대로다.
+
+```tsx
+          <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+            총자산 대비 {t.total_pnl_pct_of_asset >= 0 ? '+' : ''}{t.total_pnl_pct_of_asset}%
+            {' · '}보유 종목 평가손익이며 실현손익은{' '}
+            <Link to="/portfolio/realized">복기</Link> 탭에 따로 있습니다</div>
+```
+
+- [ ] **Step 4: `PortfolioLayout.tsx`의 `SUBTABS`에 항목 추가**
 
 ```tsx
   { to: '/portfolio/realized', label: '복기', end: false },
 ```
 
-- [ ] **Step 4: `App.tsx`에 라우트 추가**
+- [ ] **Step 5: `App.tsx`에 라우트 추가**
 
 ```tsx
 import Realized from './pages/portfolio/Realized'
@@ -478,14 +492,14 @@ import Realized from './pages/portfolio/Realized'
             <Route path="realized" element={<Realized />} />
 ```
 
-- [ ] **Step 5: 빌드 + 실화면 확인**
+- [ ] **Step 6: 빌드 + 실화면 확인**
 
 ```bash
 cd frontend && npm run build
 ```
-`/portfolio/realized`에서 실현손익 지표와 매도 내역 표가 보이는지, 매도 기록이 없는 계좌에서는 기존 빈 상태 문구가 그대로 나오는지 확인한다.
+`/portfolio/realized`에서 실현손익 지표와 매도 내역 표가 보이는지, 매도 기록이 없는 계좌에서는 기존 빈 상태 문구가 그대로 나오는지, 보유 탭의 "복기" 링크가 이 탭으로 오는지 확인한다.
 
-- [ ] **Step 6: 커밋**
+- [ ] **Step 7: 커밋**
 
 ```bash
 git add -A
@@ -531,17 +545,28 @@ export default function Income() {
 
 `addFlow`의 `load()` 호출은 `reload()`로, `setCashWarn(cashClampWarning(res))`는 그대로 둔다 — 경고는 레이아웃 스트립 아래에 뜬다.
 
-- [ ] **Step 2: `Holdings.tsx`에서 카드·상태·핸들러 제거**
+- [ ] **Step 2: 입력 폼 안내의 "예수금 칸" 참조를 링크로 교체**
+
+원본 안내는 같은 화면에 있던 예수금 입력을 "예수금 칸"이라고만 부른다. 이제 보유 탭에 있으므로 어디인지 밝힌다. 이 문장만 바뀌고 나머지 문구는 그대로다.
+
+```tsx
+          금액은 <strong>종목 통화 기준</strong>입니다 (미국 종목이면 달러). 기록하면 세후 금액만큼
+          예수금이 자동 증감하므로 <Link to="/portfolio"><strong>보유</strong></Link> 탭의
+          <strong> 예수금 칸을 따로 고치지 마세요</strong> — 두 번 계상됩니다.
+          {' '}원천징수를 비우면 0으로 기록되어 세전 금액이 그대로 수익이 됩니다.
+```
+
+- [ ] **Step 3: `Holdings.tsx`에서 카드·상태·핸들러 제거**
 
 `flowForm`, `flowMsg`, `needsSymbol`, `addFlow`, `FLOW_LABEL`, 그리고 이제 쓰지 않는 import(`SymbolInput`이 매매 입력에서도 쓰이면 남긴다)를 정리한다. `const div = pf.dividends`도 Holdings에서 쓰지 않으면 제거한다 — 단 `hasDiv`는 보유 종목 표의 배당 열 조건이므로 **남긴다**.
 
-- [ ] **Step 3: `PortfolioLayout.tsx`의 `SUBTABS`에 항목 추가**
+- [ ] **Step 4: `PortfolioLayout.tsx`의 `SUBTABS`에 항목 추가**
 
 ```tsx
   { to: '/portfolio/income', label: '배당·현금흐름', end: false },
 ```
 
-- [ ] **Step 4: `App.tsx`에 라우트 추가**
+- [ ] **Step 5: `App.tsx`에 라우트 추가**
 
 ```tsx
 import Income from './pages/portfolio/Income'
@@ -550,7 +575,7 @@ import Income from './pages/portfolio/Income'
             <Route path="income" element={<Income />} />
 ```
 
-- [ ] **Step 5: 빌드 + 실화면 확인**
+- [ ] **Step 6: 빌드 + 실화면 확인**
 
 ```bash
 cd frontend && npm run build
@@ -561,7 +586,7 @@ cd frontend && npm run build
 - 보유 탭의 「배당 포함」 열이 함께 갱신된다
 - 삭제 확인 다이얼로그가 그대로 뜬다
 
-- [ ] **Step 6: 커밋**
+- [ ] **Step 7: 커밋**
 
 ```bash
 git add -A
