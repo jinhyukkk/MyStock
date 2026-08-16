@@ -9,6 +9,7 @@ import type { PortfolioContext } from './context'
 const SUBTABS = [
   { to: '/portfolio', label: '보유', end: true },
   { to: '/portfolio/risk', label: '리스크', end: false },
+  { to: '/portfolio/realized', label: '복기', end: false },
 ]
 
 export default function PortfolioLayout() {
