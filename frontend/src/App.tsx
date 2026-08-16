@@ -3,6 +3,7 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
 import Holdings from './pages/portfolio/Holdings'
+import Risk from './pages/portfolio/Risk'
 
 // 차트 라이브러리(recharts, lightweight-charts)를 쓰는 페이지만 지연 로딩
 const TickerDetail = lazy(() => import('./pages/TickerDetail'))
@@ -22,6 +23,7 @@ export default function App() {
           <Route path="/portfolio" element={
             <Suspense fallback={fallback}><PortfolioLayout /></Suspense>}>
             <Route index element={<Holdings />} />
+            <Route path="risk" element={<Risk />} />
           </Route>
           <Route path="/watchlist" element={
             <Suspense fallback={fallback}><Watchlist /></Suspense>} />

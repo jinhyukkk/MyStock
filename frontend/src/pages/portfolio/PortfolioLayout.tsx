@@ -1,10 +1,15 @@
 import { useEffect, useState } from 'react'
-import { Outlet } from 'react-router-dom'
+import { NavLink, Outlet } from 'react-router-dom'
 import { get } from '../../api'
 import type { CashFlow, Portfolio as PF, Trade } from '../../types'
 import { isStale, relativeTime } from '../../time'
 import { fmt } from '../../format'
 import type { PortfolioContext } from './context'
+
+const SUBTABS = [
+  { to: '/portfolio', label: '보유', end: true },
+  { to: '/portfolio/risk', label: '리스크', end: false },
+]
 
 export default function PortfolioLayout() {
   const [pf, setPf] = useState<PF | null>(null)
@@ -86,6 +91,13 @@ export default function PortfolioLayout() {
       {cashWarn && <div className="warn-box">⚠ {cashWarn}
         <button className="ghost" style={{ marginLeft: 8 }}
                 onClick={() => setCashWarn(null)}>확인</button></div>}
+      <nav className="subtabs">
+        {SUBTABS.map(s => (
+          <NavLink key={s.to} to={s.to} end={s.end}
+            className={({ isActive }) => isActive ? 'subtab active' : 'subtab'}>
+            {s.label}</NavLink>
+        ))}
+      </nav>
       <Outlet context={{ pf, trades, flows, posRule, setPosRule, now,
                          reload: load, setCashWarn } satisfies PortfolioContext} />
     </div>

@@ -144,6 +144,18 @@ input:focus, select:focus {
 /* 포트폴리오 총자산 스트립 — 모든 하위 탭 상단에 고정 */
 .pf-strip { display: flex; gap: 28px; flex-wrap: wrap; align-items: flex-start; }
 @media (max-width: 640px) { .pf-strip { gap: 14px; } }
+/* 포트폴리오 하위 탭 — 최상위 탭보다 한 단계 작고 밑줄로 구분 */
+.subtabs { display: flex; gap: 2px; flex-wrap: wrap; border-bottom: 1px solid var(--border);
+           margin-bottom: 4px; }
+.subtab { padding: 6px 12px; font-size: 13px; color: var(--text-dim);
+          border-bottom: 2px solid transparent; margin-bottom: -1px;
+          transition: color 0.15s ease, border-color 0.15s ease; }
+.subtab:hover { color: var(--text); }
+.subtab.active { color: var(--text); border-bottom-color: var(--accent); }
+@media (max-width: 640px) {
+  .subtabs { overflow-x: auto; flex-wrap: nowrap; }
+  .subtab { padding: 6px 9px; font-size: 12px; white-space: nowrap; }
+}
 /* 커맨드 팔레트 */
 .palette-overlay {
   position: fixed; inset: 0; z-index: 100;
