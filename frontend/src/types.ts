@@ -39,12 +39,19 @@ export interface Candle {
 }
 export interface IndicatorScore { name: string; score: number; reason: string; scope: string }
 export interface OpenRisk {
-  rows: { symbol: string; name: string; risk_krw: number; risk_pct: number | null }[];
+  rows: { symbol: string; name: string; risk_krw: number; risk_pct: number | null;
+          stop_source: 'rule' | 'atr' }[];
   total_risk_krw: number; total_risk_pct: number | null;
   limit_pct: number; over_limit: boolean;
+  // 손절 룰이 없어 2×ATR로 '가정'한 종목 수 — 가정을 사실처럼 읽으면 안 된다
+  unregistered_count: number;
 }
 export interface TickerRisk {
   atr: number; atr_pct: number; stop_price: number; stop_pct: number; mdd_pct: number;
+  // 알림을 울리는 것은 등록된 룰뿐이다 — 화면의 손절선도 같은 값이어야 한다
+  stop_source: 'rule' | 'atr';
+  atr_stop_price: number; atr_stop_pct: number;
+  stop_drift_pct: number | null; stop_drift: boolean;
   // 손절가만 있으면 손익비를 모른 채 진입하게 된다 — 목표가를 함께 낸다
   target_price: number; target_pct: number; target_r: number; reward_risk: number | null;
   resistance_60d: number | null; resistance_pct: number | null;
@@ -70,8 +77,15 @@ export interface ExitPlan {
   r_unit: number | null; r_multiple: number | null;
   unrealized_pnl_pct: number; unrealized_pnl_krw: number;
   stop_from_avg_pct: number; risk_to_stop_krw: number; stop_locks_profit: boolean;
+  // 해외 포지션은 확정손익에서 이듬해 5월 양도세가 더 빠진다
+  taxable_overseas: boolean; deduction_left_krw: number | null;
   slices: { label: string; quantity: number;
-            proceeds_krw: number; realized_pnl_krw: number }[];
+            proceeds_krw: number; realized_pnl_krw: number;
+            tax_krw: number; realized_pnl_after_tax_krw: number }[];
+}
+export interface OverseasTax {
+  year: number; gain_krw: number; deduction_krw: number; deduction_left_krw: number;
+  taxable_krw: number; tax_krw: number; rate_pct: number;
 }
 export interface TickerDetail {
   symbol: string; name: string; market: string; currency: string; is_etf: number;
@@ -126,7 +140,7 @@ export interface Portfolio {
     cash_krw: number; cash_usd: number; cash_usd_krw: number;
     total_asset_krw: number; cash_pct: number };
   allocation: { label: string; value_krw: number }[];
-  realized: { entries: RealizedEntry[]; stats: RealizedStats };
+  realized: { entries: RealizedEntry[]; stats: RealizedStats; overseas_tax: OverseasTax };
   risk: AccountRisk | null;
   open_risk: OpenRisk | null;
   last_refresh: string | null;

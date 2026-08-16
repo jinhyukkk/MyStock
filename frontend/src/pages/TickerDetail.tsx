@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { createChart, CandlestickSeries, LineSeries, HistogramSeries, LineStyle, type IChartApi } from 'lightweight-charts'
 import { del, get, post } from '../api'
 import { isStale, relativeTime } from '../time'
@@ -88,6 +88,16 @@ function verdict(detail: Detail): { text: string; tone: 'buy' | 'sell' | 'flat' 
   const held = (detail.risk?.exit_plan?.held_quantity ?? 0) > 0
   const over = detail.risk?.account_open_risk?.over_limit
   const d = sig ? dir(sig.swing_grade) : 0
+  // 총자산이 0이면 사이징이 계산되지 않는다. 그 상태에서 "제안 수량을 넘기지
+  // 마세요"라고 하면 화면에 없는 것을 가리키게 된다 — 먼저 예수금을 요구한다.
+  const noSizing = !!detail.risk && detail.risk.position_size_1pct === null
+  // 리스크 블록 자체가 없으면 보유 여부조차 알 수 없다 — 모른다고 말한다
+  if (!detail.risk)
+    return { tone: 'flat', text: '가격 데이터가 부족해 손절·수량·보유 상태를 판단할 수 없습니다 — '
+      + '새로고침 후 다시 확인하세요.' }
+  if (!held && noSizing)
+    return { tone: 'flat', text: '예수금이 입력되지 않아 리스크 기준 수량을 계산할 수 없습니다 — '
+      + '포트폴리오에서 예수금을 먼저 입력하세요.' }
   if (held && d < 0)
     return { tone: 'sell', text: '보유 중인데 스윙 매도 신호입니다 — 추가 매수가 아니라 '
       + '아래 청산 플랜에서 얼마를 덜어낼지 먼저 정하세요.' }
@@ -195,14 +205,63 @@ export default function TickerDetail() {
   }
 
   /** 손절가는 이 화면에서 이미 계산돼 있는데 룰 등록은 수동 재입력이었다.
-   *  옮겨 적는 사이에 값이 틀리거나 아예 등록을 건너뛰게 된다. */
+   *  옮겨 적는 사이에 값이 틀리거나 아예 등록을 건너뛰게 된다.
+   *  갱신 시에는 기존 STOP 룰을 지운다 — 두 개가 남으면 어느 쪽이 울리는지
+   *  다시 알 수 없게 되고, 그게 이 화면이 고치려던 문제다. */
   const registerStop = async () => {
     if (!detail.risk) return
     try {
-      await post('/api/rules', { symbol, rule_type: 'STOP', value: detail.risk.stop_price })
+      for (const r of detail.rules.filter(r => r.rule_type === 'STOP'))
+        await del(`/api/rules/${r.id}`)
+      await post('/api/rules', { symbol, rule_type: 'STOP', value: detail.risk.atr_stop_price })
       setRuleMsg(null); load()
     } catch (e) { setRuleMsg(String(e)) }
   }
+
+  /** 진입 수량 블록. 미보유면 결론에, 보유 중이면 '추가 매수 검토' 안에 놓인다. */
+  const sizingBlock = !detail.risk ? null
+    /* 총자산이 0이면 사이징이 계산되지 않는다. 블록을 통째로 지우면 판정 라인이
+       화면에 없는 '제안 수량'을 가리키게 되므로, 없는 이유를 자리에 남긴다. */
+    : detail.risk.position_size_1pct === null ? (
+      <div>
+        <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>제안 수량 (1% 리스크)</div>
+        <div style={{ fontSize: 14, color: 'var(--text-dim)', maxWidth: 280 }}>
+          예수금을 입력하면 계산됩니다 — <Link to="/portfolio">포트폴리오에서 입력</Link></div>
+      </div>
+    ) : (
+      <div>
+        <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+          제안 수량 (1% 리스크, 비중 {detail.risk.max_weight_pct}% 상한)</div>
+        <div style={{ fontWeight: 700, fontSize: 18 }}>
+          {detail.risk.position_size_1pct.toLocaleString('ko-KR')}
+          <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+            {' '}(리스크 ₩{detail.risk.risk_budget_krw?.toLocaleString('ko-KR')}
+            {detail.risk.position_notional_krw !== null &&
+              ` · 평가액 ₩${detail.risk.position_notional_krw.toLocaleString('ko-KR')}`})</span></div>
+        {(detail.risk.held_quantity ?? 0) > 0 && <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+          이미 {detail.risk.held_quantity?.toLocaleString('ko-KR')} 보유 →
+          {' '}추가 매수 가능 <strong>{detail.risk.addable_quantity?.toLocaleString('ko-KR')}</strong></div>}
+        {/* 소수점 주문이 안 되는 시장에서 5.095주를 제시하면 사용자가 매번
+            스스로 잘라야 하고, 그 과정에서 리스크 한도가 흐려진다 */}
+        {detail.risk.lot_size === 1 && (detail.risk.position_size_raw ?? 0) > detail.risk.position_size_1pct &&
+          <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+            1주 단위로 내림 (계산값 {detail.risk.position_size_raw?.toLocaleString('ko-KR')})</div>}
+        {detail.risk.position_size_1pct === 0 && <div className="warn" style={{ fontSize: 11 }}>
+          ⚠ 1% 리스크로는 1주도 살 수 없습니다 — 변동성 대비 계좌가 작습니다</div>}
+        {/* 중소형주에서는 주문 크기 자체가 체결가를 밀어버린다. 반올림해서 0%가
+            되면 계산이 깨진 것처럼 보이므로 "미미함"으로 말한다. */}
+        {detail.risk.liquidity_pct !== null && <div style={{ fontSize: 11,
+          color: detail.risk.liquidity_pct >= 1 ? 'var(--warn)' : 'var(--text-dim)' }}>
+          {detail.risk.liquidity_pct < 0.01
+            ? '일평균 거래대금 대비 0.01% 미만 — 체결 영향 미미'
+            : `일평균 거래대금의 ${detail.risk.liquidity_pct}%`}
+          {detail.risk.liquidity_pct >= 1 && ' — 이 크기는 체결가를 밀 수 있습니다'}</div>}
+      </div>
+    )
+
+  // 접었다는 사실이 "숨겼다"로 읽히지 않도록 안에 든 경고 개수를 헤더에 남긴다
+  const noteCount = [detail.risk?.position_size_capped, detail.risk?.target_above_resistance,
+                     conflict, disc ? !disc.discriminates : false].filter(Boolean).length
 
   return (
     <div className="grid">
@@ -281,11 +340,17 @@ export default function TickerDetail() {
             <strong>청산 플랜 — 보유 {plan.held_quantity.toLocaleString('ko-KR')}
               {/* +27%보다 +2.1R이 익절·추격 판단에 직접 닿는다 */}
               {plan.r_multiple !== null && <span className={plan.r_multiple >= 0 ? 'pos' : 'neg'}
-                title={`1R = ${unit}${plan.r_unit?.toLocaleString('ko-KR')} (평단에서 손절선까지)`}>
+                title={`1R = ${unit}${plan.r_unit?.toLocaleString('ko-KR')} (현재가 − 손절선)`}>
                 {' '}{plan.r_multiple >= 0 ? '+' : ''}{plan.r_multiple}R</span>}</strong>
             <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>
               평단 {unit}{plan.avg_price.toLocaleString('ko-KR')}</span>
           </div>
+          {/* R의 분모를 화면에 적는다. 툴팁만 두면 모바일에서 읽을 수 없고,
+              분모를 '평단−손절선'으로 오해하면 변동성이 줄어 배수가 커진 것을
+              수익이 늘어난 것으로 읽어 주가가 그대로인데 익절하게 된다. */}
+          {plan.r_multiple !== null && <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>
+            1R = {unit}{plan.r_unit?.toLocaleString('ko-KR')} (현재가 − 손절선)
+            {' '}— 손절폭이 바뀌면 같은 손익도 배수가 달라집니다</div>}
           <div style={{ display: 'flex', gap: 28, marginTop: 10, flexWrap: 'wrap' }}>
             <div>
               <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>평가손익</div>
@@ -308,35 +373,53 @@ export default function TickerDetail() {
                   : `여기서 손절까지 ₩${Math.round(plan.risk_to_stop_krw).toLocaleString('ko-KR')} 추가 손실`}</div>
             </div>
           </div>
+          <div className="table-scroll table-cards">
           <table style={{ marginTop: 10 }}>
             <thead><tr><th>덜어낼 비중</th><th>수량</th><th>순회수액</th>
-              <th>확정 손익</th></tr></thead>
+              {/* 해외 포지션의 확정손익은 5월 양도세를 빼야 실제로 손에 남는 돈이다 */}
+              <th>{plan.taxable_overseas ? '확정 손익 (양도세 후)' : '확정 손익'}</th></tr></thead>
             <tbody>
               {plan.slices.map(s => (
                 <tr key={s.label}>
-                  <td style={{ textAlign: 'left' }}>{s.label}</td>
-                  <td>{s.quantity.toLocaleString('ko-KR')}</td>
-                  <td>₩{Math.round(s.proceeds_krw).toLocaleString('ko-KR')}</td>
-                  <td className={s.realized_pnl_krw >= 0 ? 'pos' : 'neg'}>
-                    {s.realized_pnl_krw >= 0 ? '+' : ''}
-                    ₩{Math.round(s.realized_pnl_krw).toLocaleString('ko-KR')}</td>
+                  <td data-label="덜어낼 비중" style={{ textAlign: 'left' }}>{s.label}</td>
+                  <td data-label="수량">{s.quantity.toLocaleString('ko-KR')}</td>
+                  <td data-label="순회수액">₩{Math.round(s.proceeds_krw).toLocaleString('ko-KR')}</td>
+                  <td data-label={plan.taxable_overseas ? '확정 손익 (양도세 후)' : '확정 손익'}
+                      className={s.realized_pnl_after_tax_krw >= 0 ? 'pos' : 'neg'}>
+                    {s.realized_pnl_after_tax_krw >= 0 ? '+' : ''}
+                    ₩{Math.round(s.realized_pnl_after_tax_krw).toLocaleString('ko-KR')}
+                    {s.tax_krw > 0 && <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                      양도세 -₩{Math.round(s.tax_krw).toLocaleString('ko-KR')}</div>}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+          </div>
           <div style={{ color: 'var(--text-dim)', fontSize: 11, marginTop: 8 }}>
-            회수액·손익은 매도 수수료·세금을 뺀 추정치이며 평단 기준입니다.
-            {' '}실제 체결가는 호가에 따라 달라집니다.</div>
+            회수액은 매도 수수료·거래세를 뺀 추정치이며 평단 기준입니다.
+            {' '}실제 체결가는 호가에 따라 달라집니다.
+            {plan.taxable_overseas && <>
+              {' '}해외 양도세 {22}%는 체결 시점이 아니라 이듬해 5월에 냅니다 —
+              {' '}올해 남은 기본공제 ₩{Math.round(plan.deduction_left_krw ?? 0).toLocaleString('ko-KR')}을
+              {' '}반영한 한계 세액입니다.</>}</div>
           <button style={{ marginTop: 10 }} onClick={() => setTradeOpen('SELL')}>매도 기록</button>
         </div>}
 
-        {detail.risk ? (
-          <div style={{ display: 'flex', gap: 32, marginTop: 10, flexWrap: 'wrap' }}>
+        {detail.risk ? (<>
+          {/* 항상 보이는 것은 결론에 직접 쓰이는 숫자뿐이다. 유동성·lot·판별력·
+              계좌 리스크·고지문까지 같은 무게로 늘어놓으면 결론이 그 아래 묻힌다. */}
+          <div style={{ display: 'flex', gap: 32, marginTop: 12, flexWrap: 'wrap' }}>
+            {/* 알림을 울리는 것은 등록된 룰뿐이다. 룰이 있으면 그것이 '내 손절선'이고
+                2×ATR은 오늘의 제안일 뿐이라는 것을 이름으로 구분한다. */}
             <div>
-              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>제안 손절가 (2×ATR)</div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+                {detail.risk.stop_source === 'rule' ? '내 손절선 (룰 등록됨)' : '제안 손절가 (2×ATR)'}</div>
               <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--sell)' }}>
                 {unit}{detail.risk.stop_price.toLocaleString('ko-KR')}
                 <span style={{ fontSize: 12 }}> ({detail.risk.stop_pct}%)</span></div>
+              {detail.risk.stop_source === 'rule' && <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                오늘의 2×ATR 제안 {unit}{detail.risk.atr_stop_price.toLocaleString('ko-KR')}
+                {' '}({detail.risk.atr_stop_pct}%)</div>}
             </div>
             {/* 손절가만 있고 목표가가 없으면 손익비를 모른 채 사이즈를 정하게 된다 */}
             <div>
@@ -345,102 +428,113 @@ export default function TickerDetail() {
               <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--buy)' }}>
                 {unit}{detail.risk.target_price.toLocaleString('ko-KR')}
                 <span style={{ fontSize: 12 }}> (+{detail.risk.target_pct}%)</span></div>
-              {detail.risk.resistance_60d !== null && <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
-                60일 고점 {unit}{detail.risk.resistance_60d.toLocaleString('ko-KR')}
-                {' '}(손익비 {detail.risk.resistance_reward_risk}:1)</div>}
             </div>
-            {detail.risk.position_size_1pct !== null && !holdingSellSignal && <div>
-              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
-                제안 수량 (1% 리스크, 비중 {detail.risk.max_weight_pct}% 상한)</div>
-              <div style={{ fontWeight: 700, fontSize: 18 }}>
-                {detail.risk.position_size_1pct.toLocaleString('ko-KR')}
-                <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
-                  {' '}(리스크 ₩{detail.risk.risk_budget_krw?.toLocaleString('ko-KR')}
-                  {detail.risk.position_notional_krw !== null &&
-                    ` · 평가액 ₩${detail.risk.position_notional_krw.toLocaleString('ko-KR')}`})</span></div>
-              {(detail.risk.held_quantity ?? 0) > 0 && <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
-                이미 {detail.risk.held_quantity?.toLocaleString('ko-KR')} 보유 →
-                {' '}추가 매수 가능 <strong>{detail.risk.addable_quantity?.toLocaleString('ko-KR')}</strong></div>}
-              {/* 소수점 주문이 안 되는 시장에서 5.095주를 제시하면 사용자가 매번
-                  스스로 잘라야 하고, 그 과정에서 리스크 한도가 흐려진다 */}
-              {detail.risk.lot_size === 1 && (detail.risk.position_size_raw ?? 0) > detail.risk.position_size_1pct &&
-                <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
-                  1주 단위로 내림 (계산값 {detail.risk.position_size_raw?.toLocaleString('ko-KR')})</div>}
-              {detail.risk.position_size_1pct === 0 && <div className="warn" style={{ fontSize: 11 }}>
-                ⚠ 1% 리스크로는 1주도 살 수 없습니다 — 변동성 대비 계좌가 작습니다</div>}
-              {/* 중소형주에서는 주문 크기 자체가 체결가를 밀어버린다. 반올림해서 0%가
-                  되면 계산이 깨진 것처럼 보이므로 "미미함"으로 말한다. */}
-              {detail.risk.liquidity_pct !== null && <div style={{ fontSize: 11,
-                color: detail.risk.liquidity_pct >= 1 ? 'var(--warn)' : 'var(--text-dim)' }}>
-                {detail.risk.liquidity_pct < 0.01
-                  ? '일평균 거래대금 대비 0.01% 미만 — 체결 영향 미미'
-                  : `일평균 거래대금의 ${detail.risk.liquidity_pct}%`}
-                {detail.risk.liquidity_pct >= 1 && ' — 이 크기는 체결가를 밀 수 있습니다'}</div>}
-            </div>}
-            <div>
-              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
-                이 등급의 과거 성적 (20일)
-                {/* 승률 62%만 크게 보여주면 그 62%가 중립 등급 50%와 다를 게 없다는
-                    사실, 나아가 매도 등급이 더 나았다는 사실이 아래 표 속에 묻힌다 */}
-                {disc && !disc.discriminates && <span className="warn" title={
-                  `매수 등급 ${disc.buy_net}% vs 매도 등급 ${disc.sell_net}% (20일 순수익)`}>
-                  {' '}· ⚠ 등급이 방향을 못 가름 ({disc.spread}%p)</span>}
-                {disc && disc.discriminates && <span style={{ color: 'var(--text-dim)' }} title={
-                  `매수 등급 ${disc.buy_net}% vs 매도 등급 ${disc.sell_net}% (20일 순수익)`}>
-                  {' '}· 판별력 +{disc.spread}%p</span>}</div>
-              <div style={{ fontWeight: 700, fontSize: 18 }}>
-                {gradeStat && gradeStat.insufficient20 !== true && typeof gradeStat.win20 === 'number'
-                  ? <>승률 {gradeStat.win20}%
-                      <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
-                        {' '}(비용 차감 후) · 독립 표본 {gradeStat.episodes20}개</span></>
-                  /* 아직 응답 전인 것과 검증해보니 표본이 없는 것은 전혀 다른 사실이다 */
-                  : btLoading
-                  ? <span style={{ color: 'var(--text-dim)', fontSize: 14 }}>불러오는 중…</span>
-                  : btError
-                  ? <span style={{ color: 'var(--text-dim)', fontSize: 14 }}>
-                      백테스트를 불러오지 못했습니다</span>
-                  : <span style={{ color: 'var(--text-dim)', fontSize: 14 }}>
-                      표본 부족 — 이 등급은 판단 근거로 쓰기에 관측이 부족합니다</span>}</div>
-            </div>
+            {/* 보유 중이면 진입 수량은 결론이 아니다 — 아래 '추가 매수 검토'로 내린다 */}
+            {!plan && sizingBlock}
             <div style={{ alignSelf: 'center' }}>
-              <button className="ghost" onClick={registerStop} disabled={hasStopRule}>
-                {hasStopRule ? '손절 룰 등록됨' : '손절가를 룰로 등록'}</button>
+              {/* 룰이 이미 있어도 제안이 크게 벌어졌으면 버튼을 다시 살린다 —
+                  한 번 등록한 룰은 변동성이 변해도 그대로 남아 서서히 무의미해진다 */}
+              <button className="ghost" onClick={registerStop}
+                      disabled={hasStopRule && !detail.risk.stop_drift}>
+                {!hasStopRule ? '손절가를 룰로 등록'
+                  : detail.risk.stop_drift ? '오늘의 제안으로 룰 갱신' : '손절 룰 등록됨'}</button>
             </div>
           </div>
-        ) : <div style={{ color: 'var(--text-dim)', marginTop: 8 }}>
+
+          {/* ── 판단을 뒤집는 경고만 결론 옆에 남는다 ── */}
+          {/* 등록한 룰은 그대로 남는데 변동성은 매일 바뀐다. 둘이 벌어진 채로 두면
+              화면의 손익비·사이징은 오늘의 시장을, 알림은 지난달의 시장을 가리킨다. */}
+          {detail.risk.stop_drift && <div className="warn-box critical" style={{ marginTop: 12 }}>
+            ⚠ 등록한 손절선({unit}{detail.risk.stop_price.toLocaleString('ko-KR')})과 오늘의 2×ATR
+            제안({unit}{detail.risk.atr_stop_price.toLocaleString('ko-KR')})이 현재가의
+            {' '}{Math.abs(detail.risk.stop_drift_pct ?? 0)}%만큼 벌어졌습니다 — 변동성이 변했습니다.
+            {' '}알림은 등록한 값에서 울립니다. 그대로 둘지 갱신할지 정하세요.</div>}
+          {/* -21% 손절을 제시하면 실제로 그걸 지키는 사람은 없고 손절 없는 매매가 된다 */}
+          {detail.risk.stop_too_wide && <div className="warn-box critical" style={{ marginTop: 12 }}>
+            ⚠ {detail.risk.stop_source === 'rule' ? '손절폭' : '2×ATR 손절폭'}이
+            {' '}{Math.abs(detail.risk.stop_pct)}%로 스윙 타임프레임에 과대합니다
+            (기준 {detail.risk.max_stop_pct}%). 이 폭을 실제로 견딜 수 있는지 먼저 판단하세요 —
+            못 지킬 손절은 없는 손절과 같습니다.</div>}
+          {detail.risk.account_open_risk?.over_limit &&
+            <div className="warn-box critical" style={{ marginTop: 12 }}>
+              ⚠ 계좌 총 미결 리스크 {detail.risk.account_open_risk.total_risk_pct}%가 상한
+              {' '}{detail.risk.account_open_risk.limit_pct}%를 넘었습니다 — 신규 진입 전에
+              기존 포지션 축소가 먼저입니다.</div>}
+
+          {/* 나가는 판단과 들어가는 판단이 같은 무게로 경쟁하면 물타기 쪽이 이긴다 */}
+          {plan && detail.risk.position_size_1pct !== null && !holdingSellSignal &&
+            <details className="premises">
+              <summary>추가 매수 검토</summary>
+              <div style={{ marginTop: 10 }}>{sizingBlock}</div>
+            </details>}
+
+          {/* ── 전제·근거는 접는다. 사라지는 게 아니라 필요할 때 열린다 ── */}
+          <details className="premises">
+            <summary>이 판단의 전제 보기
+              {noteCount > 0 && <span className="warn">⚠ {noteCount}</span>}</summary>
+            <div style={{ marginTop: 10, display: 'flex', gap: 32, flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+                  이 등급의 과거 성적 (20일)
+                  {/* 승률 62%만 크게 보여주면 그 62%가 중립 등급 50%와 다를 게 없다는
+                      사실, 나아가 매도 등급이 더 나았다는 사실이 아래 표 속에 묻힌다 */}
+                  {disc && !disc.discriminates && <span className="warn" title={
+                    `매수 등급 ${disc.buy_net}% vs 매도 등급 ${disc.sell_net}% (20일 순수익)`}>
+                    {' '}· ⚠ 등급이 방향을 못 가름 ({disc.spread}%p)</span>}
+                  {disc && disc.discriminates && <span style={{ color: 'var(--text-dim)' }} title={
+                    `매수 등급 ${disc.buy_net}% vs 매도 등급 ${disc.sell_net}% (20일 순수익)`}>
+                    {' '}· 판별력 +{disc.spread}%p</span>}</div>
+                <div style={{ fontWeight: 700, fontSize: 16 }}>
+                  {gradeStat && gradeStat.insufficient20 !== true && typeof gradeStat.win20 === 'number'
+                    ? <>승률 {gradeStat.win20}%
+                        <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+                          {' '}(비용 차감 후) · 독립 표본 {gradeStat.episodes20}개</span></>
+                    /* 아직 응답 전인 것과 검증해보니 표본이 없는 것은 전혀 다른 사실이다 */
+                    : btLoading
+                    ? <span style={{ color: 'var(--text-dim)', fontSize: 14 }}>불러오는 중…</span>
+                    : btError
+                    ? <span style={{ color: 'var(--text-dim)', fontSize: 14 }}>
+                        백테스트를 불러오지 못했습니다</span>
+                    : <span style={{ color: 'var(--text-dim)', fontSize: 14 }}>
+                        표본 부족 — 이 등급은 판단 근거로 쓰기에 관측이 부족합니다</span>}</div>
+              </div>
+              {detail.risk.resistance_60d !== null && <div>
+                <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>60일 고점 (매물대)</div>
+                <div style={{ fontWeight: 700, fontSize: 16 }}>
+                  {unit}{detail.risk.resistance_60d.toLocaleString('ko-KR')}
+                  <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+                    {' '}(손익비 {detail.risk.resistance_reward_risk}:1)</span></div>
+              </div>}
+              {detail.risk.account_open_risk && <div>
+                <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>계좌 총 미결 리스크</div>
+                <div style={{ fontWeight: 700, fontSize: 16 }}>
+                  {detail.risk.account_open_risk.total_risk_pct}%
+                  <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+                    {' '}/ 상한 {detail.risk.account_open_risk.limit_pct}%</span></div>
+              </div>}
+            </div>
+            {/* 상한이 걸렸다는 사실 자체가 리스크 정보다 — 잘리지 않은 1% 룰 수량은
+                저변동성 구간에서 계좌 전액을 넘길 수 있다. */}
+            {detail.risk.position_size_capped && <div className="warn-box note" style={{ marginTop: 10 }}>
+              ⚠ {detail.risk.cap_reason}</div>}
+            {/* 목표가가 매물대 위면 그 구간을 뚫어야 도달한다 — 손익비가 종이 위에서만 성립한다 */}
+            {detail.risk.target_above_resistance && <div className="warn-box note" style={{ marginTop: 10 }}>
+              ⚠ 목표가가 60일 고점({unit}{detail.risk.resistance_60d?.toLocaleString('ko-KR')}) 위입니다 —
+              그 매물대를 뚫어야 도달합니다. 고점까지만 보면 손익비는
+              {' '}{detail.risk.resistance_reward_risk}:1입니다.</div>}
+            {conflict && sig && <div className="warn-box note" style={{ marginTop: 10 }}>
+              ⚠ 스윙 {sig.swing_grade} · 중장기 {sig.longterm_grade} — 방향이 엇갈립니다.
+              어느 쪽을 따를지가 아니라 <strong>보유 기간을 먼저 정하고</strong> 그에 맞는 쪽을 보세요.</div>}
+            {sig?.context_note && <div style={{ color: 'var(--accent)', fontSize: 13, marginTop: 10 }}>
+              💡 {sig.context_note}</div>}
+            <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 10 }}>
+              손절 기준 총자산의 1%만 잃는 수량이되, 한 종목이 총자산의
+              {' '}{detail.risk.max_weight_pct}%를 넘지 않도록 상한을 겁니다. 진입 전 손절가를 먼저 정하세요.
+              {' '}손절가는 자동 예약주문이 아니며 갭 하락 시 계획보다 더 잃을 수 있습니다.
+              <br />지표 기반 참고 정보이며 투자 자문이 아닙니다. 최종 판단과 책임은 본인에게 있습니다.</div>
+          </details>
+        </>) : <div style={{ color: 'var(--text-dim)', marginTop: 8 }}>
           ATR 계산에 필요한 가격 데이터가 부족합니다 — 새로고침 후 다시 확인하세요.</div>}
-
-        {/* 상한이 걸렸다는 사실 자체가 리스크 정보다 — 잘리지 않은 1% 룰 수량은
-            저변동성 구간에서 계좌 전액을 넘길 수 있다. */}
-        {detail.risk?.position_size_capped && <div className="warn-box" style={{ marginTop: 12 }}>
-          ⚠ {detail.risk.cap_reason}</div>}
-        {/* -21% 손절을 제시하면 실제로 그걸 지키는 사람은 없고 손절 없는 매매가 된다 */}
-        {detail.risk?.stop_too_wide && <div className="warn-box" style={{ marginTop: 12 }}>
-          ⚠ 2×ATR 손절폭이 {Math.abs(detail.risk.stop_pct)}%로 스윙 타임프레임에 과대합니다
-          (기준 {detail.risk.max_stop_pct}%). 이 폭을 실제로 견딜 수 있는지 먼저 판단하세요 —
-          못 지킬 손절은 없는 손절과 같습니다. 더 긴 보유 기간을 전제하거나 종목을 거르는 편이 낫습니다.</div>}
-        {/* 목표가가 매물대 위면 그 구간을 뚫어야 도달한다 — 손익비가 종이 위에서만 성립한다 */}
-        {detail.risk?.target_above_resistance && <div className="warn-box" style={{ marginTop: 12 }}>
-          ⚠ 목표가가 60일 고점({unit}{detail.risk.resistance_60d?.toLocaleString('ko-KR')}) 위입니다 —
-          그 매물대를 뚫어야 도달합니다. 고점까지만 보면 손익비는
-          {' '}{detail.risk.resistance_reward_risk}:1입니다.</div>}
-        {detail.risk?.account_open_risk && <div style={{
-          marginTop: 12, fontSize: 13,
-          color: detail.risk.account_open_risk.over_limit ? 'var(--sell)' : 'var(--text-dim)' }}>
-          현재 계좌 총 미결 리스크 <strong>{detail.risk.account_open_risk.total_risk_pct}%</strong>
-          {' '}/ 상한 {detail.risk.account_open_risk.limit_pct}%
-          {detail.risk.account_open_risk.over_limit && ' — 신규 진입 전에 기존 포지션 축소를 먼저 검토하세요'}</div>}
-
-        {conflict && sig && <div className="warn-box" style={{ marginTop: 12 }}>
-          ⚠ 스윙 {sig.swing_grade} · 중장기 {sig.longterm_grade} — 방향이 엇갈립니다.
-          어느 쪽을 따를지가 아니라 <strong>보유 기간을 먼저 정하고</strong> 그에 맞는 쪽을 보세요.</div>}
-        {sig?.context_note && <div style={{ color: 'var(--accent)', fontSize: 13, marginTop: 10 }}>
-          💡 {sig.context_note}</div>}
-        <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 10 }}>
-          2×ATR 손절 기준 총자산의 1%만 잃는 수량이되, 한 종목이 총자산의
-          {' '}{detail.risk?.max_weight_pct ?? 20}%를 넘지 않도록 상한을 겁니다. 진입 전 손절가를 먼저 정하세요.
-          {' '}손절가는 자동 예약주문이 아니며 갭 하락 시 계획보다 더 잃을 수 있습니다.
-          <br />지표 기반 참고 정보이며 투자 자문이 아닙니다. 최종 판단과 책임은 본인에게 있습니다.</div>
         {ruleMsg && <div style={{ color: 'var(--sell)', fontSize: 12, marginTop: 8 }}>{ruleMsg}</div>}
       </div>
 

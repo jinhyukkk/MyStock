@@ -155,7 +155,10 @@ export default function TradeDialog({ symbol, name, currency, defaultPrice, defa
               {' '}{unit}{fmt(side === 'BUY' ? notional + estCost : notional - estCost)}</span>}</div>
           {sellPnl !== null && <div className={sellPnl >= 0 ? 'pos' : 'neg'} style={{ marginTop: 4 }}>
             예상 실현손익 {sellPnl >= 0 ? '+' : '-'}{unit}{fmt(Math.abs(sellPnl))}
-            <span style={{ color: 'var(--text-dim)' }}> (비용 차감 후 · 평단 기준)</span></div>}
+            <span style={{ color: 'var(--text-dim)' }}> (비용 차감 후 · 평단 기준)</span>
+            {/* 이 숫자에는 이듬해 5월에 낼 양도세가 아직 들어 있다 */}
+            {exitPlan?.taxable_overseas && sellPnl > 0 && <span style={{ color: 'var(--text-dim)' }}>
+              {' '}· 해외 양도세 22%는 미차감</span>}</div>}
         </div>}
         {oversell && <div className="warn-box" style={{ marginTop: 8, fontSize: 12 }}>
           ⚠ 보유 {fmt(held)}보다 많은 수량입니다 — 이대로는 기록되지 않습니다.</div>}

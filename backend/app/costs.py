@@ -57,6 +57,24 @@ def round_to_lot(quantity: float, market: str) -> float:
     return round(n * lot, 8)
 
 
+# 해외주식 양도소득세 — 연간 양도차익 합계에서 250만원 기본공제 후 22%(지방소득세 포함).
+# 체결 시점에 떼이지 않고 이듬해 5월에 신고·납부하므로, 화면이 "세금 차감 후"라고
+# 적으면서 이걸 빼면 사용자는 이미 낸 돈을 또 쓸 수 있다고 믿게 된다.
+OVERSEAS_TAX_RATE = 0.22
+OVERSEAS_DEDUCTION_KRW = 2_500_000.0
+OVERSEAS_TAX_MARKETS = ("US",)
+
+
+def taxable_overseas(market: str) -> bool:
+    return market in OVERSEAS_TAX_MARKETS
+
+
+def overseas_capital_gains_tax(annual_gain_krw: float) -> float:
+    """연간 해외 양도차익 합계에 대한 세액. 손실이면 0(이월공제 없음)."""
+    taxable = max(annual_gain_krw - OVERSEAS_DEDUCTION_KRW, 0.0)
+    return round(taxable * OVERSEAS_TAX_RATE, 0)
+
+
 def roundtrip_pct(market: str, is_etf: int = 0) -> float:
     """왕복 수수료·세금(%p) — 스프레드는 뺀 값."""
     return round((fee_rate(market) * 2 + sell_tax_rate(market, is_etf)) * 100, 4)

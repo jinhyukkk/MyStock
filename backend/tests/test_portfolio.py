@@ -496,3 +496,122 @@ def test_build_portfolio_default_fx_when_usdkrw_none():
     tickers = {"AAPL": {"name": "Apple", "market": "US", "currency": "USD"}}
     out = portfolio.build_portfolio(holdings, {"AAPL": 150.0}, tickers, usdkrw=None)
     assert out["totals"]["total_value_krw"] == 150.0 * 10 * 1400.0
+
+
+def test_open_risk_uses_registered_stop_over_atr():
+    """등록된 손절 룰이 있으면 계좌 리스크도 그 값으로 재야 한다.
+
+    2×ATR은 매일 재계산되지만 알림을 울리는 것은 등록된 룰이다. 계좌 총
+    미결 리스크가 사용자가 실제로 지킬 손절선과 다른 값을 쓰면, 화면의
+    '총 3.5%'는 어떤 시나리오에서도 실현되지 않는 숫자가 된다.
+    """
+    holdings = {"A": {"quantity": 10, "avg_price": 100.0}}
+    out = portfolio.open_risk(holdings, {"A": 5.0}, KR_T, usdkrw=None,
+                              total_asset_krw=10_000.0,
+                              prices={"A": 100.0}, stops={"A": 97.0})
+    # 2×ATR이면 100이지만 등록 룰(현재가 100 → 손절 97)이면 30
+    assert out["total_risk_krw"] == 30.0
+    assert out["rows"][0]["stop_source"] == "rule"
+    assert out["unregistered_count"] == 0
+
+
+def test_open_risk_reports_how_many_holdings_lack_a_rule():
+    """룰 없는 종목은 2×ATR '가정'이다 — 가정이 몇 건인지 화면이 말해야 한다."""
+    holdings = {"A": {"quantity": 10, "avg_price": 100.0},
+                "B": {"quantity": 10, "avg_price": 100.0}}
+    tickers = {"A": {"name": "가", "currency": "KRW"}, "B": {"name": "나", "currency": "KRW"}}
+    out = portfolio.open_risk(holdings, {"A": 5.0, "B": 5.0}, tickers, usdkrw=None,
+                              total_asset_krw=10_000.0,
+                              prices={"A": 100.0, "B": 100.0}, stops={"A": 97.0})
+    assert out["unregistered_count"] == 1
+    assert {r["symbol"]: r["stop_source"] for r in out["rows"]} == {"A": "rule", "B": "atr"}
+
+
+def test_open_risk_treats_profit_locking_stop_as_zero_risk():
+    """손절선이 현재가 위면 그 포지션은 더 잃을 것이 없다 — 0으로 잡아야 한다."""
+    holdings = {"A": {"quantity": 10, "avg_price": 100.0}}
+    out = portfolio.open_risk(holdings, {"A": 5.0}, KR_T, usdkrw=None,
+                              total_asset_krw=10_000.0,
+                              prices={"A": 100.0}, stops={"A": 105.0})
+    assert out["total_risk_krw"] == 0.0
+
+
+def test_overseas_tax_view_nets_gains_and_losses_within_the_year():
+    """해외 양도세는 연간 손익을 통산한 뒤 250만원을 공제하고 22%다.
+
+    종목별로 따로 매기면 손실 종목이 세금을 줄여준다는 사실이 사라진다.
+    """
+    trades = [
+        dict(T("AAPL", "BUY", 100, 100), fx_rate=1000.0, fee=0.0, tax=0.0,
+             trade_date="2026-01-05"),
+        dict(T("AAPL", "SELL", 100, 200), fx_rate=1000.0, fee=0.0, tax=0.0,
+             trade_date="2026-03-05"),
+    ]
+    r = portfolio.realized_pnl(trades, US_T, usdkrw=1000.0)
+    tax = portfolio.overseas_tax_view(r, US_T, year=2026)
+    assert tax["gain_krw"] == 10_000_000.0          # $10,000 × 1,000원
+    assert tax["deduction_krw"] == 2_500_000.0
+    assert tax["taxable_krw"] == 7_500_000.0
+    assert tax["tax_krw"] == 1_650_000.0            # 750만 × 22%
+    assert tax["deduction_left_krw"] == 0.0
+
+
+def test_overseas_tax_view_reports_remaining_deduction_below_threshold():
+    trades = [
+        dict(T("AAPL", "BUY", 10, 100), fx_rate=1000.0, fee=0.0, tax=0.0,
+             trade_date="2026-01-05"),
+        dict(T("AAPL", "SELL", 10, 200), fx_rate=1000.0, fee=0.0, tax=0.0,
+             trade_date="2026-03-05"),
+    ]
+    r = portfolio.realized_pnl(trades, US_T, usdkrw=1000.0)
+    tax = portfolio.overseas_tax_view(r, US_T, year=2026)
+    assert tax["gain_krw"] == 1_000_000.0
+    assert tax["tax_krw"] == 0.0
+    assert tax["deduction_left_krw"] == 1_500_000.0
+
+
+def test_overseas_tax_view_excludes_domestic_trades():
+    """국내 상장분은 이 세금의 대상이 아니다 — 섞으면 세액이 부풀려진다."""
+    trades = [dict(T("005930", "BUY", 10, 1_000_000), fee=0.0, tax=0.0,
+                   trade_date="2026-01-05"),
+              dict(T("005930", "SELL", 10, 2_000_000), fee=0.0, tax=0.0,
+                   trade_date="2026-03-05")]
+    r = portfolio.realized_pnl(trades, KR_T, usdkrw=None)
+    tax = portfolio.overseas_tax_view(r, KR_T, year=2026)
+    assert tax["gain_krw"] == 0.0 and tax["tax_krw"] == 0.0
+
+
+def test_overseas_tax_view_ignores_other_years():
+    trades = [
+        dict(T("AAPL", "BUY", 100, 100), fx_rate=1000.0, fee=0.0, tax=0.0,
+             trade_date="2025-01-05"),
+        dict(T("AAPL", "SELL", 100, 200), fx_rate=1000.0, fee=0.0, tax=0.0,
+             trade_date="2025-03-05"),
+    ]
+    r = portfolio.realized_pnl(trades, US_T, usdkrw=1000.0)
+    assert portfolio.overseas_tax_view(r, US_T, year=2026)["gain_krw"] == 0.0
+
+
+def test_exit_plan_shows_capital_gains_tax_for_overseas_position():
+    """해외 포지션의 '확정 손익'에 5월 양도세가 빠져 있으면 그 돈을 또 쓰게 된다.
+
+    이미 쓴 공제분을 반영한 **한계 세액**이어야 한다 — 올해 아직 이익이 없다면
+    250만원까지는 세금이 0이고, 그 사실이 청산 판단을 바꾼다.
+    """
+    p = portfolio.exit_plan(held=100, avg_price=100.0, close=200.0, stop_price=180.0,
+                            market="US", fx=1000.0, taxable_overseas=True,
+                            deduction_left_krw=2_500_000.0)
+    full = [s for s in p["slices"] if s["label"] == "전량"][0]
+    # 차익 $10,000 = ₩10,000,000 (수수료 제외) → 공제 250만 후 750만 × 22%
+    assert abs(full["tax_krw"] - 1_650_000) < 20_000
+    assert full["realized_pnl_after_tax_krw"] < full["realized_pnl_krw"]
+    assert p["taxable_overseas"] is True
+
+
+def test_exit_plan_has_no_capital_gains_tax_for_domestic_position():
+    p = portfolio.exit_plan(held=100, avg_price=100.0, close=200.0, stop_price=180.0,
+                            market="KR")
+    full = [s for s in p["slices"] if s["label"] == "전량"][0]
+    assert full["tax_krw"] == 0.0
+    assert full["realized_pnl_after_tax_krw"] == full["realized_pnl_krw"]
+    assert p["taxable_overseas"] is False

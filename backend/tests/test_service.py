@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 import pandas as pd
 import pytest
@@ -381,3 +382,72 @@ def test_notify_telegram_noop_without_config(conn, monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("호출되면 안 됨")))
     service._notify_telegram(conn, [{"symbol": "A", "rule_type": "STOP", "value": 1,
                                      "message": "m"}])
+
+
+def test_risk_block_prefers_registered_stop_rule(conn):
+    """화면의 손절선과 알림을 울리는 손절선은 같아야 한다.
+
+    2×ATR은 매일 재계산되므로, 룰로 등록한 다음 날부터 화면이 보여주는
+    손절선과 실제 알림 트리거가 갈라진다. 등록 룰이 단일 진실이다.
+    """
+    service.refresh_all(conn)
+    close = float(db.load_prices(conn, "005930").iloc[-1]["close"])
+    suggested = service.get_ticker_detail(conn, "005930")["risk"]
+    assert suggested["stop_source"] == "atr"
+
+    my_stop = round(close * 0.95, 4)
+    db.insert_rule(conn, "005930", "STOP", my_stop)
+    r = service.get_ticker_detail(conn, "005930")["risk"]
+    assert r["stop_source"] == "rule"
+    assert r["stop_price"] == my_stop
+    # 2×ATR 제안은 사라지지 않고 '오늘의 제안'으로 함께 남는다
+    assert r["atr_stop_price"] == suggested["stop_price"]
+    # 목표가·손익비도 실제로 지킬 손절선 기준으로 다시 계산된다
+    assert abs((r["target_price"] - close)
+               - (close - my_stop) * service.TARGET_R) < 1e-3
+
+
+def test_risk_block_flags_drift_between_rule_and_todays_atr(conn):
+    """한 번 등록한 룰은 변동성이 변해도 그대로 남아 서서히 무의미해진다."""
+    service.refresh_all(conn)
+    close = float(db.load_prices(conn, "005930").iloc[-1]["close"])
+    db.insert_rule(conn, "005930", "STOP", round(close * 0.5, 4))
+    r = service.get_ticker_detail(conn, "005930")["risk"]
+    assert r["stop_drift_pct"] is not None
+    assert r["stop_drift"] is True   # 제안과 크게 벌어짐 → 룰 갱신 안내
+
+
+def test_risk_block_ignores_stop_rule_above_current_price(conn):
+    """현재가 위 손절선은 이미 관통된 상태다 — 사이징 분모가 음수가 된다."""
+    service.refresh_all(conn)
+    close = float(db.load_prices(conn, "005930").iloc[-1]["close"])
+    db.insert_rule(conn, "005930", "STOP", round(close * 1.1, 4))
+    r = service.get_ticker_detail(conn, "005930")["risk"]
+    assert r["stop_source"] == "atr"
+    assert r["stop_price"] < close
+
+
+def test_open_risk_uses_registered_stops(conn):
+    """계좌 총 미결 리스크도 사용자가 실제로 지킬 손절선으로 잰다."""
+    service.refresh_all(conn)
+    db.set_meta(conn, "cash_krw", "10000000")
+    db.insert_trade(conn, "005930", "BUY", 10, 100.0, "2026-01-05", fx_rate=1.0)
+    before = service.get_portfolio_view(conn)["open_risk"]
+    assert before["unregistered_count"] == 1
+    assert before["rows"][0]["stop_source"] == "atr"
+
+    close = float(db.load_prices(conn, "005930").iloc[-1]["close"])
+    db.insert_rule(conn, "005930", "STOP", round(close * 0.99, 4))
+    after = service.get_portfolio_view(conn)["open_risk"]
+    assert after["unregistered_count"] == 0
+    assert after["rows"][0]["stop_source"] == "rule"
+    assert after["total_risk_krw"] < before["total_risk_krw"]
+
+
+def test_portfolio_view_reports_overseas_capital_gains_tax(conn):
+    """해외 실현이익은 5월에 22%를 따로 낸다 — 화면이 그 자리를 만들어야 한다."""
+    service.refresh_all(conn)
+    tax = service.get_portfolio_view(conn)["realized"]["overseas_tax"]
+    assert tax["rate_pct"] == 22.0
+    assert tax["deduction_krw"] == 2_500_000.0
+    assert tax["year"] == datetime.now().year

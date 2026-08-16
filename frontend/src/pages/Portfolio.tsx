@@ -342,7 +342,8 @@ export default function Portfolio() {
       {pf.open_risk && <div className="card">
         <strong>계좌 총 미결 리스크</strong>
         <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
-          {' '}모든 보유가 각자 2×ATR 손절에 닿았을 때의 손실 합계</span>
+          {' '}모든 보유가 각자 손절선에 닿았을 때의 손실 합계 — 등록한 손절 룰이 있으면 그 값,
+          없으면 2×ATR 가정</span>
         <div style={{ display: 'flex', gap: 32, marginTop: 10, flexWrap: 'wrap' }}>
           <div>
             <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>총 리스크</div>
@@ -360,18 +361,28 @@ export default function Portfolio() {
         {pf.open_risk.over_limit && <div className="warn-box" style={{ marginTop: 10 }}>
           ⚠ 총 리스크가 상한 {pf.open_risk.limit_pct}%를 넘었습니다. 신규 진입보다 기존 포지션
           축소를 먼저 검토하세요. 보유 종목 상관계수가 높으면 실제 동시 손실은 이 합계에 더 가깝습니다.</div>}
+        {/* 룰이 없는 종목의 리스크는 '이런 손절을 지킨다면'이라는 가정이다.
+            몇 건이 가정인지 말하지 않으면 합계 전체가 사실로 읽힌다. */}
+        {pf.open_risk.unregistered_count > 0 && <div className="warn-box" style={{ marginTop: 10 }}>
+          ⚠ {pf.open_risk.unregistered_count}종목은 손절 룰이 등록돼 있지 않아 2×ATR을 가정한
+          값입니다. 알림은 등록된 룰에서만 울리므로, 이 종목들은 손절선이 뚫려도 아무 통지가 없습니다.</div>}
+        <div className="table-scroll table-cards">
         <table style={{ marginTop: 12 }}>
-          <thead><tr><th>종목</th><th>2×ATR 손실액</th><th>총자산 대비</th></tr></thead>
+          <thead><tr><th>종목</th><th>손절 기준</th><th>손실액</th><th>총자산 대비</th></tr></thead>
           <tbody>
             {pf.open_risk.rows.map(r => (
               <tr key={r.symbol}>
-                <td style={{ textAlign: 'left' }}>{r.name}</td>
-                <td>₩{fmt(r.risk_krw)}</td>
-                <td className={(r.risk_pct ?? 0) >= 2 ? 'neg' : ''}>{r.risk_pct ?? '—'}%</td>
+                <td data-label="종목" style={{ textAlign: 'left' }}>{r.name}</td>
+                <td data-label="손절 기준" style={{ color: r.stop_source === 'rule' ? undefined : 'var(--warn)' }}>
+                  {r.stop_source === 'rule' ? '등록 룰' : '2×ATR 가정'}</td>
+                <td data-label="손실액">₩{fmt(r.risk_krw)}</td>
+                <td data-label="총자산 대비"
+                    className={(r.risk_pct ?? 0) >= 2 ? 'neg' : ''}>{r.risk_pct ?? '—'}%</td>
               </tr>
             ))}
           </tbody>
         </table>
+        </div>
         <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 8 }}>
           손절가는 자동 예약주문이 아니며 갭 하락 시 계획보다 더 잃을 수 있습니다.</div>
       </div>}
@@ -419,6 +430,37 @@ export default function Portfolio() {
             <div style={{ fontWeight: 700, fontSize: 18 }}>{pf.realized.stats.payoff_ratio ?? '—'}</div>
           </div>
         </div>
+        {/* 해외 양도세는 체결 시점에 떼이지 않는다. 위의 '비용 차감 후' 실현손익만
+            보면 이듬해 5월에 낼 돈까지 이미 번 돈으로 세고 다시 투입하게 된다. */}
+        {pf.realized.overseas_tax.gain_krw !== 0 && <div style={{ marginTop: 12, padding: 12,
+              borderRadius: 6, border: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>
+            {pf.realized.overseas_tax.year}년 해외주식 양도세 (이듬해 5월 신고·납부)</div>
+          <div style={{ display: 'flex', gap: 28, marginTop: 8, flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>올해 해외 실현이익</div>
+              <div style={{ fontWeight: 700, fontSize: 16 }}
+                   className={pf.realized.overseas_tax.gain_krw >= 0 ? 'pos' : 'neg'}>
+                {pf.realized.overseas_tax.gain_krw >= 0 ? '+' : ''}₩{fmt(pf.realized.overseas_tax.gain_krw)}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>기본공제 잔여 (연 250만)</div>
+              <div style={{ fontWeight: 700, fontSize: 16 }}>
+                ₩{fmt(pf.realized.overseas_tax.deduction_left_krw)}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+                예상 세액 ({pf.realized.overseas_tax.rate_pct}%)</div>
+              <div style={{ fontWeight: 700, fontSize: 16 }}
+                   className={pf.realized.overseas_tax.tax_krw > 0 ? 'neg' : ''}>
+                ₩{fmt(pf.realized.overseas_tax.tax_krw)}</div>
+            </div>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 8 }}>
+            위 실현손익은 이 세금을 빼기 전 값입니다 — 연간 통산 후 과세되므로 손실 실현이
+            세액을 줄입니다. 환차익도 과세 대상에 포함한 추정이며, 실제 신고는 증권사
+            자료를 기준으로 하세요.</div>
+        </div>}
         {pf.realized.stats.cost_estimated && <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8 }}>
           ⓘ 일부 체결의 수수료·세금이 기록돼 있지 않아 <strong>시장 기본 요율로 추정</strong>했습니다.
           정확한 복기를 원하면 매매 입력에서 실제 비용을 넣으세요.</div>}

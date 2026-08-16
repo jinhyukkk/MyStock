@@ -151,12 +151,35 @@ input:focus, select:focus {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 
-/* ── 경고 표기 ── */
+/* ── 경고 표기 ──
+   한 화면에 다섯 개가 동시에 뜨는데 전부 같은 amber면 우선순위가 없어 전부
+   무시된다. 판단을 뒤집는 것(critical)과 맥락(note)을 무게로 구분한다. */
 .warn { color: var(--warn); }
 .warn-box {
   background: var(--warn-bg); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
   border-radius: 8px; padding: 8px 12px; font-size: 12px; color: var(--warn);
 }
+/* 이걸 안 읽으면 진입·청산 판단이 뒤집힌다 — 결론 카드 안에 남는다 */
+.warn-box.critical {
+  border-color: var(--warn); border-left-width: 3px; font-size: 13px;
+}
+/* 알아두면 좋은 맥락 — 접이식 「이 판단의 전제」 안으로 내린다 */
+.warn-box.note {
+  background: transparent; border-color: var(--border); color: var(--text-dim);
+}
+
+/* ── 접이식 전제 블록 ──
+   정직함을 잃지 않으면서 결론을 덮지 않는 유일한 수단. 접혀 있어도
+   경고 개수는 헤더에 남아 "숨겼다"가 아니라 "접었다"가 되게 한다. */
+details.premises { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+details.premises > summary {
+  cursor: pointer; font-size: 13px; color: var(--text-dim); list-style: none;
+  display: flex; align-items: center; gap: 8px;
+}
+details.premises > summary::-webkit-details-marker { display: none; }
+details.premises > summary::before { content: '▸'; font-size: 11px; }
+details.premises[open] > summary::before { content: '▾'; }
+details.premises > summary:hover { color: var(--text); }
 
 /* ── 표 가로 스크롤 ──
    실현손익 9컬럼·상관계수 N+1컬럼은 좁은 화면에서 페이지 전체를 밀어낸다.

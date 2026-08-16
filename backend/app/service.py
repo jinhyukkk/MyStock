@@ -367,8 +367,11 @@ def get_portfolio_view(conn) -> dict:
                                    cash_krw=get_cash_krw(conn), cash_usd=get_cash_usd(conn))
     trades = [dict(r) for r in db.list_trades(conn)]
     realized = portfolio.realized_pnl(trades, tickers_map, fx)
+    # 해외 양도세는 5월에 따로 낸다 — 실현손익만 보고 그 돈까지 쓸 수 있다고 믿게 된다
     pf["realized"] = {"entries": realized[::-1][:50],
-                      "stats": portfolio.realized_stats(realized, tickers_map, fx)}
+                      "stats": portfolio.realized_stats(realized, tickers_map, fx),
+                      "overseas_tax": portfolio.overseas_tax_view(
+                          realized, tickers_map, year=datetime.now().year)}
     price_frames = {s: db.load_prices(conn, s, limit=250) for s in holdings}
     closes = {s: f["close"] for s, f in price_frames.items()}
     # 계좌 리스크는 환율 고정 근사 — 달러 예수금도 현재 환율로 환산해 고정 현금으로 합산
@@ -378,7 +381,8 @@ def get_portfolio_view(conn) -> dict:
     # 종목별 1% 룰은 합산해서 봐야 의미가 있다 — 5종목이면 총 몇 %인지 화면에 띄운다
     pf["open_risk"] = portfolio.open_risk(
         holdings, _atr_map(price_frames), tickers_map, fx,
-        pf["totals"]["total_asset_krw"])
+        pf["totals"]["total_asset_krw"], prices=prices,
+        stops={s: v for s in holdings if (v := _stop_rule(conn, s)) is not None})
     # 이 숫자들이 언제 기준인지 화면이 알 수 있어야 한다
     pf["last_refresh"] = db.get_meta(conn, "last_refresh")
     return pf
@@ -401,6 +405,18 @@ TARGET_R = 2.0     # 목표가 = 손절 폭의 몇 배 (손익비 2:1)
 # 2×ATR 손절이 주가의 이 비율을 넘으면 스윙 타임프레임에 안 맞는다. 화면이 -21%
 # 손절을 제시하면 실제로 그걸 지키는 사람은 없고, 결국 손절 없는 매매가 된다.
 MAX_STOP_PCT = 15.0
+# 등록된 룰과 오늘의 2×ATR 제안이 현재가의 이 비율 이상 벌어지면 룰 갱신을 권한다
+STOP_DRIFT_PCT = 2.0
+
+
+def _stop_rule(conn, symbol: str) -> float | None:
+    """등록된 STOP 룰 가격. 여러 건이면 가장 타이트한(높은) 값 — 먼저 닿는 쪽이
+    실제로 포지션을 끝내므로, 그것이 사용자가 감수하는 리스크다."""
+    if not symbol:
+        return None
+    vals = [float(r["value"]) for r in db.list_rules(conn, symbol)
+            if r["rule_type"] == "STOP"]
+    return max(vals) if vals else None
 
 
 def _target_block(enriched: pd.DataFrame, close: float, atr: float, stop: float) -> dict:
@@ -448,7 +464,14 @@ def _risk_block(conn, enriched: pd.DataFrame, currency: str,
         return None
     close = float(last["close"])
     atr = float(atr)
-    stop = close - 2 * atr
+    atr_stop = close - 2 * atr
+    # 알림을 울리는 것은 등록된 STOP 룰뿐이다(check_rules). 화면·사이징·계좌
+    # 리스크가 매일 재계산되는 2×ATR을 쓰면, 룰을 등록한 다음 날부터 사용자가
+    # 보는 손절선과 실제로 울릴 손절선이 갈라진다. 등록 룰이 단일 진실이고
+    # 2×ATR은 '오늘의 제안'으로 함께 남는다.
+    rule_stop = _stop_rule(conn, symbol)
+    use_rule = rule_stop is not None and 0 < rule_stop < close
+    stop = rule_stop if use_rule else atr_stop
     senti = get_sentiment_view(conn)
     fx = (senti.get("usdkrw") or portfolio.DEFAULT_USDKRW) if currency == "USD" else 1.0
     # 리스크 분모는 총자산(평가액+예수금) — 보유 평가액만 쓰면 현금 비중만큼 과소/과대 계상
@@ -460,6 +483,12 @@ def _risk_block(conn, enriched: pd.DataFrame, currency: str,
         "atr_pct": round(atr / close * 100, 2),
         "stop_price": round(stop, 4),
         "stop_pct": round((stop / close - 1) * 100, 2),
+        "stop_source": "rule" if use_rule else "atr",
+        "atr_stop_price": round(atr_stop, 4),
+        "atr_stop_pct": round((atr_stop / close - 1) * 100, 2),
+        # 등록해 둔 룰과 오늘의 제안이 벌어지면 룰이 서서히 무의미해진다
+        "stop_drift_pct": round((atr_stop - stop) / close * 100, 2) if use_rule else None,
+        "stop_drift": bool(use_rule and abs(atr_stop - stop) / close * 100 > STOP_DRIFT_PCT),
         "mdd_pct": round(indicators.max_drawdown_pct(enriched["close"]), 2),
         **_target_block(enriched, close, atr, stop),
         "max_weight_pct": round(MAX_WEIGHT * 100, 1),
@@ -480,12 +509,19 @@ def _risk_block(conn, enriched: pd.DataFrame, currency: str,
     # 종목에서도 화면이 '추가 매수 가능 수량'만 보여주게 된다
     t = db.get_ticker(conn, symbol) if symbol else None
     if held > 0:
+        market_ = t["market"] if t else ""
         out["exit_plan"] = portfolio.exit_plan(
             held, avg, close, stop,
-            market=t["market"] if t else "", is_etf=(t["is_etf"] if t else 0) or 0, fx=fx)
+            market=market_, is_etf=(t["is_etf"] if t else 0) or 0, fx=fx,
+            # 해외 포지션의 확정손익에는 이듬해 5월 양도세가 남아 있다
+            taxable_overseas=costs.taxable_overseas(market_),
+            deduction_left_krw=(pf.get("realized", {}).get("overseas_tax", {})
+                                .get("deduction_left_krw") or 0.0))
     if total <= 0:
         return out
-    risk_qty = risk_krw / (2 * atr * fx)
+    # 사이징 분모도 실제로 지킬 손절선까지의 거리 — 룰이 2×ATR보다 타이트하면
+    # 같은 1% 리스크로 더 살 수 있고, 헐거우면 덜 사야 한다
+    risk_qty = risk_krw / ((close - stop) * fx)
     cap_qty = total * MAX_WEIGHT / (close * fx)
     raw = min(risk_qty, cap_qty)
     # 주문 가능한 단위로 내린다 — 국내주식에 5.095주를 제시하면 사용자가 매번

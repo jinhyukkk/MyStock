@@ -107,22 +107,38 @@ def realized_pnl(trades: list, tickers: dict | None = None, usdkrw=None) -> list
 
 
 def open_risk(holdings: dict, atrs: dict, tickers: dict, usdkrw,
-              total_asset_krw: float) -> dict | None:
-    """계좌 전체 미결 리스크 — 모든 보유가 동시에 2×ATR 손절에 닿았을 때의 손실 합.
+              total_asset_krw: float, prices: dict | None = None,
+              stops: dict | None = None) -> dict | None:
+    """계좌 전체 미결 리스크 — 모든 보유가 동시에 손절에 닿았을 때의 손실 합.
 
     종목별 1% 룰만 지키면 5종목에 "총 5%"라고 믿게 되지만, 합산해서 보지 않으면
     그 5%가 실제로 몇 %인지 화면 어디에도 없다.
+
+    손절선은 **등록된 STOP 룰이 있으면 그것**을, 없으면 2×ATR을 쓴다. 알림을
+    울리는 것은 등록된 룰뿐인데(check_rules) 합산은 매일 재계산되는 2×ATR로
+    하면, 화면의 '총 3.5%'는 어떤 시나리오에서도 실현되지 않는 숫자가 된다.
+    룰이 없는 종목은 2×ATR '가정'이므로 몇 건이 가정인지 함께 내려보낸다.
     """
     fx_now = usdkrw or DEFAULT_USDKRW
-    rows = []
+    prices, stops = prices or {}, stops or {}
+    rows, unregistered = [], 0
     for s, h in holdings.items():
         atr = atrs.get(s)
-        if not atr:
-            continue
+        close, stop = prices.get(s), stops.get(s)
         info = tickers.get(s, {})
         rate = fx_now if info.get("currency") == "USD" else 1.0
-        risk = 2 * float(atr) * h["quantity"] * rate
+        if stop is not None and close is not None:
+            # 손절선이 현재가 위면 더 잃을 것이 없다 — 음수 리스크는 총합을 깎아
+            # 다른 종목의 위험을 상쇄해버리므로 0으로 바닥을 친다
+            per_share, source = max(close - stop, 0.0), "rule"
+        elif atr:
+            per_share, source = 2 * float(atr), "atr"
+            unregistered += 1
+        else:
+            continue
+        risk = per_share * h["quantity"] * rate
         rows.append({"symbol": s, "name": info.get("name", s),
+                     "stop_source": source,
                      "risk_krw": round(risk, 0),
                      "risk_pct": round(risk / total_asset_krw * 100, 2)
                      if total_asset_krw else None})
@@ -133,7 +149,37 @@ def open_risk(holdings: dict, atrs: dict, tickers: dict, usdkrw,
     total_pct = round(total / total_asset_krw * 100, 2) if total_asset_krw else None
     return {"rows": rows, "total_risk_krw": round(total, 0),
             "total_risk_pct": total_pct, "limit_pct": MAX_ACCOUNT_RISK_PCT,
+            "unregistered_count": unregistered,
             "over_limit": bool(total_pct is not None and total_pct > MAX_ACCOUNT_RISK_PCT)}
+
+
+def overseas_tax_view(realized: list, tickers: dict, year: int) -> dict:
+    """해당 연도 해외주식 양도소득세 추정.
+
+    체결 시점에 떼이지 않고 이듬해 5월에 신고·납부하기 때문에, 화면이 실현손익을
+    '세금 차감 후'라고 부르면서 이걸 빼면 사용자는 이미 낸 돈을 또 쓸 수 있다고
+    믿는다. 종목별이 아니라 **연간 통산** 후 250만원 공제라, 손실 종목이 세금을
+    줄여준다는 사실도 합산하지 않으면 화면에 나타나지 않는다.
+    """
+    gain = 0.0
+    for r in realized:
+        info = tickers.get(r["symbol"], {})
+        if not costs.taxable_overseas(info.get("market", "")):
+            continue
+        if not str(r.get("trade_date", "")).startswith(str(year)):
+            continue
+        # 과세표준은 원화 양도차익 — 환차익도 과세 대상에 포함된다
+        gain += float(r.get("pnl_krw") or 0.0)
+    tax = costs.overseas_capital_gains_tax(gain)
+    return {
+        "year": year,
+        "gain_krw": round(gain, 0),
+        "deduction_krw": costs.OVERSEAS_DEDUCTION_KRW,
+        "deduction_left_krw": round(max(costs.OVERSEAS_DEDUCTION_KRW - gain, 0.0), 0),
+        "taxable_krw": round(max(gain - costs.OVERSEAS_DEDUCTION_KRW, 0.0), 0),
+        "tax_krw": tax,
+        "rate_pct": round(costs.OVERSEAS_TAX_RATE * 100, 1),
+    }
 
 
 # 부분청산 비율 — 전량이냐 아니냐의 이분법만 있으면 물린 포지션에서 결정이 멈춘다
@@ -141,7 +187,9 @@ EXIT_SLICES = (("1/3", 1 / 3), ("1/2", 0.5), ("전량", 1.0))
 
 
 def exit_plan(held: float, avg_price: float, close: float, stop_price: float,
-              market: str, is_etf: int = 0, fx: float = 1.0) -> dict | None:
+              market: str, is_etf: int = 0, fx: float = 1.0,
+              taxable_overseas: bool = False,
+              deduction_left_krw: float = 0.0) -> dict | None:
     """보유 포지션의 청산 플랜 — 지금 나가면 얼마를 회수하고 얼마를 확정하는가.
 
     진입 화면(손절·목표·수량)만 있으면 나가는 판단은 매번 즉흥이 된다. 특히
@@ -156,11 +204,20 @@ def exit_plan(held: float, avg_price: float, close: float, stop_price: float,
         notional = close * qty
         est = costs.estimate(market, "SELL", notional, is_etf=is_etf)
         cost = est["fee"] + est["tax"]
+        pnl_krw = ((close - avg_price) * qty - cost) * fx
+        # 해외 양도세는 체결 시점에 떼이지 않고 이듬해 5월에 낸다. 올해 남은
+        # 250만원 공제를 반영한 '이 청산을 지금 하면 추가로 내는' 한계 세액이라야
+        # 판단에 쓸 수 있다 — 공제가 남아 있으면 세금 0이라는 사실도 결정을 바꾼다.
+        tax_krw = (costs.OVERSEAS_TAX_RATE
+                   * max(pnl_krw - max(deduction_left_krw, 0.0), 0.0)
+                   if taxable_overseas else 0.0)
         slices.append({
             "label": label,
             "quantity": round(qty, 4),
             "proceeds_krw": round((notional - cost) * fx, 2),
-            "realized_pnl_krw": round(((close - avg_price) * qty - cost) * fx, 2),
+            "realized_pnl_krw": round(pnl_krw, 2),
+            "tax_krw": round(tax_krw, 0),
+            "realized_pnl_after_tax_krw": round(pnl_krw - tax_krw, 2),
         })
     # 1R = 현재가에서 손절선까지(2×ATR) — 이 앱이 포지션 사이징에 쓰는 리스크 단위.
     # 손익을 %가 아니라 "감수하는 리스크의 몇 배"로 재면 익절·추격 판단이 직접 나온다
@@ -180,6 +237,8 @@ def exit_plan(held: float, avg_price: float, close: float, stop_price: float,
         # 같은 숫자를 붉게 칠하면 좋은 소식이 나쁜 소식으로 읽힌다
         "stop_locks_profit": stop_price > avg_price,
         "risk_to_stop_krw": round(max(close - stop_price, 0.0) * held * fx, 2),
+        "taxable_overseas": bool(taxable_overseas),
+        "deduction_left_krw": round(max(deduction_left_krw, 0.0), 0) if taxable_overseas else None,
         "slices": slices,
     }
 
