@@ -127,6 +127,38 @@ def delete_trade(conn, trade_id):
     conn.commit()
 
 
+def insert_cash_flow(conn, flow_type, amount, flow_date, symbol=None, currency="KRW",
+                     tax=0.0, fx_rate=None, note=None) -> int:
+    cur = conn.execute(
+        """INSERT INTO cash_flows (flow_type, symbol, currency, amount, tax,
+                                   flow_date, fx_rate, note)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (flow_type, symbol, currency, amount, tax, flow_date, fx_rate, note))
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_cash_flows(conn, symbol=None, flow_type=None):
+    q, params = "SELECT * FROM cash_flows", []
+    where = []
+    if symbol:
+        where.append("symbol=?"); params.append(symbol)
+    if flow_type:
+        where.append("flow_type=?"); params.append(flow_type)
+    if where:
+        q += " WHERE " + " AND ".join(where)
+    return conn.execute(q + " ORDER BY flow_date DESC, id DESC", params).fetchall()
+
+
+def get_cash_flow(conn, flow_id):
+    return conn.execute("SELECT * FROM cash_flows WHERE id=?", (flow_id,)).fetchone()
+
+
+def delete_cash_flow(conn, flow_id):
+    conn.execute("DELETE FROM cash_flows WHERE id=?", (flow_id,))
+    conn.commit()
+
+
 def insert_rule(conn, symbol, rule_type, value) -> int:
     cur = conn.execute(
         "INSERT INTO custom_rules (symbol, rule_type, value) VALUES (?,?,?)",

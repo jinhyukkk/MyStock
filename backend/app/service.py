@@ -162,6 +162,40 @@ def apply_trade_to_cash(conn, trade: dict, ticker_row, reverse: bool = False) ->
             "clamped": abs((updated - current) - delta) > 1e-9}
 
 
+def _cost_basis_krw(holdings: dict, tickers: dict, usdkrw) -> dict:
+    """보유 종목의 현재 원가(원화) — 배당수익률의 분모."""
+    fx = usdkrw or portfolio.DEFAULT_USDKRW
+    out = {}
+    for s, h in holdings.items():
+        rate = fx if tickers.get(s, {}).get("currency") == "USD" else 1.0
+        out[s] = h["avg_price"] * h["quantity"] * rate
+    return out
+
+
+def apply_flow_to_cash(conn, flow: dict, reverse: bool = False) -> dict:
+    """현금흐름을 예수금에 반영한다.
+
+    배당을 원장에만 적고 예수금에 넣지 않으면 총자산이 실제보다 작아지고,
+    그 총자산을 분모로 쓰는 1% 리스크 사이징이 계속 작은 수량을 제시한다.
+    반대로 예수금을 손으로도 올리면 배당이 두 번 계상된다 — 한쪽만 진실이어야 한다.
+    """
+    amount, tax = float(flow.get("amount") or 0.0), float(flow.get("tax") or 0.0)
+    ftype = flow.get("flow_type")
+    # 배당·이자는 원천징수 후 들어온 순액만 계좌에 찍힌다
+    delta = -amount if ftype == "WITHDRAW" else (amount - tax)
+    if reverse:
+        delta = -delta
+    usd = (flow.get("currency") or "KRW") == "USD"
+    key = "cash_usd" if usd else "cash_krw"
+    current = get_cash_usd(conn) if usd else get_cash_krw(conn)
+    updated = max(current + delta, 0.0)
+    db.set_meta(conn, key, str(updated))
+    return {"currency": "USD" if usd else "KRW", "delta": round(delta, 4),
+            "applied": round(updated - current, 4),
+            "cash_krw": get_cash_krw(conn), "cash_usd": get_cash_usd(conn),
+            "clamped": abs((updated - current) - delta) > 1e-9}
+
+
 STOP_DISCLAIMER = "이 손절가는 자동 예약주문이 아니며 일봉 기준으로만 감시됩니다"
 
 
@@ -392,15 +426,25 @@ def get_portfolio_view(conn) -> dict:
             prices[s] = close
     tickers_map = {t["symbol"]: dict(t) for t in db.list_tickers(conn)}
     fx = get_sentiment_view(conn).get("usdkrw")
-    pf = portfolio.build_portfolio(holdings, prices, tickers_map, fx,
-                                   cash_krw=get_cash_krw(conn), cash_usd=get_cash_usd(conn))
+    flows = [dict(r) for r in db.list_cash_flows(conn)]
     trades = [dict(r) for r in db.list_trades(conn)]
+    year = datetime.now().year
+    div = portfolio.dividend_view(
+        flows, tickers_map, fx, year=year,
+        cost_krw=_cost_basis_krw(holdings, tickers_map, fx),
+        traded_this_year={t["symbol"] for t in trades
+                          if str(t.get("trade_date", "")).startswith(str(year))})
+    pf = portfolio.build_portfolio(holdings, prices, tickers_map, fx,
+                                   cash_krw=get_cash_krw(conn), cash_usd=get_cash_usd(conn),
+                                   dividends={r["symbol"]: r["net_krw"]
+                                              for r in div["by_symbol"]})
+    pf["dividends"] = div
     realized = portfolio.realized_pnl(trades, tickers_map, fx)
     # 해외 양도세는 5월에 따로 낸다 — 실현손익만 보고 그 돈까지 쓸 수 있다고 믿게 된다
     pf["realized"] = {"entries": realized[::-1][:50],
                       "stats": portfolio.realized_stats(realized, tickers_map, fx),
                       "overseas_tax": portfolio.overseas_tax_view(
-                          realized, tickers_map, year=datetime.now().year)}
+                          realized, tickers_map, year=year)}
     price_frames = {s: db.load_prices(conn, s, limit=250) for s in holdings}
     closes = {s: f["close"] for s, f in price_frames.items()}
     # 계좌 리스크는 환율 고정 근사 — 달러 예수금도 현재 환율로 환산해 고정 현금으로 합산
@@ -672,6 +716,11 @@ def get_ticker_detail(conn, symbol) -> dict | None:
         # 주문 프리뷰가 '체결 후 잔액'을 낼 근거 — 예수금 초과를 사후 경고가 아니라
         # 기록 버튼을 누르기 전에 알 수 있어야 한다
         "cash": {"krw": get_cash_krw(conn), "usd": get_cash_usd(conn)},
+        # 이 종목이 준 현금. 주가 손익만 보면 배당주는 늘 실패한 포지션으로 읽힌다.
+        "dividends": portfolio.dividend_view(
+            [dict(r) for r in db.list_cash_flows(conn, symbol=symbol)],
+            {symbol: dict(t)}, get_sentiment_view(conn).get("usdkrw"),
+            year=datetime.now().year),
         "history": [{"date": r["date"], "swing_score": r["swing_score"],
                      "longterm_score": r["longterm_score"], "grade": r["grade"]}
                     for r in db.load_signal_history(conn, symbol)],

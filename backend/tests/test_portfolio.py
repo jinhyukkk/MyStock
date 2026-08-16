@@ -652,3 +652,114 @@ def test_ordinary_note_does_not_mark_a_lot_as_adjusted():
     out = portfolio.build_portfolio(portfolio.compute_holdings(trades, KR_T),
                                     {"A": 130.0}, KR_T, usdkrw=None)
     assert out["holdings"][0]["basis_adjusted"] is False
+
+
+# ── 배당 ─────────────────────────────────────────────────────────────────
+def F(symbol, amount, d="2026-03-15", tax=0.0, currency="KRW", fx=None,
+      flow_type="DIVIDEND"):
+    return {"flow_type": flow_type, "symbol": symbol, "amount": amount, "tax": tax,
+            "flow_date": d, "currency": currency, "fx_rate": fx, "note": None}
+
+
+def test_dividend_view_nets_withholding_tax():
+    """배당은 세전 금액이 아니라 원천징수 후 들어온 돈이 실제 수익이다."""
+    v = portfolio.dividend_view([F("A", 10000, tax=1540)], KR_T, year=2026)
+    assert v["total_gross_krw"] == 10000 and v["total_tax_krw"] == 1540
+    assert v["total_net_krw"] == 8460
+
+
+def test_dividend_view_converts_usd_at_payment_fx():
+    """입금 시점 환율이 있으면 그것을 쓴다 — 지금 환율로 환산하면
+    작년에 받은 배당이 오늘 환율 변동만으로 늘었다 줄었다 한다."""
+    v = portfolio.dividend_view([F("AAPL", 100, tax=15, currency="USD", fx=1300.0)],
+                                US_T, usdkrw=1500.0, year=2026)
+    assert v["total_net_krw"] == 85 * 1300
+
+
+def test_dividend_view_falls_back_to_current_fx_when_unrecorded():
+    v = portfolio.dividend_view([F("AAPL", 100, currency="USD")], US_T,
+                                usdkrw=1400.0, year=2026)
+    assert v["total_net_krw"] == 100 * 1400
+    assert v["fx_estimated"] is True
+
+
+def test_dividend_view_separates_this_year_from_lifetime():
+    """올해 배당수익률과 누적 배당은 다른 숫자다 — 합치면 보유 기간이 긴
+    종목이 무조건 높은 수익률로 보인다."""
+    v = portfolio.dividend_view([F("A", 1000, d="2025-03-15"),
+                                 F("A", 2000, d="2026-03-15")], KR_T, year=2026)
+    assert v["total_net_krw"] == 3000 and v["ytd_net_krw"] == 2000
+
+
+def test_dividend_view_groups_by_symbol_sorted_by_size():
+    v = portfolio.dividend_view([F("A", 1000), F("AAPL", 10, currency="USD", fx=1400.0),
+                                 F("A", 500)], {**KR_T, **US_T}, year=2026)
+    by = v["by_symbol"]
+    assert [r["symbol"] for r in by] == ["AAPL", "A"]
+    assert by[1]["net_krw"] == 1500 and by[1]["count"] == 2
+
+
+def test_dividend_view_ignores_non_dividend_flows():
+    """입출금은 현금흐름이지 수익이 아니다 — 같은 표에 합산하면
+    입금액이 배당수익률로 둔갑한다."""
+    v = portfolio.dividend_view([F("A", 1000), F(None, 5_000_000, flow_type="DEPOSIT")],
+                                KR_T, year=2026)
+    assert v["total_net_krw"] == 1000 and v["count"] == 1
+
+
+def test_dividend_yield_on_cost_uses_this_year_only():
+    v = portfolio.dividend_view([F("A", 1000, d="2025-03-15"), F("A", 3000)],
+                                KR_T, year=2026, cost_krw={"A": 100_000})
+    assert v["by_symbol"][0]["yield_on_cost_pct"] == 3.0
+    assert v["yield_on_cost_pct"] == 3.0
+
+
+def test_dividend_yield_is_withheld_when_position_changed_midyear():
+    """중간에 사고 판 종목의 '올해 배당 ÷ 현재 원가'는 수익률이 아니다."""
+    v = portfolio.dividend_view([F("A", 3000)], KR_T, year=2026,
+                                cost_krw={"A": 100_000}, traded_this_year={"A"})
+    assert v["by_symbol"][0]["yield_on_cost_pct"] is None
+    assert v["by_symbol"][0]["position_changed"] is True
+
+
+def test_dividend_yield_none_for_closed_position():
+    v = portfolio.dividend_view([F("A", 3000)], KR_T, year=2026, cost_krw={})
+    assert v["by_symbol"][0]["yield_on_cost_pct"] is None
+    assert v["by_symbol"][0]["held"] is False
+
+
+def test_total_return_adds_dividends_to_unrealized_pnl():
+    """주가만 보면 -5%인 커버드콜이 배당까지 더하면 플러스일 수 있다.
+    배당을 세지 않는 화면은 그 포지션을 팔라고 말하는 것과 같다."""
+    h = portfolio.compute_holdings([T("A", "BUY", 10, 100)], KR_T)
+    out = portfolio.build_portfolio(h, {"A": 95.0}, KR_T, usdkrw=None,
+                                    dividends={"A": 200.0})
+    row = out["holdings"][0]
+    assert row["pnl_krw"] == -50 and row["dividend_krw"] == 200
+    assert row["total_return_krw"] == 150 and row["total_return_pct"] == 15.0
+    assert out["totals"]["dividend_krw"] == 200
+    assert out["totals"]["total_return_krw"] == 150
+
+
+def test_total_return_is_null_without_dividends():
+    """배당이 0인 종목에 '총수익률'을 따로 세우면 같은 숫자가 두 번 나온다."""
+    h = portfolio.compute_holdings([T("A", "BUY", 10, 100)], KR_T)
+    row = portfolio.build_portfolio(h, {"A": 95.0}, KR_T, usdkrw=None)["holdings"][0]
+    assert row["dividend_krw"] == 0.0 and row["total_return_krw"] is None
+
+
+def test_account_yield_excludes_the_symbols_it_refused_to_score():
+    """종목마다 '기간 불일치'라며 수익률을 감춰놓고 그 종목들로 계좌 수익률을
+    내면, 화면이 한쪽에서 못 낸다고 말한 숫자를 다른 쪽에서 합계로 내놓게 된다."""
+    v = portfolio.dividend_view([F("A", 3000), F("AAPL", 10, currency="USD", fx=1000.0)],
+                                {**KR_T, **US_T}, year=2026,
+                                cost_krw={"A": 100_000, "AAPL": 500_000},
+                                traded_this_year={"AAPL"})
+    assert v["yield_on_cost_pct"] == 3.0  # A만으로 계산 — AAPL은 분자·분모에서 함께 빠진다
+    assert v["yield_basis_krw"] == 100_000 and v["yield_partial"] is True
+
+
+def test_account_yield_is_null_when_no_symbol_can_be_scored():
+    v = portfolio.dividend_view([F("A", 3000)], KR_T, year=2026,
+                                cost_krw={"A": 100_000}, traded_this_year={"A"})
+    assert v["yield_on_cost_pct"] is None

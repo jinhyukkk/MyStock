@@ -170,6 +170,58 @@ def set_cash(c: CashIn, request: Request):
     return {"cash_krw": service.get_cash_krw(conn), "cash_usd": service.get_cash_usd(conn)}
 
 
+class CashFlowIn(BaseModel):
+    flow_type: Literal["DIVIDEND", "DEPOSIT", "WITHDRAW", "INTEREST"]
+    amount: float = Field(gt=0)  # 세전 금액
+    flow_date: str
+    symbol: str | None = None
+    currency: Literal["KRW", "USD"] = "KRW"
+    # 원천징수액. 배당은 입금 시점에 이미 떼이므로 순액과 세전을 모두 원장에 남긴다.
+    tax: float = Field(default=0.0, ge=0)
+    note: str | None = None
+
+
+@router.get("/cash-flows")
+def get_cash_flows(request: Request, symbol: str | None = None,
+                   flow_type: str | None = None):
+    return [dict(r) for r in db.list_cash_flows(_conn(request), symbol, flow_type)]
+
+
+@router.post("/cash-flows")
+def add_cash_flow(f: CashFlowIn, request: Request):
+    conn = _conn(request)
+    if f.flow_type in ("DIVIDEND", "INTEREST") and not f.symbol:
+        raise HTTPException(400, "배당·이자는 종목을 지정해야 합니다")
+    currency = f.currency
+    if f.symbol:
+        ticker = db.get_ticker(conn, f.symbol)
+        if not ticker:
+            raise HTTPException(400, "unknown symbol — 워치리스트에 먼저 추가하세요")
+        currency = ticker["currency"]  # 통화는 종목이 정한다 — 어긋나면 환산이 통째로 틀린다
+    if f.tax > f.amount:
+        raise HTTPException(400, "원천징수액이 세전 금액보다 클 수 없습니다")
+    # 입금 시점 환율 스냅샷 — 없으면 작년 배당이 오늘 환율로 다시 계산된다
+    fx_rate = 1.0
+    if currency == "USD":
+        fx_rate = service.get_sentiment_view(conn).get("usdkrw")
+    fid = db.insert_cash_flow(conn, f.flow_type, f.amount, f.flow_date, symbol=f.symbol,
+                              currency=currency, tax=f.tax, fx_rate=fx_rate, note=f.note)
+    cash = service.apply_flow_to_cash(conn, {
+        "flow_type": f.flow_type, "amount": f.amount, "tax": f.tax, "currency": currency})
+    return {"id": fid, "cash": cash}
+
+
+@router.delete("/cash-flows/{flow_id}")
+def remove_cash_flow(flow_id: int, request: Request):
+    conn = _conn(request)
+    row = db.get_cash_flow(conn, flow_id)
+    db.delete_cash_flow(conn, flow_id)
+    cash = None
+    if row is not None:  # 삭제는 예수금 증감도 함께 되돌린다
+        cash = service.apply_flow_to_cash(conn, dict(row), reverse=True)
+    return {"ok": True, "cash": cash}
+
+
 @router.get("/rules")
 def get_rules(request: Request, symbol: str | None = None):
     return [dict(r) for r in db.list_rules(_conn(request), symbol)]

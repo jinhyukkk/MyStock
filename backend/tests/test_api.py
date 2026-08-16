@@ -349,3 +349,82 @@ def test_dashboard_signal_carries_avg_price(client):
     expected = round((held["close"] / held["avg_price"] - 1) * 100, 2)
     assert held["holding_pnl_pct"] == expected
     assert watched["avg_price"] is None and watched["holding_pnl_pct"] is None
+
+
+# ── 배당 원장 ────────────────────────────────────────────────────────────
+def _watch(client, symbol="005930", name="삼성전자", market="KR", currency="KRW"):
+    client.post("/api/watchlist", json={"symbol": symbol, "name": name, "market": market,
+                                        "is_etf": 0, "yf_symbol": symbol,
+                                        "currency": currency})
+
+
+def test_dividend_credits_cash_net_of_withholding(client):
+    """배당을 원장에만 적고 예수금에 넣지 않으면 총자산이 실제보다 작아지고,
+    그 총자산을 분모로 쓰는 1% 리스크 사이징이 계속 작은 수량을 제시한다."""
+    _watch(client)
+    client.put("/api/cash", json={"amount": 1_000_000})
+    res = client.post("/api/cash-flows", json={
+        "flow_type": "DIVIDEND", "symbol": "005930", "amount": 10000,
+        "tax": 1540, "flow_date": "2026-03-15"})
+    assert res.status_code == 200
+    assert res.json()["cash"]["cash_krw"] == 1_008_460
+
+
+def test_deleting_a_dividend_reverses_the_cash(client):
+    _watch(client)
+    client.put("/api/cash", json={"amount": 1_000_000})
+    fid = client.post("/api/cash-flows", json={
+        "flow_type": "DIVIDEND", "symbol": "005930", "amount": 10000,
+        "tax": 1540, "flow_date": "2026-03-15"}).json()["id"]
+    client.delete(f"/api/cash-flows/{fid}")
+    assert client.get("/api/portfolio").json()["totals"]["cash_krw"] == 1_000_000
+
+
+def test_withdrawal_reduces_cash(client):
+    client.put("/api/cash", json={"amount": 1_000_000})
+    res = client.post("/api/cash-flows", json={
+        "flow_type": "WITHDRAW", "amount": 300_000, "flow_date": "2026-03-15"})
+    assert res.json()["cash"]["cash_krw"] == 700_000
+
+
+def test_dividend_requires_a_symbol(client):
+    res = client.post("/api/cash-flows", json={
+        "flow_type": "DIVIDEND", "amount": 10000, "flow_date": "2026-03-15"})
+    assert res.status_code == 400
+
+
+def test_withholding_cannot_exceed_gross(client):
+    _watch(client)
+    res = client.post("/api/cash-flows", json={
+        "flow_type": "DIVIDEND", "symbol": "005930", "amount": 1000,
+        "tax": 2000, "flow_date": "2026-03-15"})
+    assert res.status_code == 400
+
+
+def test_dividend_currency_follows_the_ticker(client):
+    """폼에서 통화를 잘못 고르면 배당 $100이 원화 100원이 된다 —
+    통화는 사용자 선택이 아니라 종목이 정한다."""
+    _watch(client, "AAPL", "Apple", "US", "USD")
+    client.post("/api/refresh")  # 환율 수집 후여야 입금 시점 환율이 고정된다
+    client.post("/api/cash-flows", json={
+        "flow_type": "DIVIDEND", "symbol": "AAPL", "amount": 100, "currency": "KRW",
+        "flow_date": "2026-03-15"})
+    row = client.get("/api/cash-flows").json()[0]
+    assert row["currency"] == "USD" and row["fx_rate"] == 1300.0
+
+
+def test_portfolio_reports_dividends_and_total_return(client):
+    _watch(client)
+    client.post("/api/refresh")
+    client.post("/api/trades", json={"symbol": "005930", "side": "BUY",
+                                     "quantity": 10, "price": 100.0,
+                                     "trade_date": "2025-01-02"})
+    client.post("/api/cash-flows", json={
+        "flow_type": "DIVIDEND", "symbol": "005930", "amount": 1000,
+        "tax": 154, "flow_date": "2026-03-15"})
+    pf = client.get("/api/portfolio").json()
+    assert pf["dividends"]["total_net_krw"] == 846
+    assert pf["dividends"]["by_symbol"][0]["symbol"] == "005930"
+    row = next(h for h in pf["holdings"] if h["symbol"] == "005930")
+    assert row["dividend_krw"] == 846
+    assert row["total_return_krw"] == row["pnl_krw"] + 846

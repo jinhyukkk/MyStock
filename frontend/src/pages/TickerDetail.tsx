@@ -385,6 +385,18 @@ export default function TickerDetail() {
                 {plan.unrealized_pnl_pct >= 0 ? '+' : ''}{plan.unrealized_pnl_pct}%
                 <span style={{ fontSize: 12 }}>
                   {' '}(₩{Math.round(plan.unrealized_pnl_krw).toLocaleString('ko-KR')})</span></div>
+              {/* 이 종목이 준 현금을 빼고 손익을 보면, 분배금으로 돌려받은 만큼
+                  더 물린 것처럼 읽혀 배당주를 손절 구간으로 착각한다. */}
+              {detail.dividends.count > 0 && <div style={{ fontSize: 11, marginTop: 2 }}>
+                <span style={{ color: 'var(--text-dim)' }}>배당 포함 </span>
+                <span className={plan.unrealized_pnl_krw + detail.dividends.total_net_krw >= 0
+                                 ? 'pos' : 'neg'}>
+                  {plan.unrealized_pnl_krw + detail.dividends.total_net_krw >= 0 ? '+' : ''}
+                  ₩{Math.round(plan.unrealized_pnl_krw
+                               + detail.dividends.total_net_krw).toLocaleString('ko-KR')}</span>
+                <span style={{ color: 'var(--text-dim)' }}>
+                  {' '}(누적 배당 ₩{Math.round(detail.dividends.total_net_krw).toLocaleString('ko-KR')} 세후,
+                  {' '}{detail.dividends.count}회)</span></div>}
             </div>
             <div>
               <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>

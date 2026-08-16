@@ -192,6 +192,96 @@ def overseas_tax_view(realized: list, tickers: dict, year: int) -> dict:
     }
 
 
+def dividend_view(flows: list, tickers: dict, usdkrw=None, year: int | None = None,
+                  cost_krw: dict | None = None,
+                  traded_this_year: set | None = None) -> dict:
+    """배당·분배금 집계.
+
+    주가만 보는 화면은 커버드콜·고배당 종목을 실제보다 나쁘게 보여준다 —
+    분배금으로 받은 현금이 어디에도 없으니 총수익이 하락분만큼만 남는다.
+
+    세 가지를 분리해서 낸다.
+    - **순액**: 배당소득세는 입금 시점에 이미 떼인다. 세전 금액을 수익이라 부르면
+      실제로 쓸 수 있는 돈보다 15% 많은 숫자를 보고 판단하게 된다.
+    - **올해 / 누적**: 합치면 오래 보유한 종목이 무조건 높은 수익률로 보인다.
+    - **환율**: 입금 시점 환율로 고정한다. 현재 환율로 환산하면 작년에 받은
+      배당이 오늘 환율 변동만으로 늘었다 줄었다 한다.
+    """
+    fx_now = usdkrw or DEFAULT_USDKRW
+    cost_krw, traded_this_year = cost_krw or {}, traded_this_year or set()
+    by: dict[str, dict] = {}
+    gross = tax = net = ytd_net = ytd_gross = 0.0
+    count = ytd_count = fx_estimated = 0
+    for f in flows:
+        if f.get("flow_type") != "DIVIDEND":
+            continue  # 입출금은 현금흐름이지 수익이 아니다
+        s = f.get("symbol") or "미지정"
+        info = tickers.get(s, {})
+        cur = f.get("currency") or info.get("currency", "KRW")
+        if cur == "USD":
+            rate = f.get("fx_rate")
+            if rate is None:
+                rate, fx_estimated = fx_now, 1
+            rate = float(rate)
+        else:
+            rate = 1.0
+        g, t = float(f.get("amount") or 0.0), float(f.get("tax") or 0.0)
+        n = g - t
+        this_year = year is not None and str(f.get("flow_date", "")).startswith(str(year))
+        gross += g * rate; tax += t * rate; net += n * rate; count += 1
+        if this_year:
+            ytd_net += n * rate; ytd_gross += g * rate; ytd_count += 1
+        r = by.setdefault(s, {"symbol": s, "name": info.get("name", s), "currency": cur,
+                              "count": 0, "gross": 0.0, "tax": 0.0, "net": 0.0,
+                              "net_krw": 0.0, "ytd_net_krw": 0.0,
+                              "first_date": None, "last_date": None})
+        r["count"] += 1
+        r["gross"] += g; r["tax"] += t; r["net"] += n
+        r["net_krw"] += n * rate
+        if this_year:
+            r["ytd_net_krw"] += n * rate
+        d = str(f.get("flow_date") or "")
+        r["first_date"] = min(r["first_date"] or d, d)
+        r["last_date"] = max(r["last_date"] or d, d)
+    rows = []
+    for r in sorted(by.values(), key=lambda x: -x["net_krw"]):
+        basis = cost_krw.get(r["symbol"])
+        # 중간에 사고 판 종목의 '올해 배당 ÷ 현재 원가'는 수익률이 아니다.
+        # 반년만 보유하고 받은 배당을 연간 수익률처럼 읽으면 비중을 잘못 늘린다.
+        changed = r["symbol"] in traded_this_year
+        rows.append({**r,
+                     # 종목 통화 금액은 소수까지, 원화 환산은 원 단위로 — 원화에
+                     # 소수점이 붙으면 화면에서 달러 금액과 구분이 흐려진다
+                     "gross": round(r["gross"], 4), "tax": round(r["tax"], 4),
+                     "net": round(r["net"], 4),
+                     "net_krw": round(r["net_krw"], 0),
+                     "ytd_net_krw": round(r["ytd_net_krw"], 0),
+                     "held": basis is not None,
+                     "position_changed": changed,
+                     "yield_on_cost_pct": round(r["ytd_net_krw"] / basis * 100, 2)
+                     if basis and not changed else None})
+    # 계좌 수익률도 종목별과 같은 기준으로 만든다. 종목마다 "기간 불일치"라며
+    # 수익률을 감춰놓고 그 종목들만으로 계좌 수익률을 내면, 화면이 한쪽에서
+    # 못 낸다고 말한 숫자를 다른 쪽에서 합계로 내놓는 셈이 된다.
+    ok = [r for r in rows if r["yield_on_cost_pct"] is not None]
+    total_basis = sum(cost_krw.get(r["symbol"], 0.0) for r in ok)
+    ytd_ok = sum(r["ytd_net_krw"] for r in ok)
+    any_changed = len(ok) < len(rows)
+    return {
+        "by_symbol": rows,
+        "year": year, "count": count, "ytd_count": ytd_count,
+        "total_gross_krw": round(gross, 0), "total_tax_krw": round(tax, 0),
+        "total_net_krw": round(net, 0),
+        "ytd_gross_krw": round(ytd_gross, 0), "ytd_net_krw": round(ytd_net, 0),
+        # 배당을 받은 종목들의 현재 원가 대비 — 분모에 배당 없는 종목까지 넣으면
+        # 커버드콜 비중이 낮은 계좌에서 수익률이 0에 가깝게 희석된다
+        "yield_on_cost_pct": round(ytd_ok / total_basis * 100, 2) if total_basis else None,
+        "yield_basis_krw": round(total_basis, 0),
+        "yield_partial": any_changed,
+        "fx_estimated": bool(fx_estimated),
+    }
+
+
 # 부분청산 비율 — 전량이냐 아니냐의 이분법만 있으면 물린 포지션에서 결정이 멈춘다
 EXIT_SLICES = (("1/3", 1 / 3), ("1/2", 0.5), ("전량", 1.0))
 
@@ -301,8 +391,11 @@ def realized_stats(realized: list, tickers: dict, usdkrw) -> dict:
 
 
 def build_portfolio(holdings: dict, prices: dict, tickers: dict, usdkrw,
-                    cash_krw: float = 0.0, cash_usd: float = 0.0) -> dict:
+                    cash_krw: float = 0.0, cash_usd: float = 0.0,
+                    dividends: dict | None = None) -> dict:
     fx = usdkrw or DEFAULT_USDKRW
+    dividends = dividends or {}
+    total_div = total_return_basis = 0.0
     cash_usd_krw = cash_usd * fx
     cash_total_krw = cash_krw + cash_usd_krw
     rows, alloc = [], {}
@@ -343,7 +436,21 @@ def build_portfolio(holdings: dict, prices: dict, tickers: dict, usdkrw,
                 fx_pnl_krw = None  # 매수 환율 미기록 — 0으로 쓰면 "영향 없음"으로 읽힌다
             pnl_krw = (round(price_pnl_krw + fx_pnl_krw, 0)
                        if fx_pnl_krw is not None else None)
+        # 배당은 주가 손익과 다른 계정에서 들어온다 — 더하지 않으면 커버드콜이
+        # "-5%짜리 실패한 포지션"으로만 보이고, 그 화면은 팔라고 말하는 셈이다.
+        # 매도분에 대해 받은 배당도 이 종목이 준 현금이므로 누적 전액을 쓴다.
+        div_krw = round(float(dividends.get(symbol, 0.0)), 0)
+        cost_row = h["avg_price"] * h["quantity"] * rate
+        tr_krw = tr_pct = None
+        if div_krw and pnl_krw is not None:
+            tr_krw = round(pnl_krw + div_krw, 0)
+            tr_pct = round(tr_krw / cost_row * 100, 2) if cost_row else None
+        total_div += div_krw
+        if close is not None:
+            total_return_basis += cost_row
         rows.append({"symbol": symbol, "name": info.get("name", symbol),
+                     "dividend_krw": div_krw,
+                     "total_return_krw": tr_krw, "total_return_pct": tr_pct,
                      "market": info.get("market"), "currency": currency,
                      # 원가에 평단 보정 로트가 섞였으면 평단 기반 숫자 전체가
                      # 실거래 산물이 아니다 — 그 사실을 숫자 옆에 남긴다
@@ -377,7 +484,15 @@ def build_portfolio(holdings: dict, prices: dict, tickers: dict, usdkrw,
               # 원화 환산에 실제로 쓴 환율. 화면에 없으면 사용자가 KRW 숫자에서
               # 역산해야 하고, 수집 실패로 기본값을 쓴 경우와 구분할 방법도 없다.
               "usdkrw": round(fx, 2),
-              "usdkrw_estimated": usdkrw is None}
+              "usdkrw_estimated": usdkrw is None,
+              # 평가손익 + 누적 배당. 배당을 세지 않는 총수익은 배당주 계좌에서
+              # 실제보다 낮게 나오고, 그 숫자로 비중을 줄이면 배당까지 함께 준다.
+              "dividend_krw": round(total_div, 0),
+              "total_return_krw": round(total_value - total_cost + total_div, 0)
+              if total_div else None,
+              "total_return_pct": round((total_value - total_cost + total_div)
+                                        / total_return_basis * 100, 2)
+              if total_div and total_return_basis else None}
     allocation = [{"label": k, "value_krw": round(v, 0)} for k, v in
                   sorted(alloc.items(), key=lambda x: -x[1])]
     if cash_total_krw > 0:

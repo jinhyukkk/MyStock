@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { del, get, post, put } from '../api'
-import type { Portfolio as PF } from '../types'
+import type { CashFlow, Portfolio as PF } from '../types'
 import { cashClampWarning, type TradeResult } from '../trade'
 import { isStale, relativeTime } from '../time'
 import SymbolInput from '../components/SymbolInput'
@@ -55,9 +55,16 @@ interface Trade { id: number; symbol: string; side: string; quantity: number;
                   note: string | null; grade_at_trade: string | null
                   exclude_from_stats: number }
 
+const FLOW_LABEL: Record<string, string> = {
+  DIVIDEND: '배당', INTEREST: '이자', DEPOSIT: '입금', WITHDRAW: '출금' }
+
 export default function Portfolio() {
   const [pf, setPf] = useState<PF | null>(null)
   const [trades, setTrades] = useState<Trade[]>([])
+  const [flows, setFlows] = useState<CashFlow[]>([])
+  const [flowForm, setFlowForm] = useState({ flow_type: 'DIVIDEND', symbol: '',
+    amount: '', tax: '', flow_date: new Date().toISOString().slice(0, 10), note: '' })
+  const [flowMsg, setFlowMsg] = useState<string | null>(null)
   const [form, setForm] = useState({ symbol: '', side: 'BUY', quantity: '', price: '',
     trade_date: new Date().toISOString().slice(0, 10), executed_at: '',
     note: '', fee: '', tax: '', exclude_from_stats: false })
@@ -98,8 +105,9 @@ export default function Portfolio() {
   const load = () => Promise.all([
     get<PF>('/api/portfolio'),
     get<Trade[]>('/api/trades'),
-  ]).then(([p, tr]) => {
-    setPf(p); setTrades(tr); setError(null); setNow(Date.now())
+    get<CashFlow[]>('/api/cash-flows'),
+  ]).then(([p, tr, fl]) => {
+    setPf(p); setTrades(tr); setFlows(fl); setError(null); setNow(Date.now())
     // 현재 저장된 값을 프리필 — 한쪽만 고치려다 다른 쪽을 날리는 일이 없게
     setCashInput(String(p.totals.cash_krw))
     setCashUsdInput(String(p.totals.cash_usd ?? 0))
@@ -135,6 +143,27 @@ export default function Portfolio() {
     } catch (e) { setMsg(String(e)) }
   }
 
+  const needsSymbol = flowForm.flow_type === 'DIVIDEND' || flowForm.flow_type === 'INTEREST'
+  const addFlow = async () => {
+    const amount = Number(flowForm.amount)
+    if (!(amount > 0)) { setFlowMsg('세전 금액을 확인하세요 (0 이하 불가)'); return }
+    if (needsSymbol && !flowForm.symbol.trim()) {
+      setFlowMsg('배당·이자는 어느 종목에서 나왔는지 지정해야 종목별 수익률에 반영됩니다'); return
+    }
+    const tax = flowForm.tax.trim() === '' ? 0 : Number(flowForm.tax)
+    if (!(tax >= 0) || tax > amount) { setFlowMsg('원천징수액을 확인하세요'); return }
+    try {
+      const res = await post<TradeResult>('/api/cash-flows', {
+        flow_type: flowForm.flow_type, amount, tax,
+        flow_date: flowForm.flow_date, note: flowForm.note.trim() || null,
+        symbol: needsSymbol ? flowForm.symbol.trim().toUpperCase() : null })
+      setFlowMsg(null)
+      setCashWarn(cashClampWarning(res))
+      setFlowForm({ ...flowForm, amount: '', tax: '', note: '' })
+      load()
+    } catch (e) { setFlowMsg(String(e)) }
+  }
+
   // 에러를 스켈레톤보다 먼저 검사한다 — 순서가 반대면 실패 시 영원히 로딩 화면으로 보인다.
   if (error) return (
     <div className="card">
@@ -155,6 +184,10 @@ export default function Portfolio() {
   )
   const t = pf.totals
   const stale = isStale(pf.last_refresh, now)
+  const div = pf.dividends
+  // 배당이 한 건도 없는 계좌에 열을 하나 더 세우면, 평가손익과 똑같은 숫자가
+  // 두 번 나오면서 표만 넓어진다 — 배당이 실제로 있을 때만 총수익을 세운다.
+  const hasDiv = t.dividend_krw > 0
   return (
     <div className="grid">
       <div className="grid-2">
@@ -176,6 +209,15 @@ export default function Portfolio() {
           <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>
             총자산 대비 {t.total_pnl_pct_of_asset >= 0 ? '+' : ''}{t.total_pnl_pct_of_asset}%
             {' · '}보유 종목 평가손익이며 실현손익은 아래 카드에 따로 있습니다</div>
+          {/* 주가 손익만 총자산 카드에 두면 배당으로 받은 현금은 예수금에 섞여
+              사라진다 — 커버드콜·고배당 계좌의 성과가 계속 낮게만 보인다. */}
+          {hasDiv && <div style={{ fontSize: 12, marginTop: 4 }}>
+            <span style={{ color: 'var(--text-dim)' }}>배당 포함 총수익 </span>
+            <strong className={(t.total_return_krw ?? 0) >= 0 ? 'pos' : 'neg'}>
+              {(t.total_return_krw ?? 0) >= 0 ? '+' : ''}₩{fmt(t.total_return_krw)}
+              {t.total_return_pct !== null && ` (원금 대비 ${t.total_return_pct}%)`}</strong>
+            <span style={{ color: 'var(--text-dim)' }}>
+              {' '}— 평가손익 + 누적 배당 ₩{fmt(t.dividend_krw)} (세후)</span></div>}
           <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
             평가액 ₩{fmt(t.total_value_krw)} · 현금 ₩{fmt(t.cash_krw + (t.cash_usd_krw ?? 0))} ({t.cash_pct}%)
             {(t.cash_usd ?? 0) > 0 && <> — ₩{fmt(t.cash_krw)} + ${fmt(t.cash_usd)}</>}</div>
@@ -224,7 +266,9 @@ export default function Portfolio() {
             <th title="매도 수수료·세금 차감 전">손익 (비용 전)</th>
             <th title="지금 전량 매도했을 때 실제로 들어오는 금액과 확정 손익">
               전량 청산 시</th>
-            <th>수익률</th></tr></thead>
+            <th>수익률</th>
+            {hasDiv && <th title="누적 배당(세후) 포함 — 매도한 수량에 대해 받은 배당도 이 종목이 준 현금이므로 합산합니다">
+              배당 포함</th>}</tr></thead>
           <tbody>
             {pf.holdings.map(h => (
               <tr key={h.symbol}>
@@ -262,6 +306,18 @@ export default function Portfolio() {
                     회수 {cur(h.currency, h.net_proceeds)}</div></td>
                 <td data-label="수익률" className={(h.pnl_pct ?? 0) >= 0 ? 'pos' : 'neg'}>
                   {h.pnl_pct === null ? '—' : `${h.pnl_pct >= 0 ? '+' : ''}${h.pnl_pct}%`}</td>
+                {/* 주가로는 마이너스여도 분배금까지 더하면 플러스인 포지션이 있다.
+                    배당을 세지 않는 화면은 그 포지션을 팔라고 말하는 것과 같다. */}
+                {hasDiv && <td data-label="배당 포함"
+                    className={(h.total_return_pct ?? 0) >= 0 ? 'pos' : 'neg'}>
+                  {h.dividend_krw === 0
+                    ? <span style={{ color: 'var(--text-dim)' }}>배당 없음</span>
+                    : <>{h.total_return_pct === null
+                        ? <span style={{ color: 'var(--text-dim)' }}
+                                title="매수 시점 환율이 원장에 없어 원화 평가손익을 확정할 수 없습니다 — 배당을 더할 기준 자체가 없는 것이지, 배당이 없다는 뜻이 아닙니다">—</span>
+                        : `${h.total_return_pct >= 0 ? '+' : ''}${h.total_return_pct}%`}
+                      <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                        배당 ₩{fmt(h.dividend_krw)}</div></>}</td>}
               </tr>
             ))}
           </tbody>
@@ -541,6 +597,148 @@ export default function Portfolio() {
         </>}
       </div>}
 
+      {/* 배당·분배금이 원장에 없으면 커버드콜·고배당 종목의 성과가 주가 하락분만큼만
+          보이고, 예수금은 매매와 어긋난 채로 남는다. 실제로 받은 현금을 세는 자리다. */}
+      <div className="card">
+        <strong>배당 · 현금흐름</strong>
+        <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+          {' '}배당소득세는 입금 시점에 이미 원천징수됩니다 — 세전과 세후를 함께 기록하세요</span>
+        {div.count === 0 ? (
+          <div className="empty">
+            기록된 배당이 없습니다.<br />
+            분배금을 기록하면 <strong>종목별 배당 수익률 · 배당 포함 총수익</strong>이 계산되고,
+            받은 현금이 예수금에 자동 반영됩니다 — 주가만 보면 배당주는 늘 실패한 포지션으로 보입니다.
+          </div>
+        ) : <>
+        <div style={{ display: 'flex', gap: 32, marginTop: 10, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+              {div.year}년 배당 (세후)</div>
+            <div className="pos" style={{ fontWeight: 700, fontSize: 18 }}>
+              +₩{fmt(div.ytd_net_krw)}</div>
+            <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+              세전 ₩{fmt(div.ytd_gross_krw)} · {div.ytd_count}건</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>누적 배당 (세후)</div>
+            <div style={{ fontWeight: 700, fontSize: 18 }}>₩{fmt(div.total_net_krw)}</div>
+            <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+              원천징수 ₩{fmt(div.total_tax_krw)} 차감 · {div.count}건</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}
+                 title="올해 받은 배당 ÷ 배당을 준 종목들의 현재 원가">
+              배당 수익률 (원가 대비)</div>
+            <div style={{ fontWeight: 700, fontSize: 18 }}>
+              {div.yield_on_cost_pct === null ? '—' : `${div.yield_on_cost_pct}%`}</div>
+            <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+              {div.yield_on_cost_pct === null
+                ? '기간이 맞는 종목이 없어 계산하지 않았습니다'
+                : `분모 원가 ₩${fmt(div.yield_basis_krw)}`}</div>
+          </div>
+        </div>
+        {/* 반년만 보유하고 받은 배당을 연간 수익률처럼 읽으면 비중을 잘못 늘린다 */}
+        {div.yield_partial && <div className="warn-box note" style={{ marginTop: 8 }}>
+          ⓘ 올해 중 매수·매도가 있었거나 이미 정리한 종목은 보유 기간과 배당 기간이 어긋나
+          <strong> 위 수익률의 분자·분모에서 함께 제외</strong>했습니다 (아래 표의 「기간 불일치」).
+          받은 배당 금액 자체는 전부 포함돼 있습니다.</div>}
+        {div.fx_estimated && <div className="warn-box" style={{ marginTop: 8 }}>
+          ⚠ 일부 달러 배당에 입금 시점 환율이 없어 <strong>현재 환율로 환산</strong>했습니다 —
+          그 건들의 원화 금액은 오늘 환율이 바뀌면 함께 바뀝니다.</div>}
+        <div className="table-scroll table-cards" style={{ marginTop: 12 }}>
+        <table>
+          <thead><tr><th>종목</th><th>{div.year}년 (세후)</th><th>누적 (세후)</th>
+            <th>원가 대비</th><th>건수</th><th>최근 입금</th></tr></thead>
+          <tbody>
+            {div.by_symbol.map(r => (
+              <tr key={r.symbol}>
+                <td style={{ textAlign: 'left' }}>
+                  <Link to={`/ticker/${r.symbol}`}>{r.name}</Link>
+                  {/* 이미 판 종목의 배당을 현재 원가로 나눌 수는 없다 */}
+                  {!r.held && <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>
+                    {' '}보유 없음</span>}</td>
+                <td data-label={`${div.year}년 (세후)`} className="pos">₩{fmt(r.ytd_net_krw)}</td>
+                <td data-label="누적 (세후)">₩{fmt(r.net_krw)}</td>
+                <td data-label="원가 대비">
+                  {r.yield_on_cost_pct !== null ? `${r.yield_on_cost_pct}%`
+                    : <span style={{ color: 'var(--text-dim)', fontSize: 11 }}
+                            title={r.position_changed
+                              ? '올해 이 종목을 사거나 팔았습니다 — 보유 기간과 배당 기간이 달라 현재 원가로 나눈 값은 수익률이 아닙니다'
+                              : '현재 보유하지 않아 나눌 원가가 없습니다'}>
+                        {r.position_changed ? '기간 불일치' : '—'}</span>}</td>
+                <td data-label="건수">{r.count}</td>
+                <td data-label="최근 입금">{r.last_date ?? '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        </div>
+        </>}
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap',
+                      alignItems: 'center' }}>
+          <select value={flowForm.flow_type}
+                  onChange={e => setFlowForm({ ...flowForm, flow_type: e.target.value })}>
+            <option value="DIVIDEND">배당·분배금</option>
+            <option value="INTEREST">이자</option>
+            <option value="DEPOSIT">입금</option>
+            <option value="WITHDRAW">출금</option>
+          </select>
+          {needsSymbol && <SymbolInput value={flowForm.symbol} style={{ width: 200 }}
+                       onChange={v => setFlowForm({ ...flowForm, symbol: v })} />}
+          <input type="number" placeholder="세전 금액" value={flowForm.amount}
+                 onChange={e => setFlowForm({ ...flowForm, amount: e.target.value })}
+                 style={{ width: 130 }} />
+          {needsSymbol && <input type="number" placeholder="원천징수" value={flowForm.tax}
+                 onChange={e => setFlowForm({ ...flowForm, tax: e.target.value })}
+                 style={{ width: 110 }} />}
+          <input type="date" value={flowForm.flow_date}
+                 onChange={e => setFlowForm({ ...flowForm, flow_date: e.target.value })} />
+          <input placeholder="메모" value={flowForm.note}
+                 onChange={e => setFlowForm({ ...flowForm, note: e.target.value })}
+                 style={{ flex: 1, minWidth: 140 }} />
+          <button onClick={addFlow}>추가</button>
+        </div>
+        <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
+          금액은 <strong>종목 통화 기준</strong>입니다 (미국 종목이면 달러). 기록하면 세후 금액만큼
+          예수금이 자동 증감하므로 <strong>예수금 칸을 따로 고치지 마세요</strong> — 두 번 계상됩니다.
+          {' '}원천징수를 비우면 0으로 기록되어 세전 금액이 그대로 수익이 됩니다.</div>
+        {flowMsg && <div style={{ color: 'var(--sell)', fontSize: 12, marginTop: 6 }}>{flowMsg}</div>}
+        {flows.length > 0 && <div className="table-scroll table-cards" style={{ marginTop: 12 }}>
+        <table>
+          <thead><tr><th>날짜</th><th>구분</th><th>종목</th><th>세전</th><th>원천징수</th>
+            <th>실입금</th><th>메모</th><th></th></tr></thead>
+          <tbody>
+            {flows.map(f => (
+              <tr key={f.id}>
+                <td style={{ textAlign: 'left' }}>{f.flow_date}</td>
+                <td data-label="구분" className={f.flow_type === 'WITHDRAW' ? 'neg' : 'pos'}>
+                  {FLOW_LABEL[f.flow_type] ?? f.flow_type}</td>
+                <td data-label="종목">{f.symbol ?? '—'}</td>
+                <td data-label="세전">{cur(f.currency, f.amount)}</td>
+                <td data-label="원천징수" style={{ color: 'var(--text-dim)' }}>
+                  {f.tax ? cur(f.currency, f.tax) : '—'}</td>
+                <td data-label="실입금">
+                  {cur(f.currency, f.flow_type === 'WITHDRAW' ? -f.amount : f.amount - f.tax)}
+                  {f.currency === 'USD' && f.fx_rate !== null &&
+                    <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                      ₩{fmt(f.fx_rate)}/$ 기준</div>}</td>
+                <td style={{ textAlign: 'left', maxWidth: 200, overflow: 'hidden',
+                             textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                    title={f.note ?? ''}>{f.note ?? ''}</td>
+                <td><button className="ghost" onClick={() => {
+                  if (confirm(`${f.flow_date} ${FLOW_LABEL[f.flow_type] ?? f.flow_type}`
+                    + ` ${cur(f.currency, f.amount)} 기록을 삭제합니다.\n`
+                    + '예수금이 함께 되돌아가며, 이 작업은 취소할 수 없습니다.'))
+                    del(`/api/cash-flows/${f.id}`).then(load).catch(e => setFlowMsg(String(e)))
+                }}>삭제</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        </div>}
+      </div>
+
       <div className="card">
         <strong>매매 입력</strong>
         <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
@@ -579,7 +777,8 @@ export default function Portfolio() {
         <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
           수수료·세금을 비우면 시장 기본 요율로 추정합니다 — 실제 값을 넣을수록 승률·손익비가 정확해집니다.
           <br />기록하면 예수금이 체결 대금만큼 자동 증감하며, 보유보다 많은 매도는 거부됩니다.
-          입출금·배당은 위 예수금 칸에서 직접 수정하세요.</div>
+          입출금·배당은 위 <strong>배당 · 현금흐름</strong> 카드에 기록하세요 — 예수금 칸을
+          직접 고치면 원장에 근거가 남지 않습니다.</div>
         {msg && <div style={{ color: 'var(--sell)', marginTop: 8 }}>{msg}</div>}
         {trades.length === 0 && <div className="empty">
           기록된 매매가 없습니다. 체결 내역을 남기면 진입 등급별 성과까지 복기할 수 있습니다.</div>}

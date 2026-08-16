@@ -107,6 +107,8 @@ export interface TickerDetail {
   cost_rates: { fee_pct: number; sell_tax_pct: number };
   // 주문 프리뷰의 '체결 후 잔액' — 예수금 초과를 사후 클램프가 아니라 미리 안다
   cash: { krw: number; usd: number };
+  // 이 종목이 준 현금 — 주가 손익 옆에 없으면 배당주가 늘 실패한 포지션으로 읽힌다
+  dividends: DividendView;
   history: { date: string; swing_score: number; longterm_score: number; grade: string }[];
   rules: { id: number; symbol: string; rule_type: string; value: number }[];
   last_refresh: string | null;
@@ -123,6 +125,29 @@ export interface Holding {
   exit_cost: number | null; net_proceeds: number | null; net_pnl: number | null;
   // 원화 손익을 주가 기여와 환 기여로 분리
   price_pnl_krw: number | null; fx_pnl_krw: number | null; pnl_krw: number | null;
+  // 이 종목이 준 현금(누적 배당 순액). 주가 손익만 보면 배당주는 늘 실패로 읽힌다.
+  dividend_krw: number;
+  total_return_krw: number | null; total_return_pct: number | null;
+}
+export interface CashFlow {
+  id: number; flow_type: 'DIVIDEND' | 'DEPOSIT' | 'WITHDRAW' | 'INTEREST';
+  symbol: string | null; currency: string;
+  amount: number; tax: number; flow_date: string;
+  fx_rate: number | null; note: string | null;
+}
+export interface DividendView {
+  year: number | null; count: number; ytd_count: number;
+  total_gross_krw: number; total_tax_krw: number; total_net_krw: number;
+  ytd_gross_krw: number; ytd_net_krw: number;
+  // 올해 배당 ÷ 배당을 준 종목들의 현재 원가. 중간에 사고 판 종목이 섞이면 null.
+  yield_on_cost_pct: number | null; yield_basis_krw: number; yield_partial: boolean;
+  fx_estimated: boolean;
+  by_symbol: { symbol: string; name: string; currency: string; count: number;
+               gross: number; tax: number; net: number;
+               net_krw: number; ytd_net_krw: number;
+               first_date: string | null; last_date: string | null;
+               held: boolean; position_changed: boolean;
+               yield_on_cost_pct: number | null }[];
 }
 export interface RealizedEntry {
   symbol: string; trade_date: string; quantity: number;
@@ -149,8 +174,12 @@ export interface Portfolio {
     cash_krw: number; cash_usd: number; cash_usd_krw: number;
     total_asset_krw: number; cash_pct: number;
     // 원화 환산에 실제로 쓴 환율 — estimated면 수집 실패로 기본값을 쓴 것이다
-    usdkrw: number; usdkrw_estimated: boolean };
+    usdkrw: number; usdkrw_estimated: boolean;
+    // 평가손익 + 누적 배당. 배당이 0이면 같은 숫자가 두 번 나오므로 null이다.
+    dividend_krw: number;
+    total_return_krw: number | null; total_return_pct: number | null };
   allocation: { label: string; value_krw: number }[];
+  dividends: DividendView;
   realized: { entries: RealizedEntry[]; stats: RealizedStats; overseas_tax: OverseasTax };
   risk: AccountRisk | null;
   open_risk: OpenRisk | null;

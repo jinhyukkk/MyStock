@@ -75,6 +75,16 @@ def overseas_capital_gains_tax(annual_gain_krw: float) -> float:
     return round(taxable * OVERSEAS_TAX_RATE, 0)
 
 
+# 배당소득 원천징수율 — 국내 15.4%(지방세 포함), 미국 15%(한미 조세조약).
+# 양도세와 달리 입금 시점에 이미 떼인 돈이라 배당은 항상 순액으로 세야 한다.
+# 입력 폼의 기본값일 뿐, 실제 징수액은 증권사 명세를 그대로 입력받는다.
+DIVIDEND_TAX_RATE = {"KR": 0.154, "US": 0.15, "CRYPTO": 0.0}
+
+
+def dividend_tax_rate(market: str) -> float:
+    return DIVIDEND_TAX_RATE.get(market, 0.0)
+
+
 def roundtrip_pct(market: str, is_etf: int = 0) -> float:
     """왕복 수수료·세금(%p) — 스프레드는 뺀 값."""
     return round((fee_rate(market) * 2 + sell_tax_rate(market, is_etf)) * 100, 4)
