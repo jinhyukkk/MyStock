@@ -4,6 +4,7 @@ import { get } from '../../api'
 import type { CashFlow, Portfolio as PF, Trade } from '../../types'
 import { isStale, relativeTime } from '../../time'
 import { fmt } from '../../format'
+import type { PortfolioContext } from './context'
 
 export default function PortfolioLayout() {
   const [pf, setPf] = useState<PF | null>(null)
@@ -53,7 +54,7 @@ export default function PortfolioLayout() {
       {/* 계좌 규모가 화면에서 사라지면 포지션 사이즈 판단이 끊긴다 — 모든 탭에 고정한다 */}
       <div className="card pf-strip">
         <div>
-          <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>총자산 (KRW 환산)</div>
+          <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>총자산 (평가액 + 예수금, KRW 환산)</div>
           <div style={{ fontSize: 22, fontWeight: 700 }}>₩{fmt(t.total_asset_krw)}</div>
         </div>
         <div>
@@ -69,13 +70,16 @@ export default function PortfolioLayout() {
             <span style={{ fontSize: 12, color: 'var(--text-dim)' }}> ({t.cash_pct}%)</span></div>
         </div>
         <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
+          {/* 이 계좌 숫자가 언제 가격 기준인지 — 낡은 값으로 사이즈를 정하면 안 된다 */}
           <div className={stale ? 'warn' : ''} style={{ fontSize: 11,
                  color: stale ? undefined : 'var(--text-dim)' }} title={pf.last_refresh ?? ''}>
             {stale && '⚠ '}기준: {relativeTime(pf.last_refresh, now)}</div>
-          {/* 환율이 추정값이면 USD 종목의 원화 숫자는 어느 탭에서 봐도 참고용이다 */}
+          {/* 환율이 화면에 없으면 KRW 숫자에서 역산해야 하고, 수집 실패로 기본값을
+              쓴 경우와 실제 시세를 쓴 경우가 구분되지 않는다 */}
           <div className={t.usdkrw_estimated ? 'warn' : ''} style={{ fontSize: 11,
                  color: t.usdkrw_estimated ? undefined : 'var(--text-dim)' }}>
-            {t.usdkrw_estimated ? '⚠ 환율 수집 실패 — 기본값 ' : '적용 환율 '}₩{fmt(t.usdkrw)}/$</div>
+            {t.usdkrw_estimated ? '⚠ 환율 수집 실패 — 기본값 ' : '적용 환율 '}₩{fmt(t.usdkrw)}/$
+            {t.usdkrw_estimated && ' 로 환산했습니다. USD 종목의 원화 숫자는 참고용입니다.'}</div>
         </div>
       </div>
       {/* 예수금이 조용히 0으로 잘리면 총자산과 1% 리스크 수량이 함께 어긋난다 */}
@@ -83,7 +87,7 @@ export default function PortfolioLayout() {
         <button className="ghost" style={{ marginLeft: 8 }}
                 onClick={() => setCashWarn(null)}>확인</button></div>}
       <Outlet context={{ pf, trades, flows, posRule, setPosRule, now,
-                         reload: load, setCashWarn }} />
+                         reload: load, setCashWarn } satisfies PortfolioContext} />
     </div>
   )
 }
