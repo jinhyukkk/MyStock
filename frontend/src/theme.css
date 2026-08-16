@@ -141,6 +141,9 @@ input:focus, select:focus {
        transition: color 0.15s ease, background 0.15s ease; }
 .tab:hover { color: var(--text); }
 .tab.active { color: #fff; background: var(--grad); }
+/* 포트폴리오 총자산 스트립 — 모든 하위 탭 상단에 고정 */
+.pf-strip { display: flex; gap: 28px; flex-wrap: wrap; align-items: flex-start; }
+@media (max-width: 640px) { .pf-strip { gap: 14px; } }
 /* 커맨드 팔레트 */
 .palette-overlay {
   position: fixed; inset: 0; z-index: 100;

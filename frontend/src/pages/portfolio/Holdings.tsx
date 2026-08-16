@@ -1,20 +1,17 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { del, get, post, put } from '../api'
-import type { CashFlow, Portfolio as PF, Trade } from '../types'
-import { cashClampWarning, type TradeResult } from '../trade'
-import { isStale, relativeTime } from '../time'
-import SymbolInput from '../components/SymbolInput'
-import { cur, fmt } from '../format'
-import AllocationDonut from '../components/AllocationDonut'
+import { del, post, put } from '../../api'
+import { cashClampWarning, type TradeResult } from '../../trade'
+import SymbolInput from '../../components/SymbolInput'
+import AllocationDonut from '../../components/AllocationDonut'
+import { cur, fmt } from '../../format'
+import { usePortfolio } from './context'
 
 const FLOW_LABEL: Record<string, string> = {
   DIVIDEND: '배당', INTEREST: '이자', DEPOSIT: '입금', WITHDRAW: '출금' }
 
-export default function Portfolio() {
-  const [pf, setPf] = useState<PF | null>(null)
-  const [trades, setTrades] = useState<Trade[]>([])
-  const [flows, setFlows] = useState<CashFlow[]>([])
+export default function Holdings() {
+  const { pf, trades, flows, posRule, setPosRule, reload, setCashWarn } = usePortfolio()
   const [flowForm, setFlowForm] = useState({ flow_type: 'DIVIDEND', symbol: '',
     amount: '', tax: '', flow_date: new Date().toISOString().slice(0, 10), note: '' })
   const [flowMsg, setFlowMsg] = useState<string | null>(null)
@@ -22,14 +19,14 @@ export default function Portfolio() {
     trade_date: new Date().toISOString().slice(0, 10), executed_at: '',
     note: '', fee: '', tax: '', exclude_from_stats: false })
   const [msg, setMsg] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
   const [cashInput, setCashInput] = useState<string>('')
   const [cashUsdInput, setCashUsdInput] = useState<string>('')
-  const [cashWarn, setCashWarn] = useState<string | null>(null)
-  // 목표 종목 수 — 스타일이 바뀌면 룰도 바뀌어야 한다. 상수로 박아두면
-  // 화면이 남의 규율을 강요하게 되고, 그런 경고는 며칠 만에 무시된다.
-  const [posRule, setPosRule] = useState({ min: '', max: '' })
-  const [now, setNow] = useState(Date.now())
+
+  // 현재 저장된 값을 프리필 — 한쪽만 고치려다 다른 쪽을 날리는 일이 없게
+  useEffect(() => {
+    setCashInput(String(pf.totals.cash_krw))
+    setCashUsdInput(String(pf.totals.cash_usd ?? 0))
+  }, [pf.totals.cash_krw, pf.totals.cash_usd])
 
   // 빈 입력은 "변경 없음". 빈 값을 0으로 보내면 예수금이 소리 없이 사라지고,
   // 총자산을 분모로 쓰는 1% 리스크 포지션 사이징까지 틀어진다.
@@ -54,7 +51,7 @@ export default function Portfolio() {
     const body: { amount?: number; amount_usd?: number } = {}
     if (krw !== null) body.amount = krw
     if (usd !== null) body.amount_usd = usd
-    try { await put('/api/cash', body); setMsg(null); load() }
+    try { await put('/api/cash', body); setMsg(null); reload() }
     catch (e) { setMsg(String(e)) }
   }
 
@@ -63,23 +60,9 @@ export default function Portfolio() {
     if (!Number.isInteger(min) || !Number.isInteger(max) || min < 1 || min > max) {
       setMsg('목표 종목 수는 1 이상이어야 하고 최소 ≤ 최대여야 합니다'); return
     }
-    try { await put('/api/position-rule', { min, max }); setMsg(null); load() }
+    try { await put('/api/position-rule', { min, max }); setMsg(null); reload() }
     catch (e) { setMsg(String(e)) }
   }
-
-  const load = () => Promise.all([
-    get<PF>('/api/portfolio'),
-    get<Trade[]>('/api/trades'),
-    get<CashFlow[]>('/api/cash-flows'),
-    get<{ min: number; max: number }>('/api/position-rule'),
-  ]).then(([p, tr, fl, pr]) => {
-    setPf(p); setTrades(tr); setFlows(fl); setError(null); setNow(Date.now())
-    setPosRule({ min: String(pr.min), max: String(pr.max) })
-    // 현재 저장된 값을 프리필 — 한쪽만 고치려다 다른 쪽을 날리는 일이 없게
-    setCashInput(String(p.totals.cash_krw))
-    setCashUsdInput(String(p.totals.cash_usd ?? 0))
-  }).catch(e => setError(String(e)))
-  useEffect(() => { load() }, [])
 
   // 빈 비용 입력은 "미기록" — 0으로 보내면 비용 0짜리 매매로 원장에 남아
   // 승률·손익비가 gross로 되돌아간다. null로 보내야 서버가 시장 요율로 추정한다.
@@ -106,7 +89,7 @@ export default function Portfolio() {
       // 보정 체크는 매번 해제한다 — 켜둔 채로 다음 실거래를 넣으면 그 건까지 집계에서 빠진다
       setForm({ ...form, quantity: '', price: '', note: '', fee: '', tax: '',
                 executed_at: '', exclude_from_stats: false })
-      load()
+      reload()
     } catch (e) { setMsg(String(e)) }
   }
 
@@ -127,52 +110,21 @@ export default function Portfolio() {
       setFlowMsg(null)
       setCashWarn(cashClampWarning(res))
       setFlowForm({ ...flowForm, amount: '', tax: '', note: '' })
-      load()
+      reload()
     } catch (e) { setFlowMsg(String(e)) }
   }
 
-  // 에러를 스켈레톤보다 먼저 검사한다 — 순서가 반대면 실패 시 영원히 로딩 화면으로 보인다.
-  if (error) return (
-    <div className="card">
-      <div style={{ color: 'var(--sell)' }}>불러오기 실패: {error}</div>
-      <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
-        계좌 숫자를 불러오지 못했습니다. 판단 근거로 쓰지 마세요.</div>
-      <button style={{ marginTop: 10 }} onClick={() => { setError(null); load() }}>다시 시도</button>
-    </div>
-  )
-  if (!pf) return (
-    <div className="grid">
-      <div className="grid-2">
-        <div className="card skeleton" style={{ minHeight: 180 }} />
-        <div className="card skeleton" style={{ minHeight: 180 }} />
-      </div>
-      <div className="card skeleton" style={{ minHeight: 200 }} />
-    </div>
-  )
   const t = pf.totals
-  const stale = isStale(pf.last_refresh, now)
   const div = pf.dividends
   // 배당이 한 건도 없는 계좌에 열을 하나 더 세우면, 평가손익과 똑같은 숫자가
   // 두 번 나오면서 표만 넓어진다 — 배당이 실제로 있을 때만 총수익을 세운다.
   const hasDiv = t.dividend_krw > 0
   return (
-    <div className="grid">
+    <>
       <div className="grid-2">
         <div className="card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-            <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>총자산 (평가액 + 예수금, KRW 환산)</div>
-            {/* 이 계좌 숫자가 언제 가격 기준인지 — 낡은 값으로 사이즈를 정하면 안 된다 */}
-            <div className={stale ? 'warn' : ''} style={{ fontSize: 11,
-                   color: stale ? undefined : 'var(--text-dim)' }}
-                 title={pf.last_refresh ?? ''}>
-              {stale && '⚠ '}기준: {relativeTime(pf.last_refresh, now)}</div>
-          </div>
-          <div style={{ fontSize: 26, fontWeight: 700 }}>₩{fmt(t.total_asset_krw)}</div>
           {/* 같은 손익을 두 분모로 나눠 함께 보여준다 — 하나만 두면 현금 비중이 큰 계좌에서
               체감 손실이 부풀려 읽히고 포지션 사이즈 판단이 통째로 틀어진다. */}
-          <div className={t.total_pnl_krw >= 0 ? 'pos' : 'neg'} style={{ fontSize: 16 }}>
-            {t.total_pnl_krw >= 0 ? '+' : ''}₩{fmt(t.total_pnl_krw)}
-            <span style={{ fontSize: 13 }}> (원금 대비 {t.total_pnl_pct}%)</span></div>
           <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>
             총자산 대비 {t.total_pnl_pct_of_asset >= 0 ? '+' : ''}{t.total_pnl_pct_of_asset}%
             {' · '}보유 종목 평가손익이며 실현손익은 아래 카드에 따로 있습니다</div>
@@ -188,13 +140,6 @@ export default function Portfolio() {
           <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
             평가액 ₩{fmt(t.total_value_krw)} · 현금 ₩{fmt(t.cash_krw + (t.cash_usd_krw ?? 0))} ({t.cash_pct}%)
             {(t.cash_usd ?? 0) > 0 && <> — ₩{fmt(t.cash_krw)} + ${fmt(t.cash_usd)}</>}</div>
-          {/* 환율이 화면에 없으면 KRW 숫자에서 역산해야 하고, 수집 실패로 기본값을
-              쓴 경우와 실제 시세를 쓴 경우가 구분되지 않는다 */}
-          <div className={t.usdkrw_estimated ? 'warn' : ''} style={{ fontSize: 11, marginTop: 4,
-                 color: t.usdkrw_estimated ? undefined : 'var(--text-dim)' }}>
-            {t.usdkrw_estimated ? '⚠ 환율 수집 실패 — 기본값 ' : '적용 환율 '}
-            ₩{fmt(t.usdkrw)}/$
-            {t.usdkrw_estimated && ' 로 환산했습니다. USD 종목의 원화 숫자는 참고용입니다.'}</div>
           <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center',
                         flexWrap: 'wrap' }}>
             <input type="number" placeholder="예수금 (KRW)" value={cashInput}
@@ -222,10 +167,6 @@ export default function Portfolio() {
             <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>
               현재 {pf.holdings.length}종목 — 범위를 벗어나면 대시보드가 경고합니다</span>
           </div>
-          {/* 예수금이 조용히 0으로 잘리면 총자산과 1% 리스크 수량이 함께 어긋난다 */}
-          {cashWarn && <div className="warn-box" style={{ marginTop: 8 }}>⚠ {cashWarn}
-            <button className="ghost" style={{ marginLeft: 8 }}
-                    onClick={() => setCashWarn(null)}>확인</button></div>}
           {msg && <div style={{ color: 'var(--sell)', fontSize: 12, marginTop: 6 }}>{msg}</div>}
         </div>
         <div className="card" style={{ height: 180 }}>
@@ -713,7 +654,7 @@ export default function Portfolio() {
                   if (confirm(`${f.flow_date} ${FLOW_LABEL[f.flow_type] ?? f.flow_type}`
                     + ` ${cur(f.currency, f.amount)} 기록을 삭제합니다.\n`
                     + '예수금이 함께 되돌아가며, 이 작업은 취소할 수 없습니다.'))
-                    del(`/api/cash-flows/${f.id}`).then(load).catch(e => setFlowMsg(String(e)))
+                    del(`/api/cash-flows/${f.id}`).then(reload).catch(e => setFlowMsg(String(e)))
                 }}>삭제</button></td>
               </tr>
             ))}
@@ -802,7 +743,7 @@ export default function Portfolio() {
                   if (confirm(`${tr.trade_date} ${tr.symbol} ${tr.side === 'BUY' ? '매수' : '매도'} `
                     + `${fmt(tr.quantity)}주 기록을 삭제합니다.\n`
                     + '평단·실현손익 원장과 예수금이 함께 되돌아가며, 이 작업은 취소할 수 없습니다.'))
-                    del(`/api/trades/${tr.id}`).then(load).catch(e => setMsg(String(e)))
+                    del(`/api/trades/${tr.id}`).then(reload).catch(e => setMsg(String(e)))
                 }}>삭제</button></td>
               </tr>
             ))}
@@ -810,6 +751,6 @@ export default function Portfolio() {
         </table>
         </div>
       </div>
-    </div>
+    </>
   )
 }
