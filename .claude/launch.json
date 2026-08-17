@@ -1,10 +1,17 @@
-{
+﻿{
   "version": "0.0.1",
   "configurations": [
     {
       "name": "mystock",
       "runtimeExecutable": "./run.sh",
       "runtimeArgs": [],
+      "port": 8722,
+      "autoPort": true
+    },
+    {
+      "name": "mystock-win",
+      "runtimeExecutable": "backend/.venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--app-dir", "backend", "--host", "127.0.0.1", "--port", "8722"],
       "port": 8722,
       "autoPort": true
     }
