@@ -12,6 +12,8 @@ const SUBTABS = [
   { to: '/portfolio/realized', label: '복기', end: false },
   { to: '/portfolio/income', label: '배당·현금흐름', end: false },
   { to: '/portfolio/journal', label: '매매 기록', end: false },
+  // 매일 보는 화면과 가끔 고치는 설정을 한 카드에 겹치지 않게 분리 — 맨 끝에 둔다
+  { to: '/portfolio/settings', label: '설정', end: false },
 ]
 
 export default function PortfolioLayout() {

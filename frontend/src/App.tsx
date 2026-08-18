@@ -7,6 +7,7 @@ import Risk from './pages/portfolio/Risk'
 import Realized from './pages/portfolio/Realized'
 import Income from './pages/portfolio/Income'
 import Journal from './pages/portfolio/Journal'
+import Settings from './pages/portfolio/Settings'
 
 // 차트 라이브러리(recharts, lightweight-charts)를 쓰는 페이지만 지연 로딩
 const TickerDetail = lazy(() => import('./pages/TickerDetail'))
@@ -30,6 +31,7 @@ export default function App() {
             <Route path="realized" element={<Realized />} />
             <Route path="income" element={<Income />} />
             <Route path="journal" element={<Journal />} />
+            <Route path="settings" element={<Settings />} />
           </Route>
           <Route path="/watchlist" element={
             <Suspense fallback={fallback}><Watchlist /></Suspense>} />

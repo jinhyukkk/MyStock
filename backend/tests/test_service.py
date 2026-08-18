@@ -122,8 +122,7 @@ def test_telegram_stop_alert_carries_disclaimer(conn, monkeypatch):
     sent = []
 
     class OK:
-        def raise_for_status(self):
-            pass
+        ok = True
 
     monkeypatch.setattr(service.requests, "post",
                         lambda url, json, timeout: (sent.append(json), OK())[1])
@@ -363,8 +362,7 @@ def test_notify_telegram_dedupes_per_day(conn, monkeypatch):
     sent = []
 
     class OK:
-        def raise_for_status(self):
-            pass
+        ok = True
 
     monkeypatch.setattr(service.requests, "post",
                         lambda url, json=None, timeout=None: sent.append(json) or OK())

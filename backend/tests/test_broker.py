@@ -1,5 +1,7 @@
 import urllib.parse
+from datetime import datetime, timedelta
 
+import pandas as pd
 import pytest
 from app import broker, codef, db, service
 
@@ -312,3 +314,196 @@ def test_flow_import_does_not_touch_cash(conn, monkeypatch):
                         lambda *a, **k: [{"resTrHistoryList": [_tr()]}])
     service.sync_broker_flows(conn)
     assert service.get_cash_krw(conn) == 5000000
+
+
+# ── 계좌 목록 관리 ─────────────────────────────────────────────────────────
+
+def _save(conn, org, acct, name=None, pw=None):
+    service.broker_select_accounts(conn, [{"organization": org, "account": acct,
+                                           "display": f"{org}-{acct}", "name": name,
+                                           "account_password": pw}])
+
+
+def test_saving_accounts_merges_instead_of_replacing(conn, monkeypatch):
+    """덮어쓰면 두 번째 증권사를 추가하는 순간 첫 계좌가 조용히 사라진다."""
+    monkeypatch.setattr(service.codef, "encrypt", lambda pw: f"enc:{pw}")
+    db.set_meta(conn, service.BROKER_CID, "cid")
+    _save(conn, "0264", "1111", name="연금저축", pw="1234")
+    status = _save(conn, "0240", "2222", name="ISA") or service.broker_status(conn)
+    accounts = {a["account"]: a for a in status["accounts"]}
+    assert set(accounts) == {"1111", "2222"}
+    assert accounts["1111"]["name"] == "연금저축"
+    # 재선택에서 비밀번호를 다시 안 넣어도 저장분이 남아야 조회가 계속된다
+    _save(conn, "0264", "1111", name="연금저축")
+    assert service.broker_accounts(conn)[0]["password_enc"] == "enc:1234"
+
+
+def test_removing_account_drops_its_snapshot(conn, monkeypatch):
+    """뺀 계좌의 보유가 스냅샷에 남으면 유령 보유로 총자산이 부풀어 오른다."""
+    db.set_meta(conn, service.BROKER_CID, "cid")
+    _save(conn, "0264", "1111")
+    _save(conn, "0240", "2222")
+    db.replace_broker_holdings(conn, [
+        {"symbol": "005930", "name": "삼성전자", "quantity": 10, "avg_price": 70000,
+         "account": "0264-1111"},
+        {"symbol": "000660", "name": "SK하이닉스", "quantity": 5, "avg_price": 200000,
+         "account": "0240-2222"}], "2026-08-18T00:00:00")
+    db.set_meta(conn, service.BROKER_OTHER_ASSETS,
+                '[{"name":"발행어음","value_krw":1000000,"account":"0264-1111"}]')
+    # 재동기화는 CODEF를 타므로 실패시킨다 — 그래도 유령 보유는 남지 않아야 한다
+    monkeypatch.setattr(service, "sync_broker",
+                        lambda c: (_ for _ in ()).throw(RuntimeError("조회 실패")))
+
+    out = service.broker_remove_account(conn, "1111")
+    assert out["resynced"] is False
+    assert [a["account"] for a in out["accounts"]] == ["2222"]
+    assert [r["account"] for r in db.list_broker_holdings(conn)] == ["0240-2222"]
+    assert service.broker_other_assets(conn) == []
+
+
+def test_removing_last_account_disconnects(conn, monkeypatch):
+    """하나뿐인 계좌를 빼면 동기화할 대상이 없다 — 연동 상태로 남겨두면 거짓말이다."""
+    db.set_meta(conn, service.BROKER_CID, "cid")
+    _save(conn, "0264", "1111")
+    out = service.broker_remove_account(conn, "1111")
+    assert out["accounts"] == [] and out["connected"] is False
+    with pytest.raises(codef.CodefError):
+        service.broker_remove_account(conn, "9999")
+
+
+def test_account_status_counts_its_own_holdings(conn):
+    """계좌별 보유 수가 없으면 어느 계좌가 실제로 무엇을 물어오는지 알 수 없다."""
+    db.set_meta(conn, service.BROKER_CID, "cid")
+    _save(conn, "0264", "1111", name="연금저축")
+    db.replace_broker_holdings(conn, [
+        {"symbol": "005930", "name": "삼성전자", "quantity": 10, "avg_price": 70000,
+         "account": "0264-1111"}], "2026-08-18T00:00:00")
+    a = service.broker_status(conn)["accounts"][0]
+    assert a["holdings_count"] == 1 and a["name"] == "연금저축"
+
+
+# ── 알림(텔레그램) 설정 ────────────────────────────────────────────────────
+
+def test_notify_setting_overrides_env_and_can_be_turned_off(conn, monkeypatch):
+    """화면에서 껐는데 .env 값으로 알림이 계속 오면 설정을 믿을 수 없게 된다."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "envtok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "env42")
+    assert service.notify_status(conn) == {"enabled": True, "token_set": True,
+                                           "chat_id": "env42", "source": "env"}
+    service.set_notify(conn, "uitok", "ui42")
+    assert service.notify_creds(conn) == ("uitok", "ui42")
+    st = service.set_notify(conn, "", "")
+    assert st["enabled"] is False and service.notify_creds(conn) == ("", "")
+
+
+def test_notify_test_reports_telegram_reason(conn, monkeypatch):
+    """실패 사유를 삼키면 '왜 안 오는지'를 화면에서 영영 못 본다."""
+    service.set_notify(conn, "tok", "42")
+
+    class Fail:
+        ok = False
+        headers = {"content-type": "application/json"}
+
+        def json(self):
+            return {"description": "chat not found"}
+
+    monkeypatch.setattr(service.requests, "post", lambda *a, **k: Fail())
+    with pytest.raises(RuntimeError, match="chat not found"):
+        service.notify_test(conn)
+
+    service.set_notify(conn, "", "")
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    with pytest.raises(ValueError):
+        service.notify_test(conn)
+
+
+def test_account_value_counts_cash_and_other_assets(conn):
+    """0종목이어도 발행어음·예수금이 수천만 원인 계좌가 있다 — 종목 수만 세우면
+    그 계좌가 '빈 계좌'로 읽히고, 어느 계좌를 뺄지 판단이 통째로 틀어진다."""
+    db.set_meta(conn, service.BROKER_CID, "cid")
+    _save(conn, "0264", "1111")
+    db.set_meta(conn, service.BROKER_ACCOUNT_CASH,
+                '{"0264-1111": {"cash_krw": 1000000, "cash_usd": 0}}')
+    db.set_meta(conn, service.BROKER_OTHER_ASSETS,
+                '[{"name":"발행어음","value_krw":2000000,"account":"0264-1111"}]')
+    db.replace_broker_holdings(conn, [
+        {"symbol": "005930", "name": "삼성전자", "quantity": 10, "avg_price": 70000,
+         "account": "0264-1111"}], "2026-08-18T00:00:00")
+
+    a = service.broker_status(conn)["accounts"][0]
+    # 시세가 아직 없는 종목은 평가액에서 빠지므로 부분값임을 알려야 한다
+    assert a["value_partial"] is True
+    assert a["value_krw"] == 3000000 and a["cash_krw"] == 1000000
+
+    db.save_prices(conn, "005930", pd.DataFrame(
+        {"open": [70000], "high": [70000], "low": [70000], "close": [75000],
+         "volume": [1]}, index=pd.to_datetime(["2026-08-18"])))
+    a = service.broker_status(conn)["accounts"][0]
+    assert a["value_partial"] is False and a["value_krw"] == 3750000
+
+
+def test_sync_failure_surfaces_until_next_success(conn, monkeypatch):
+    """자동 갱신은 화면 밖에서 돈다 — 실패를 남기지 않으면 낡은 잔고를 최신으로 믿는다."""
+    db.set_meta(conn, service.BROKER_CID, "cid")
+    _save(conn, "0264", "1111")
+    monkeypatch.setattr(service, "sync_broker",
+                        lambda c: (_ for _ in ()).throw(RuntimeError("인증서 만료")))
+    monkeypatch.setattr(service.sentiment, "fetch_sentiment",
+                        lambda: {"usdkrw": 1400.0, "failed": []})
+    monkeypatch.setattr(service.fetchers, "fetch_ohlcv",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("skip")))
+
+    out = service.refresh_all(conn)
+    assert out["broker_failed"] == "인증서 만료"
+    assert service.get_dashboard(conn)["broker_failed"] == "인증서 만료"
+    assert service.broker_status(conn)["last_error"] == "인증서 만료"
+
+    db.set_meta(conn, service.BROKER_LAST_ERROR, "")  # 다음 동기화 성공 시 지워진다
+    assert service.get_dashboard(conn)["broker_failed"] is None
+
+
+# ── CODEF 호출 한도 ────────────────────────────────────────────────────────
+
+def test_auto_sync_budget_scales_with_account_count(conn):
+    """계좌가 늘면 한 번의 동기화가 더 많은 호출을 쓴다 — 횟수를 줄여야 한도 안이다."""
+    db.set_meta(conn, service.BROKER_CID, "cid")
+    for i in range(5):
+        _save(conn, "0264", f"111{i}")
+    plan = service.auto_sync_plan(conn)
+    assert plan["calls_per_sync"] == 10 and plan["times_per_day"] == 6
+    # 하루 총 호출이 예비분을 남긴 자동 예산 안이어야 한다
+    assert plan["times_per_day"] * plan["calls_per_sync"] <= service.CODEF_AUTO_BUDGET
+    assert service.CODEF_AUTO_BUDGET < service.CODEF_DAILY_LIMIT
+
+
+def test_auto_sync_waits_for_interval_even_after_failure(conn, monkeypatch):
+    """실패해도 간격을 지켜야 한다 — 만료된 인증서가 매시간 재시도하면 한도만 태운다."""
+    db.set_meta(conn, service.BROKER_CID, "cid")
+    _save(conn, "0264", "1111")
+    monkeypatch.setattr(service.sentiment, "fetch_sentiment",
+                        lambda: {"usdkrw": 1400.0, "failed": []})
+    monkeypatch.setattr(service.fetchers, "fetch_ohlcv",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("skip")))
+    calls = []
+    monkeypatch.setattr(service, "sync_broker",
+                        lambda c: calls.append(1) or (_ for _ in ()).throw(RuntimeError("인증서 만료")))
+
+    assert service.should_auto_sync(conn) is True
+    service.refresh_all(conn)
+    service.refresh_all(conn)  # 바로 다시 갱신해도 잔고는 다시 부르지 않는다
+    assert len(calls) == 1 and service.should_auto_sync(conn) is False
+
+    # 간격이 지나면 다시 시도한다
+    past = datetime.now() - timedelta(hours=service.auto_sync_plan(conn)["interval_hours"] + 1)
+    db.set_meta(conn, service.BROKER_LAST_ATTEMPT, past.isoformat(timespec="seconds"))
+    assert service.should_auto_sync(conn) is True
+
+
+def test_restart_does_not_resync_when_recently_synced(conn):
+    """재시작마다 한 번씩 더 부르면, 개발 중 재시작만으로 하루 한도가 사라진다."""
+    db.set_meta(conn, service.BROKER_CID, "cid")
+    _save(conn, "0264", "1111")
+    db.set_meta(conn, service.BROKER_SYNCED_AT,
+                datetime.now().isoformat(timespec="seconds"))
+    assert service.should_auto_sync(conn) is False

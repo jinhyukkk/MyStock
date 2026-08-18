@@ -1,63 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { put } from '../../api'
 import AllocationDonut from '../../components/AllocationDonut'
-import BrokerPanel from './BrokerPanel'
 import { cur, fmt } from '../../format'
 import { usePortfolio } from './context'
 
 export default function Holdings() {
-  const { pf, posRule, setPosRule, reload } = usePortfolio()
-  const [msg, setMsg] = useState<string | null>(null)
-  const [cashInput, setCashInput] = useState<string>('')
-  const [cashUsdInput, setCashUsdInput] = useState<string>('')
+  const { pf } = usePortfolio()
   // 종목이 늘면 표 전체를 눈으로 훑게 된다 — 손실·과다비중만 골라볼 수 있게
   const [holdFilter, setHoldFilter] = useState<'all' | 'loss' | 'heavy'>('all')
   // 17종목부터는 "비중 큰 순·손실 큰 순"으로 못 보면 필터만으로는 반쪽이다
   type SortKey = 'value_krw' | 'weight_pct' | 'pnl_krw' | 'pnl_pct'
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean } | null>(null)
-
-  // 현재 저장된 값을 프리필 — 한쪽만 고치려다 다른 쪽을 날리는 일이 없게
-  useEffect(() => {
-    setCashInput(String(pf.totals.cash_krw))
-    setCashUsdInput(String(pf.totals.cash_usd ?? 0))
-  }, [pf.totals.cash_krw, pf.totals.cash_usd])
-
-  // 빈 입력은 "변경 없음". 빈 값을 0으로 보내면 예수금이 소리 없이 사라지고,
-  // 총자산을 분모로 쓰는 1% 리스크 포지션 사이징까지 틀어진다.
-  const parseCash = (raw: string, label: string): number | null | 'error' => {
-    if (raw.trim() === '') return null
-    const n = Number(raw)
-    if (!Number.isFinite(n) || n < 0) { setMsg(`${label}은 0 이상이어야 합니다`); return 'error' }
-    return n
-  }
-
-  const saveCash = async () => {
-    const krw = parseCash(cashInput, '예수금')
-    if (krw === 'error') return
-    const usd = parseCash(cashUsdInput, '달러 예수금')
-    if (usd === 'error') return
-    if (krw === null && usd === null) { setMsg('변경할 예수금을 입력하세요'); return }
-
-    const prevKrw = pf?.totals.cash_krw ?? 0
-    if (krw !== null && prevKrw > 0 && krw < prevKrw / 2 &&
-        !confirm(`원화 예수금을 ₩${fmt(prevKrw)} → ₩${fmt(krw)} 로 줄입니다. 계속할까요?`)) return
-
-    const body: { amount?: number; amount_usd?: number } = {}
-    if (krw !== null) body.amount = krw
-    if (usd !== null) body.amount_usd = usd
-    try { await put('/api/cash', body); setMsg(null); reload() }
-    catch (e) { setMsg(String(e)) }
-  }
-
-  const savePositionRule = async () => {
-    const min = Number(posRule.min), max = Number(posRule.max)
-    if (!Number.isInteger(min) || !Number.isInteger(max) || min < 1 || min > max) {
-      setMsg('목표 종목 수는 1 이상이어야 하고 최소 ≤ 최대여야 합니다'); return
-    }
-    try { await put('/api/position-rule', { min, max }); setMsg(null); reload() }
-    catch (e) { setMsg(String(e)) }
-  }
 
   const t = pf.totals
   // 배당이 한 건도 없는 계좌에 열을 하나 더 세우면, 평가손익과 똑같은 숫자가
@@ -114,43 +67,12 @@ export default function Holdings() {
               두 번 쓰지 않는다. 여기엔 통화 분해(₩+$)처럼 스트립에 없는 것만 남긴다. */}
           {(t.cash_usd ?? 0) > 0 && <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
             현금 구성 ₩{fmt(t.cash_krw)} + ${fmt(t.cash_usd)}</div>}
-          {/* 예수금이 0이면 TickerDetail이 여기로 보낸 사용자가 입력칸을 곧장 봐야 한다 —
-              접혀 있으면 온보딩이 끊긴다. 예수금이 이미 있는 계좌만 기본으로 접는다. */}
-          <details className="pf-settings"
-                   open={pf.totals.cash_krw === 0 && (pf.totals.cash_usd ?? 0) === 0}>
-            <summary>계좌 설정 — 예수금 · 목표 종목 수 · 증권사 연동</summary>
-            <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center',
-                          flexWrap: 'wrap' }}>
-              <input type="number" placeholder="예수금 (KRW)" value={cashInput}
-                     onChange={e => setCashInput(e.target.value)}
-                     style={{ flex: '1 1 140px', minWidth: 0 }} />
-              <input type="number" placeholder="달러 예수금 (USD)" value={cashUsdInput}
-                     onChange={e => setCashUsdInput(e.target.value)}
-                     style={{ flex: '1 1 140px', minWidth: 0 }} />
-              <button onClick={saveCash}>저장</button>
-              <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>
-                비우면 변경 없음{pf.broker.accounts.length > 0 &&
-                  ' — 증권사 동기화 시 실제 잔고로 덮어씁니다'}</span>
-            </div>
-            {/* 목표 종목 수 — 비중 상한도 총 리스크도 지키면서 종목 수만 두 배가 된
-                계좌는 어떤 한도에도 걸리지 않는다. 추적 가능한 개수가 규율의 전제다. */}
-            <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center',
-                          flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>목표 종목 수</span>
-              <input type="number" min={1} value={posRule.min} aria-label="목표 종목 수 최소"
-                     onChange={e => setPosRule(r => ({ ...r, min: e.target.value }))}
-                     style={{ width: 64 }} />
-              <span style={{ color: 'var(--text-dim)' }}>~</span>
-              <input type="number" min={1} value={posRule.max} aria-label="목표 종목 수 최대"
-                     onChange={e => setPosRule(r => ({ ...r, max: e.target.value }))}
-                     style={{ width: 64 }} />
-              <button className="ghost" onClick={savePositionRule}>저장</button>
-              <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>
-                현재 {pf.holdings.length}종목 — 범위를 벗어나면 대시보드가 경고합니다</span>
-            </div>
-            {msg && <div style={{ color: 'var(--sell)', fontSize: 12, marginTop: 6 }}>{msg}</div>}
-            <BrokerPanel status={pf.broker} reload={reload} />
-          </details>
+          {/* 예수금·목표 종목 수·증권사 연동은 설정 탭으로 옮겼다. 다만 예수금이
+              0이면 1% 리스크 수량이 계산되지 않으므로 그 사실만 여기서 알린다. */}
+          {t.cash_krw === 0 && (t.cash_usd ?? 0) === 0 &&
+            <div className="warn-box" style={{ marginTop: 8 }}>
+              예수금이 0입니다 — 총자산과 1% 리스크 수량이 계산되지 않습니다.{' '}
+              <Link to="/portfolio/settings"><strong>설정</strong></Link> 탭에서 입력하세요.</div>}
         </div>
         <div className="card">
           {pf.allocation.length > 0 ? (
@@ -168,8 +90,8 @@ export default function Holdings() {
         {pf.holdings.length === 0 && <div className="empty">
           보유 종목이 없습니다.<br />
           {pf.broker.synced_at
-            ? <>증권사 잔고에도 보유 종목이 없습니다. 계좌를 잘못 골랐다면 위{' '}
-                <strong>계좌 설정</strong>에서 다시 선택하세요.</>
+            ? <>증권사 잔고에도 보유 종목이 없습니다. 계좌를 잘못 골랐다면{' '}
+                <Link to="/portfolio/settings"><strong>설정</strong></Link> 탭에서 다시 선택하세요.</>
             : <><Link to="/portfolio/journal"><strong>매매 기록</strong></Link> 탭에 체결 내역을
                 기록하면 평단·수익률·실현손익이 계산됩니다.</>}
         </div>}

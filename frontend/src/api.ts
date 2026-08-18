@@ -38,7 +38,9 @@ export async function patch<T = unknown>(path: string, body?: unknown): Promise<
   if (!res.ok) await fail(res)
   return res.json()
 }
-export async function del(path: string): Promise<void> {
+export async function del<T = void>(path: string): Promise<T> {
   const res = await fetch(path, { method: 'DELETE' })
   if (!res.ok) await fail(res)
+  // 204나 빈 본문이면 파싱할 게 없다 — 응답을 쓰는 쪽만 타입을 지정한다
+  return res.status === 204 ? (undefined as T) : res.json()
 }

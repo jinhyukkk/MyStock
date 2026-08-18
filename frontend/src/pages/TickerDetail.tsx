@@ -240,7 +240,7 @@ export default function TickerDetail() {
       <div>
         <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>제안 수량 (1% 리스크)</div>
         <div style={{ fontSize: 14, color: 'var(--text-dim)', maxWidth: 280 }}>
-          예수금을 입력하면 계산됩니다 — <Link to="/portfolio">포트폴리오에서 입력</Link></div>
+          예수금을 입력하면 계산됩니다 — <Link to="/portfolio/settings">설정 탭에서 입력</Link></div>
       </div>
     ) : (
       <div>

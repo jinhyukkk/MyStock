@@ -29,12 +29,19 @@ def refresh_all(conn, symbol: str | None = None) -> dict:
     if symbol is None:
         senti = sentiment.fetch_sentiment()
         db.set_meta(conn, "sentiment", json.dumps(senti))
-        # 증권사 잔고를 먼저 받아야 새로 편입된 종목까지 이번 갱신에 시세가 붙는다
-        if broker_connected(conn):
+        # 증권사 잔고를 먼저 받아야 새로 편입된 종목까지 이번 갱신에 시세가 붙는다.
+        # 다만 시세와 달리 잔고는 CODEF 일 100회 한도를 쓴다 — 시간마다 부르면
+        # 오전에 한도를 태우고 나머지 시간의 갱신이 전부 실패한다.
+        if broker_connected(conn) and should_auto_sync(conn):
+            db.set_meta(conn, BROKER_LAST_ATTEMPT,
+                        datetime.now().isoformat(timespec="seconds"))
             try:
                 sync_broker(conn)
             except Exception as e:
                 broker_failed = str(e)  # 연동 실패로 전체 갱신까지 멈추지는 않는다
+                # 자동 갱신은 화면 밖에서 돌아 실패해도 아무도 모른다 — 낡은 잔고를
+                # 최신으로 믿고 포지션을 정하지 않게 대시보드까지 끌고 간다
+                db.set_meta(conn, BROKER_LAST_ERROR, broker_failed)
         targets = _active_tickers(conn)
     else:
         senti = get_sentiment_view(conn)  # 심리지표는 저장분 재사용
@@ -279,10 +286,58 @@ def check_rules(conn, bars: dict, avg_prices: dict) -> list:
     return alerts
 
 
+NOTIFY_TOKEN = "telegram_bot_token"
+NOTIFY_CHAT = "telegram_chat_id"
+
+
+def notify_creds(conn) -> tuple[str, str]:
+    """화면 설정이 우선, 미설정(None)이면 .env. 화면에서 비운 값("")은 '해제'라
+    .env 값이 되살아나지 않는다 — 껐는데 계속 오는 알림은 신뢰를 잃는다."""
+    token = db.get_meta(conn, NOTIFY_TOKEN)
+    chat_id = db.get_meta(conn, NOTIFY_CHAT)
+    return (os.getenv("TELEGRAM_BOT_TOKEN", "") if token is None else token,
+            os.getenv("TELEGRAM_CHAT_ID", "") if chat_id is None else chat_id)
+
+
+def notify_status(conn) -> dict:
+    """토큰은 돌려주지 않는다 — 설정 화면에 봇 토큰 평문을 다시 그리지 않는다."""
+    token, chat_id = notify_creds(conn)
+    from_env = db.get_meta(conn, NOTIFY_TOKEN) is None and bool(os.getenv("TELEGRAM_BOT_TOKEN"))
+    return {"enabled": bool(token and chat_id), "token_set": bool(token),
+            "chat_id": chat_id, "source": "env" if from_env else "설정"}
+
+
+def set_notify(conn, token: str | None, chat_id: str | None) -> dict:
+    """None = 변경 없음, "" = 해제. 토큰을 매번 다시 입력하게 하면 설정을 안 건드리게 된다."""
+    if token is not None:
+        db.set_meta(conn, NOTIFY_TOKEN, token.strip())
+    if chat_id is not None:
+        db.set_meta(conn, NOTIFY_CHAT, chat_id.strip())
+    return notify_status(conn)
+
+
+def send_telegram(token: str, chat_id: str, text: str) -> None:
+    r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                      json={"chat_id": chat_id, "text": text}, timeout=10)
+    # 텔레그램은 실패 사유를 본문에 준다 — 상태코드만 올리면 화면에서 원인을 못 본다
+    if not r.ok:
+        raise RuntimeError(r.json().get("description") if r.headers.get(
+            "content-type", "").startswith("application/json") else r.text)
+
+
+def notify_test(conn) -> dict:
+    """설정이 실제로 도달하는지 지금 확인한다 — 룰이 걸릴 때까지 기다려서
+    알아채면, 그동안 울리지 않은 알림이 몇 건인지 알 방법이 없다."""
+    token, chat_id = notify_creds(conn)
+    if not token or not chat_id:
+        raise ValueError("봇 토큰과 채팅 ID를 모두 입력하세요")
+    send_telegram(token, chat_id, "[MyStock] 알림 테스트 — 이 메시지가 보이면 설정이 정상입니다.")
+    return {"sent": True}
+
+
 def _notify_telegram(conn, alerts: list) -> None:
     """룰 도달 알림을 텔레그램으로 발송. 같은 룰은 하루 한 번만 (중복 방지)."""
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    token, chat_id = notify_creds(conn)
     if not token or not chat_id or not alerts:
         return
     today = datetime.now().strftime("%Y-%m-%d")
@@ -294,10 +349,7 @@ def _notify_telegram(conn, alerts: list) -> None:
         if a["rule_type"] == "STOP":
             text += f"\n※ {STOP_DISCLAIMER}"
         try:
-            r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                              json={"chat_id": chat_id, "text": text},
-                              timeout=10)
-            r.raise_for_status()
+            send_telegram(token, chat_id, text)
             db.set_meta(conn, key, today)
         except Exception:
             pass  # 발송 실패는 다음 갱신 때 재시도
@@ -440,6 +492,9 @@ def get_dashboard(conn) -> dict:
         "rule_alerts": check_rules(conn, bars, avg_prices),
         "last_refresh": db.get_meta(conn, "last_refresh"),
         "failed_sources": senti.get("failed", []),
+        # 증권사 잔고가 낡았다는 사실은 보유·비중·리스크 전부에 걸린다
+        "broker_failed": db.get_meta(conn, BROKER_LAST_ERROR) or None,
+        "broker_synced_at": db.get_meta(conn, BROKER_SYNCED_AT) or None,
     }
 
 
@@ -838,11 +893,56 @@ BROKER_ACCOUNTS = "codef_accounts"
 BROKER_SYNCED_AT = "last_broker_sync"
 BROKER_FLOW_SYNCED_AT = "last_broker_flow_sync"
 BROKER_OTHER_ASSETS = "broker_other_assets"
+BROKER_ACCOUNT_CASH = "broker_account_cash"
+BROKER_LAST_ATTEMPT = "broker_last_sync_attempt"
+BROKER_LAST_ERROR = "broker_last_error"
 
 
 def broker_other_assets(conn) -> list[dict]:
     raw = db.get_meta(conn, BROKER_OTHER_ASSETS)
     return json.loads(raw) if raw else []
+
+
+# CODEF 무료 한도는 하루 100회다. 자동 갱신이 시간마다 계좌 수×2회를 쓰면
+# 5계좌 기준 하루 240회 — 오전에 한도를 태우고 나머지 시간은 전부 실패한다.
+CODEF_DAILY_LIMIT = 100
+# 자동 갱신에 내주는 몫. 나머지는 수동 동기화·입출금 가져오기·계좌 연결처럼
+# 사용자가 직접 누르는 호출을 위해 남긴다 — 자동이 다 먹으면 버튼이 안 듣는다.
+CODEF_AUTO_BUDGET = 60
+CODEF_CALLS_PER_SYNC = 2  # 계좌당 주식잔고조회 + 종합자산조회
+
+
+def auto_sync_plan(conn) -> dict:
+    """자동 잔고 동기화를 하루 몇 번, 몇 시간 간격으로 돌릴지.
+
+    ponytail: 실제 호출 수를 세지 않고 계좌 수에서 역산한다 — 수동 호출까지
+    정확히 세려면 codef 계층에 카운터를 심어야 하는데, 예비분(40회)을 남기는
+    쪽이 훨씬 짧고 재시작에도 안전하다. 한도를 실제로 넘기면 CF-00012가
+    broker_failed로 화면에 올라오므로 조용히 틀리지는 않는다.
+    """
+    per_sync = max(1, len(broker_accounts(conn))) * CODEF_CALLS_PER_SYNC
+    times = max(1, CODEF_AUTO_BUDGET // per_sync)
+    return {"times_per_day": times, "interval_hours": round(24 / times, 1),
+            "calls_per_sync": per_sync, "daily_limit": CODEF_DAILY_LIMIT}
+
+
+def next_auto_sync_at(conn) -> str | None:
+    """다음 자동 동기화 예정 시각. 성공·실패와 무관하게 '시도'를 기준으로 센다 —
+    실패를 기준으로 삼으면 인증서가 만료된 계좌가 매시간 재시도하며 한도를 태운다."""
+    # 시도 기록이 없어도 마지막 성공 시각이 있으면 그걸 기준으로 센다 —
+    # 안 그러면 서버를 재시작할 때마다 한 번씩 더 부르게 되고, 개발 중 재시작이
+    # 잦은 날엔 그것만으로 하루 한도가 사라진다.
+    last = db.get_meta(conn, BROKER_LAST_ATTEMPT) or db.get_meta(conn, BROKER_SYNCED_AT)
+    if not last:
+        return None
+    return (datetime.fromisoformat(last) +
+            timedelta(hours=auto_sync_plan(conn)["interval_hours"])).isoformat(
+                timespec="seconds")
+
+
+def should_auto_sync(conn) -> bool:
+    nxt = next_auto_sync_at(conn)
+    return nxt is None or datetime.now() >= datetime.fromisoformat(nxt)
 
 
 def broker_accounts(conn) -> list[dict]:
@@ -854,16 +954,59 @@ def broker_connected(conn) -> bool:
     return bool(db.get_meta(conn, BROKER_CID) and broker_accounts(conn))
 
 
+def _account_key(a: dict) -> str:
+    return a.get("display") or a["account"]
+
+
+def _account_value(conn, a: dict, rows: list, assets: list, cash: dict,
+                   fx: float, tickers: dict) -> dict:
+    """계좌 하나가 실제로 얼마짜리인지 — 보유 평가액 + 기타자산 + 예수금.
+
+    종목 수만 세우면 0종목이지만 발행어음이 수천만 원인 계좌를 '빈 계좌'로 읽는다.
+    시세가 없는 종목이 섞이면 그만큼 작게 나오므로 partial로 알린다.
+    """
+    key = _account_key(a)
+    mine = [r for r in rows if r.get("account") == key]
+    value, partial = 0.0, False
+    for r in mine:
+        close = _latest_close_and_change(conn, r["symbol"])[0]
+        if close is None:
+            partial = True
+            continue
+        rate = fx if tickers.get(r["symbol"], {}).get("currency") == "USD" else 1.0
+        value += close * r["quantity"] * rate
+    other = sum(x["value_krw"] for x in assets if x.get("account") == key)
+    c = cash.get(key) or {}
+    cash_krw = float(c.get("cash_krw") or 0.0) + float(c.get("cash_usd") or 0.0) * fx
+    return {"holdings_count": len(mine), "other_assets_krw": other,
+            "cash_krw": round(cash_krw, 2),
+            "value_krw": round(value + other + cash_krw, 2),
+            "value_partial": partial}
+
+
 def broker_status(conn) -> dict:
     rows = [dict(r) for r in db.list_broker_holdings(conn)]
+    assets = broker_other_assets(conn)
+    cash = json.loads(db.get_meta(conn, BROKER_ACCOUNT_CASH) or "{}")
+    fx = get_sentiment_view(conn).get("usdkrw") or portfolio.DEFAULT_USDKRW
+    tickers = _tickers_map(conn)
     return {
         "configured": codef.is_configured(),  # .env에 CODEF 키가 있는지
         "env": os.environ.get("CODEF_ENV", "demo"),
         "connected": bool(db.get_meta(conn, BROKER_CID)),
         # 계좌비밀번호는 CODEF 공개키로 암호화된 값만 저장한다 — 평문은 남기지 않는다
-        "accounts": [{"organization": a["organization"], "account": a["account"],
-                      "display": a.get("display") or a["account"],
-                      "name": a.get("name")} for a in broker_accounts(conn)],
+        # 계좌별 보유 수·기타자산을 함께 준다 — 여러 계좌를 걸어두면 어느 계좌가
+        # 실제로 무엇을 물어오는지 모른 채 목록만 늘어난다.
+        "accounts": [{**_account_value(conn, a, rows, assets, cash, fx, tickers),
+                      "organization": a["organization"], "account": a["account"],
+                      "display": _account_key(a),
+                      "name": a.get("name"),
+                      "has_password": bool(a.get("password_enc"))}
+                     for a in broker_accounts(conn)],
+        # 자동 갱신 중의 연동 실패는 어디에도 안 남았다 — 낡은 잔고를 최신으로 믿게 된다
+        "last_error": db.get_meta(conn, BROKER_LAST_ERROR) or None,
+        # 잔고가 왜 시간마다 안 바뀌는지 화면에 없으면 '연동이 고장났다'로 읽힌다
+        "auto_sync": {**auto_sync_plan(conn), "next_at": next_auto_sync_at(conn)},
         "synced_at": db.get_meta(conn, BROKER_SYNCED_AT),
         "flow_synced_at": db.get_meta(conn, BROKER_FLOW_SYNCED_AT),
         "holdings_count": len(rows),
@@ -893,22 +1036,70 @@ def broker_select_accounts(conn, accounts: list[dict]) -> dict:
     cid = db.get_meta(conn, BROKER_CID)
     if not cid:
         raise codef.CodefError("CF-LOCAL", "증권사 계정이 연결되지 않았습니다")
-    saved = []
+    # 기존 목록에 병합한다 — 덮어쓰면 다른 증권사 계좌를 추가하는 순간 앞의 것이 사라진다
+    saved = {(a["organization"], a["account"]): a for a in broker_accounts(conn)}
     for a in accounts:
         entry = {"organization": a["organization"], "account": a["account"],
                  "display": a.get("display") or a["account"], "name": a.get("name")}
         pw = a.get("account_password")
         if pw:
             entry["password_enc"] = codef.encrypt(pw)
-        saved.append(entry)
-    db.set_meta(conn, BROKER_ACCOUNTS, json.dumps(saved, ensure_ascii=False))
+        else:
+            # 비밀번호를 다시 입력하지 않은 재선택에서 저장분을 날리면 조회가 막힌다
+            prev = saved.get((a["organization"], a["account"]), {})
+            if prev.get("password_enc"):
+                entry["password_enc"] = prev["password_enc"]
+        saved[(a["organization"], a["account"])] = entry
+    db.set_meta(conn, BROKER_ACCOUNTS,
+                json.dumps(list(saved.values()), ensure_ascii=False))
     return broker_status(conn)
+
+
+def _drop_account_snapshot(conn, key: str) -> None:
+    """스냅샷에서 그 계좌 몫만 덜어낸다 — 남겨두면 뺀 계좌의 보유가 유령으로 뜬다.
+
+    ponytail: 스냅샷은 종목당 한 행이라(broker.merge) 두 계좌가 같은 종목을 들고
+    있으면 행 하나에 합산돼 있다 — 계좌 라벨로 지우면 그 종목은 근사치가 된다.
+    재동기화가 실패했을 때만 타는 경로라 resynced=false로 알리고 끝낸다.
+    계좌별 정확도가 필요해지면 스냅샷 키를 (symbol, account)로 올린다.
+    """
+    rows = [dict(r) for r in db.list_broker_holdings(conn) if r["account"] != key]
+    db.replace_broker_holdings(conn, rows,
+                               db.get_meta(conn, BROKER_SYNCED_AT) or "")
+    db.set_meta(conn, BROKER_OTHER_ASSETS, json.dumps(
+        [a for a in broker_other_assets(conn) if a.get("account") != key],
+        ensure_ascii=False))
+    cash = json.loads(db.get_meta(conn, BROKER_ACCOUNT_CASH) or "{}")
+    cash.pop(key, None)
+    db.set_meta(conn, BROKER_ACCOUNT_CASH, json.dumps(cash, ensure_ascii=False))
+
+
+def broker_remove_account(conn, account: str) -> dict:
+    """동기화 대상에서 계좌 하나를 뺀다. 마지막 하나면 연동 해제와 같다."""
+    current = broker_accounts(conn)
+    rest = [a for a in current if a["account"] != account]
+    if len(rest) == len(current):
+        raise codef.CodefError("CF-LOCAL", "목록에 없는 계좌입니다")
+    if not rest:
+        return {**broker_disconnect(conn), "resynced": False}
+    key = next(_account_key(a) for a in current if a["account"] == account)
+    db.set_meta(conn, BROKER_ACCOUNTS, json.dumps(rest, ensure_ascii=False))
+    # 예수금은 계좌 합산이라 뺀 뒤 다시 받아야 맞는다. 조회에 실패해도 그 계좌
+    # 몫의 보유·기타자산만은 즉시 덜어낸다 — 예수금이 실제보다 커 보이는 건
+    # resynced=false로 알린다.
+    try:
+        sync_broker(conn)
+        return {**broker_status(conn), "resynced": True}
+    except Exception:
+        _drop_account_snapshot(conn, key)
+        return {**broker_status(conn), "resynced": False}
 
 
 def broker_disconnect(conn) -> dict:
     """연동 해제 — 스냅샷도 함께 비워 보유가 다시 원장 기준으로 돌아가게 한다."""
     db.clear_broker_holdings(conn)
-    for key in (BROKER_CID, BROKER_ACCOUNTS, BROKER_SYNCED_AT, BROKER_FLOW_SYNCED_AT):
+    for key in (BROKER_CID, BROKER_ACCOUNTS, BROKER_SYNCED_AT, BROKER_FLOW_SYNCED_AT,
+                BROKER_ACCOUNT_CASH, BROKER_LAST_ERROR, BROKER_LAST_ATTEMPT):
         db.set_meta(conn, key, "")
     return broker_status(conn)
 
@@ -968,6 +1159,14 @@ def sync_broker(conn) -> dict:
         assets_failed = str(e)
 
     synced_at = datetime.now().isoformat(timespec="seconds")
+    # 예수금은 계좌별로 오는데 합산만 저장하면 어느 계좌에 현금이 있는지 사라진다
+    db.set_meta(conn, BROKER_ACCOUNT_CASH, json.dumps(
+        {a.get("display") or a["account"]: {"cash_krw": p["cash_krw"],
+                                            "cash_usd": p["cash_usd"]}
+         for a, p in zip(accounts, parsed)}, ensure_ascii=False))
+    db.set_meta(conn, BROKER_LAST_ERROR, "")  # 성공했으니 지난 실패는 지운다
+    # 수동 동기화도 같은 한도를 쓴다 — 시계를 안 밀면 방금 부른 잔고를 자동이 또 부른다
+    db.set_meta(conn, BROKER_LAST_ATTEMPT, synced_at)
     db.replace_broker_holdings(conn, rows, synced_at)
     if assets_failed is None:
         db.set_meta(conn, BROKER_OTHER_ASSETS,

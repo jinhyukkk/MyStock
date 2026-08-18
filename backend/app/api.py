@@ -195,6 +195,31 @@ def set_position_rule(r: PositionRuleIn, request: Request):
     return {"min": lo, "max": hi}
 
 
+class NotifyIn(BaseModel):
+    # 미전송(None) = 변경 없음, "" = 해제. 토큰을 매번 다시 넣게 하면 채팅 ID만
+    # 고치려다 알림이 통째로 꺼진다.
+    bot_token: str | None = None
+    chat_id: str | None = None
+
+
+@router.get("/notify")
+def get_notify(request: Request):
+    return service.notify_status(_conn(request))
+
+
+@router.put("/notify")
+def set_notify(body: NotifyIn, request: Request):
+    return service.set_notify(_conn(request), body.bot_token, body.chat_id)
+
+
+@router.post("/notify/test")
+def test_notify(request: Request):
+    try:
+        return service.notify_test(_conn(request))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
 class CashFlowIn(BaseModel):
     flow_type: Literal["DIVIDEND", "DEPOSIT", "WITHDRAW", "INTEREST"]
     amount: float = Field(gt=0)  # 세전 금액
@@ -352,6 +377,11 @@ def broker_accounts(body: BrokerAccountsIn, request: Request):
     conn = _conn(request)
     return _codef_guard(lambda: service.broker_select_accounts(
         conn, [a.model_dump() for a in body.accounts]))
+
+
+@router.delete("/broker/accounts/{account}")
+def broker_remove_account(account: str, request: Request):
+    return _codef_guard(lambda: service.broker_remove_account(_conn(request), account))
 
 
 @router.post("/broker/sync")

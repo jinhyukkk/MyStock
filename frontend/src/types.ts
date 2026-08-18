@@ -51,6 +51,9 @@ export interface Dashboard {
   unstopped: { symbol: string; name: string; atr_stop_price: number }[];
   score_scale: { swing: ScoreCuts; longterm: ScoreCuts };
   signals: SignalRow[]; rule_alerts: RuleAlert[];
+  /** 증권사 연동 실패 — 잔고가 낡았다는 뜻이라 보유·비중·리스크 전부에 걸린다 */
+  broker_failed: string | null;
+  broker_synced_at: string | null;
   last_refresh: string | null; failed_sources: string[];
 }
 export interface Candle {
@@ -225,6 +228,20 @@ export interface Portfolio {
 }
 export interface BrokerAccount {
   organization: string; account: string; display: string; name: string | null;
+  /** 계좌비밀번호를 저장해 둔 계좌인지 — 재선택 때 다시 넣을 필요가 없다 */
+  has_password?: boolean;
+  /** 이 계좌가 실제로 물어오는 것 — 없으면 목록만 늘고 무엇이 오는지 모른다 */
+  holdings_count?: number;
+  other_assets_krw?: number;
+  cash_krw?: number;
+  /** 보유 평가액 + 기타자산 + 예수금. 0종목이어도 발행어음이 수천만 원인 계좌가 있다 */
+  value_krw?: number;
+  /** 시세가 없는 종목이 섞여 평가액이 실제보다 작은 상태 */
+  value_partial?: boolean;
+}
+/** 알림(텔레그램). 봇 토큰은 저장 여부만 돌려받는다 — 화면에 평문을 다시 그리지 않는다 */
+export interface NotifyStatus {
+  enabled: boolean; token_set: boolean; chat_id: string; source: 'env' | '설정';
 }
 export interface BrokerStatus {
   /** .env에 CODEF 키가 설정되어 있는지 — 없으면 연결 자체가 불가능하다 */
@@ -235,6 +252,14 @@ export interface BrokerStatus {
   synced_at: string | null;
   flow_synced_at: string | null;
   holdings_count: number;
+  /** 마지막 동기화 실패 사유 — 성공하면 지워진다 */
+  last_error: string | null;
+  /** CODEF 일 100회 한도 안에서 자동 동기화를 몇 번 돌릴지 — 잔고가 시간마다
+   *  안 바뀌는 이유를 화면에 두지 않으면 '연동 고장'으로 읽힌다 */
+  auto_sync: {
+    times_per_day: number; interval_hours: number;
+    calls_per_sync: number; daily_limit: number; next_at: string | null;
+  };
 }
 export interface BrokerFlowResult {
   start: string; end: string; synced_at: string;

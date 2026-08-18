@@ -28,6 +28,8 @@ type FilterKey = 'action' | 'all' | 'holding' | 'buy' | 'sell' | 'changed'
 // 손절선까지 이 거리 안에 들어오면 "임박"으로 본다. 하루 변동폭 안에 손절선이
 // 들어왔다는 뜻이라 다음 장에서 결정을 강요받을 수 있다.
 const STOP_NEAR_PCT = 2
+// 정리 후보 이름을 다 늘어놓으면 카드 한 장을 넘긴다 — 나머지는 개수로만
+const TRIM_SHOWN = 4
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'action', label: '액션 필요' },
@@ -109,7 +111,7 @@ export default function Dashboard() {
       <div className="card skeleton" style={{ minHeight: 240 }} />
     </div>
   )
-  const { sentiment: s, portfolio_summary: pf } = data
+  const { sentiment: s, portfolio_summary: pf, position_rule: pr } = data
   const pnlCls = pf.total_pnl_krw >= 0 ? 'pos' : 'neg'
   const stale = isStale(data.last_refresh, now)
   const matches = matchers(data)
@@ -147,7 +149,30 @@ export default function Dashboard() {
               못하는 금액이 남는다 — 발행어음·펀드는 둘 어디에도 안 잡힌다 */}
           <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 4 }}>
             평가액 {fmt(pf.total_value_krw)} · 현금 {fmt(pf.cash_krw + (pf.cash_usd_krw ?? 0))} ({pf.cash_pct}%)
-            {pf.other_assets_krw > 0 && ` · 기타자산 ${fmt(pf.other_assets_krw)}`} · 보유 {pf.holdings_count}종목</div>
+            {pf.other_assets_krw > 0 && ` · 기타자산 ${fmt(pf.other_assets_krw)}`}</div>
+          {/* 종목 수는 비중·총리스크 한도를 모두 통과해도 혼자 깨질 수 있는 규율이라
+              보유 개수를 목표 범위와 같은 줄에 세운다 — 숫자만 두면 많고 적음이 안 읽힌다. */}
+          <div style={{ fontSize: 12, marginTop: 4 }}>
+            <span className={pr.status === 'ok' ? '' : 'warn'}>
+              {pr.status !== 'ok' && '⚠ '}보유 {pr.count}종목 / 목표 {pr.min}~{pr.max}
+              {pr.status === 'over' && ` · ${pr.excess}종목 초과`}
+              {pr.status === 'under' && ` · ${pr.shortfall}종목 부족`}</span>
+            {/* 초과라고만 하면 무엇을 덜지 사용자가 다시 표를 훑는다 — 이유와 함께 이름을 준다.
+                다만 종목명 5개를 이유까지 붙여 늘어놓으면 카드를 넘겨 아무도 안 읽는다:
+                식별은 심볼(짧고 정확)로, 이유는 종류만 한 번 모아 쓴다. */}
+            {pr.status === 'over' && <span style={{ color: 'var(--text-dim)' }}>
+              {' · 정리 후보 '}
+              {pr.trim_candidates.slice(0, TRIM_SHOWN).map((c, i) => (
+                <span key={c.symbol}>{i > 0 && ', '}
+                  <Link to={`/ticker/${c.symbol}`} title={`${c.name} — ${c.reason}`}>
+                    {c.symbol}</Link></span>
+              ))}
+              {pr.trim_candidates.length > TRIM_SHOWN &&
+                ` 외 ${pr.trim_candidates.length - TRIM_SHOWN}`}
+              {` (${[...new Set(pr.trim_candidates.map(c => c.reason))].join(' · ')})`}</span>}
+            {pr.status === 'under' && <span style={{ color: 'var(--text-dim)' }}>
+              {' · '}<Link to="/watchlist">워치리스트</Link>에서 매수 후보를 보세요</span>}
+          </div>
         </div>
       </div>
 
@@ -170,6 +195,15 @@ export default function Dashboard() {
           새로고침 후 판단하세요.</div>}
         {data.failed_sources.length > 0 && <div className="warn-box" style={{ marginBottom: 10 }}>
           일부 소스 갱신 실패: {data.failed_sources.join(', ')} — 해당 종목 값이 낡았을 수 있습니다.</div>}
+        {/* 시세는 갱신되는데 잔고만 안 들어오면 화면은 최신처럼 보인다 — 그 상태로
+            매도한 종목이 표에 남고, 그 비중 위에서 다음 포지션 크기를 정하게 된다 */}
+        {data.broker_failed && <div className="warn-box" style={{ marginBottom: 10 }}>
+          ⚠ 증권사 연동 실패: {data.broker_failed}
+          <div style={{ fontSize: 12, marginTop: 4 }}>
+            보유·예수금은 {data.broker_synced_at
+              ? `${data.broker_synced_at.replace('T', ' ')} 잔고`
+              : '마지막으로 성공한 잔고'} 기준입니다 — 그 뒤의 매매는 반영되지 않았습니다.{' '}
+            <Link to="/portfolio/settings">설정</Link>에서 다시 동기화하세요.</div></div>}
 
         {data.signals.length > 0 && <div className="filter-chips">
           {FILTERS.map(f => {
