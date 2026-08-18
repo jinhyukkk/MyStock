@@ -9,6 +9,7 @@ dependencies = [
     "finance-datareader>=0.9.50",
     "yfinance>=0.2.40",
     "requests>=2.31",
+    "cryptography>=42.0",  # CODEF 계정 등록 시 비밀번호 RSA 암호화
 ]
 
 [project.optional-dependencies]

@@ -35,7 +35,10 @@ CREATE TABLE IF NOT EXISTS cash_flows (
   tax REAL NOT NULL DEFAULT 0,  -- 원천징수 (배당소득세 — 양도세와 별개다)
   flow_date TEXT NOT NULL,
   fx_rate REAL,  -- 입금 시점 환율. NULL이면 현재 환율 폴백 (추정 표시)
-  note TEXT
+  note TEXT,
+  -- 증권사에서 가져온 거래의 원천 식별자. 같은 기간을 다시 조회해도 같은 값이
+  -- 나오므로, 이게 없으면 재조회할 때마다 입출금이 통째로 두 번씩 쌓인다.
+  ext_key TEXT
 );
 CREATE TABLE IF NOT EXISTS custom_rules (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,4 +65,19 @@ CREATE TABLE IF NOT EXISTS signal_history (
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT
+);
+-- 증권사(CODEF)에서 받아온 실제 보유 스냅샷. 원장(trades)은 매매일지·실현손익의
+-- 근거로 그대로 두고, "지금 무엇을 들고 있나"는 증권사 값을 진실로 쓴다.
+-- 동기화된 계좌가 있으면 화면의 보유 수량·평단이 이 표에서 나온다.
+CREATE TABLE IF NOT EXISTS broker_holdings (
+  symbol TEXT PRIMARY KEY,
+  name TEXT,
+  quantity REAL NOT NULL,
+  avg_price REAL NOT NULL,  -- 증권사 평균매입가 (종목 통화 기준)
+  currency TEXT NOT NULL DEFAULT 'KRW',
+  account TEXT,  -- 어느 계좌에서 왔는지 — 여러 계좌를 합산할 때 출처가 필요하다
+  -- 증권사가 평균매입가를 안 주면 현재가로 채운다(손익 0). 그 사실을 잃으면
+  -- 화면이 '본전'이라고 말하는데 실제로는 평단을 모르는 상태가 된다.
+  basis_missing INTEGER NOT NULL DEFAULT 0,
+  synced_at TEXT NOT NULL
 );

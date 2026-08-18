@@ -21,3 +21,6 @@ mystock_import.sql
 .claude/*
 !.claude/agents/
 !.claude/launch.json
+
+# 계좌 거래내역 원본(개인 금융정보) — 저장소에 올리지 않는다
+docs/거래내역/

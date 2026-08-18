@@ -23,6 +23,13 @@ def get_conn(db_path: str | None = None) -> sqlite3.Connection:
                       ("exclude_from_stats", "INTEGER NOT NULL DEFAULT 0")):
         if col not in cols:
             conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {decl}")
+    if "ext_key" not in [r[1] for r in conn.execute("PRAGMA table_info(cash_flows)")]:
+        conn.execute("ALTER TABLE cash_flows ADD COLUMN ext_key TEXT")
+    # ALTER는 UNIQUE를 못 붙이므로 인덱스로 건다. schema.sql이 아니라 여기서 만드는 건
+    # 기존 DB에서는 위 ALTER가 끝난 뒤라야 컬럼이 존재하기 때문이다.
+    # (NULL은 중복이 허용되므로 손으로 적은 현금흐름은 영향받지 않는다)
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_flows_ext "
+                 "ON cash_flows(ext_key)")
     conn.commit()
     return conn
 
@@ -128,14 +135,20 @@ def delete_trade(conn, trade_id):
 
 
 def insert_cash_flow(conn, flow_type, amount, flow_date, symbol=None, currency="KRW",
-                     tax=0.0, fx_rate=None, note=None) -> int:
+                     tax=0.0, fx_rate=None, note=None, ext_key=None) -> int:
     cur = conn.execute(
         """INSERT INTO cash_flows (flow_type, symbol, currency, amount, tax,
-                                   flow_date, fx_rate, note)
-           VALUES (?,?,?,?,?,?,?,?)""",
-        (flow_type, symbol, currency, amount, tax, flow_date, fx_rate, note))
+                                   flow_date, fx_rate, note, ext_key)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        (flow_type, symbol, currency, amount, tax, flow_date, fx_rate, note, ext_key))
     conn.commit()
     return cur.lastrowid
+
+
+def cash_flow_ext_keys(conn) -> set:
+    """이미 가져온 증권사 거래의 키 — 재조회 시 중복 적재를 막는다."""
+    return {r[0] for r in
+            conn.execute("SELECT ext_key FROM cash_flows WHERE ext_key IS NOT NULL")}
 
 
 def list_cash_flows(conn, symbol=None, flow_type=None):
@@ -241,3 +254,29 @@ def set_meta(conn, key, value):
 def get_meta(conn, key):
     row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
     return row["value"] if row else None
+
+
+def replace_broker_holdings(conn, rows: list[dict], synced_at: str):
+    """증권사 스냅샷을 통째로 갈아끼운다.
+
+    부분 갱신(upsert)만 하면 증권사에서 이미 전량 매도된 종목이 표에 남아
+    화면에 유령 보유로 계속 뜬다 — 스냅샷은 전체가 한 시점의 사실이어야 한다.
+    """
+    conn.execute("DELETE FROM broker_holdings")
+    conn.executemany(
+        """INSERT INTO broker_holdings (symbol, name, quantity, avg_price, currency,
+                                        account, basis_missing, synced_at)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        [(r["symbol"], r.get("name"), r["quantity"], r["avg_price"],
+          r.get("currency", "KRW"), r.get("account"),
+          int(bool(r.get("basis_missing"))), synced_at) for r in rows])
+    conn.commit()
+
+
+def list_broker_holdings(conn):
+    return conn.execute("SELECT * FROM broker_holdings ORDER BY symbol").fetchall()
+
+
+def clear_broker_holdings(conn):
+    conn.execute("DELETE FROM broker_holdings")
+    conn.commit()

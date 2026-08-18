@@ -493,6 +493,10 @@ def build_portfolio(holdings: dict, prices: dict, tickers: dict, usdkrw,
                      # 원가에 평단 보정 로트가 섞였으면 평단 기반 숫자 전체가
                      # 실거래 산물이 아니다 — 그 사실을 숫자 옆에 남긴다
                      "basis_adjusted": bool(h.get("basis_adjusted", False)),
+                     # 증권사가 평균매입가를 안 줘서 현재가로 채운 행 — 손익 0은
+                     # '본전'이 아니라 '평단 모름'이다. 구분 못 하면 익절/손절 판단이 선다.
+                     "basis_missing": bool(h.get("basis_missing", False)),
+                     "source": h.get("source", "ledger"),
                      "quantity": h["quantity"], "avg_price": h["avg_price"],
                      "close": close, "value": value, "pnl": pnl, "pnl_pct": pnl_pct,
                      "exit_cost": exit_cost, "net_proceeds": net_proceeds,

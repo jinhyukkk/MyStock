@@ -1,14 +1,14 @@
 import json
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 
 import pandas as pd
 
-from app import (backtest, costs, db, fetchers, indicators, portfolio, scoring,
-                 sentiment)
+from app import (backtest, broker, codef, costs, db, fetchers, indicators,
+                 portfolio, scoring, sentiment)
 
 BACKTEST_DAYS = 1100  # 약 3년 — 한 국면짜리 400일 검증은 상승장 착시를 못 거른다
 
@@ -25,9 +25,16 @@ def _active_tickers(conn):
 
 def refresh_all(conn, symbol: str | None = None) -> dict:
     """symbol 지정 시 해당 종목만 갱신 — 종목 추가 직후 전체 갱신(수 초) 대신 사용."""
+    broker_failed = None
     if symbol is None:
         senti = sentiment.fetch_sentiment()
         db.set_meta(conn, "sentiment", json.dumps(senti))
+        # 증권사 잔고를 먼저 받아야 새로 편입된 종목까지 이번 갱신에 시세가 붙는다
+        if broker_connected(conn):
+            try:
+                sync_broker(conn)
+            except Exception as e:
+                broker_failed = str(e)  # 연동 실패로 전체 갱신까지 멈추지는 않는다
         targets = _active_tickers(conn)
     else:
         senti = get_sentiment_view(conn)  # 심리지표는 저장분 재사용
@@ -59,7 +66,7 @@ def refresh_all(conn, symbol: str | None = None) -> dict:
         avg_prices = {s: h["avg_price"] for s, h in holdings.items()}
         _notify_telegram(conn, check_rules(conn, bars, avg_prices))
     return {"refreshed": True, "failed_sources": senti.get("failed", []),
-            "failed_tickers": failed_tickers}
+            "failed_tickers": failed_tickers, "broker_failed": broker_failed}
 
 
 def _is_partial_bar(df) -> bool:
@@ -120,10 +127,15 @@ def _tickers_map(conn):
 
 
 def _holdings_map(conn):
-    """평단은 수수료 포함 비용 기준 — tickers를 넘겨야 시장별 요율 추정이 붙는다."""
+    """평단은 수수료 포함 비용 기준 — tickers를 넘겨야 시장별 요율 추정이 붙는다.
+
+    증권사(CODEF) 스냅샷이 있으면 그쪽이 현재 보유의 진실이다. 화면·비중·리스크·
+    포지션 사이징이 모두 이 함수 하나에서 나오므로 대체는 여기서만 한다.
+    """
     trades = [dict(r) for r in db.list_trades(conn)]
     fx = get_sentiment_view(conn).get("usdkrw")
-    return portfolio.compute_holdings(trades, _tickers_map(conn), fx)
+    holdings = portfolio.compute_holdings(trades, _tickers_map(conn), fx)
+    return _apply_broker_holdings(conn, holdings)
 
 
 def get_cash_krw(conn) -> float:
@@ -490,6 +502,9 @@ def get_portfolio_view(conn) -> dict:
         stops={s: v for s in holdings if (v := _stop_rule(conn, s)) is not None})
     # 이 숫자들이 언제 기준인지 화면이 알 수 있어야 한다
     pf["last_refresh"] = db.get_meta(conn, "last_refresh")
+    # 보유·예수금이 증권사 실데이터인지 손으로 적은 원장인지 — 근거가 다르면
+    # 같은 숫자라도 신뢰도가 다르다
+    pf["broker"] = broker_status(conn)
     return pf
 
 
@@ -802,3 +817,227 @@ def _entry_review(conn, symbol: str, sig) -> dict | None:
         # 이미 여러 번 탄 포지션이면 이번이 첫 물타기가 아니다
         "buy_count": len(buys),
     }
+
+
+# ── 증권사 연동 (CODEF) ────────────────────────────────────────────────────
+# 원장(trades)은 매매일지·실현손익·승률의 근거로 그대로 두고, "지금 무엇을 얼마에
+# 들고 있나"만 증권사 값으로 대체한다. 원장은 손으로 적는 것이라 누락·오타가 쌓이고,
+# 그 어긋난 수량이 비중·리스크·포지션 사이징의 입력이라 계좌 전체 판단이 틀어진다.
+
+BROKER_CID = "codef_connected_id"
+BROKER_ACCOUNTS = "codef_accounts"
+BROKER_SYNCED_AT = "last_broker_sync"
+BROKER_FLOW_SYNCED_AT = "last_broker_flow_sync"
+
+
+def broker_accounts(conn) -> list[dict]:
+    raw = db.get_meta(conn, BROKER_ACCOUNTS)
+    return json.loads(raw) if raw else []
+
+
+def broker_connected(conn) -> bool:
+    return bool(db.get_meta(conn, BROKER_CID) and broker_accounts(conn))
+
+
+def broker_status(conn) -> dict:
+    rows = [dict(r) for r in db.list_broker_holdings(conn)]
+    return {
+        "configured": codef.is_configured(),  # .env에 CODEF 키가 있는지
+        "env": os.environ.get("CODEF_ENV", "demo"),
+        "connected": bool(db.get_meta(conn, BROKER_CID)),
+        # 계좌비밀번호는 CODEF 공개키로 암호화된 값만 저장한다 — 평문은 남기지 않는다
+        "accounts": [{"organization": a["organization"], "account": a["account"],
+                      "display": a.get("display") or a["account"],
+                      "name": a.get("name")} for a in broker_accounts(conn)],
+        "synced_at": db.get_meta(conn, BROKER_SYNCED_AT),
+        "flow_synced_at": db.get_meta(conn, BROKER_FLOW_SYNCED_AT),
+        "holdings_count": len(rows),
+    }
+
+
+def broker_connect(conn, organization: str, login_type: str, password: str,
+                   user_id: str | None = None, der_file: str | None = None,
+                   key_file: str | None = None) -> dict:
+    """계정 등록 → connectedId 저장 후 그 기관의 계좌 목록을 돌려준다.
+
+    인증서·비밀번호는 CODEF로 한 번 보내고 끝이며 이쪽 DB에는 저장하지 않는다.
+    """
+    cid = codef.create_account(organization, login_type, password,
+                               user_id=user_id, der_file=der_file, key_file=key_file)
+    db.set_meta(conn, BROKER_CID, cid)
+    return {"connected_id": cid,
+            "accounts": [{"account": a.get("resAccount"),
+                          "display": a.get("resAccountDisplay") or a.get("resAccount"),
+                          "name": a.get("resAccountName"),
+                          "organization": organization}
+                         for a in codef.account_list(cid, organization)]}
+
+
+def broker_select_accounts(conn, accounts: list[dict]) -> dict:
+    """동기화 대상 계좌를 저장한다. account_password는 즉시 RSA 암호화해서 넣는다."""
+    cid = db.get_meta(conn, BROKER_CID)
+    if not cid:
+        raise codef.CodefError("CF-LOCAL", "증권사 계정이 연결되지 않았습니다")
+    saved = []
+    for a in accounts:
+        entry = {"organization": a["organization"], "account": a["account"],
+                 "display": a.get("display") or a["account"], "name": a.get("name")}
+        pw = a.get("account_password")
+        if pw:
+            entry["password_enc"] = codef.encrypt(pw)
+        saved.append(entry)
+    db.set_meta(conn, BROKER_ACCOUNTS, json.dumps(saved, ensure_ascii=False))
+    return broker_status(conn)
+
+
+def broker_disconnect(conn) -> dict:
+    """연동 해제 — 스냅샷도 함께 비워 보유가 다시 원장 기준으로 돌아가게 한다."""
+    db.clear_broker_holdings(conn)
+    for key in (BROKER_CID, BROKER_ACCOUNTS, BROKER_SYNCED_AT, BROKER_FLOW_SYNCED_AT):
+        db.set_meta(conn, key, "")
+    return broker_status(conn)
+
+
+def _resolve_symbol(conn, item: dict) -> str | None:
+    """증권사 종목코드를 tickers에 등록된 심볼로. 없으면 새로 등록한다."""
+    code = item["code"]
+    if db.get_ticker(conn, code) is not None:
+        return code
+    # 이름·yf 심볼·ETF 여부는 기존 검색기에 이미 있다 — 증권사 응답에는 없는 정보다
+    try:
+        hit = next((r for r in fetchers.search_symbols(code)
+                    if r["symbol"] == code and r["market"] == item["market"]), None)
+    except Exception:
+        hit = None
+    if hit is None:
+        # 조회에 실패해도 보유는 사실이다. 시세 심볼은 시장 규칙으로 채우고
+        # 이름은 증권사가 준 것을 쓴다 (갱신에 실패하면 failed_tickers로 드러난다).
+        hit = {"symbol": code, "name": item["name"], "market": item["market"],
+               "is_etf": 0, "currency": item["currency"],
+               "yf_symbol": code + ".KS" if item["market"] == "KR" else code}
+    db.upsert_ticker(conn, hit["symbol"], hit["market"], hit["name"],
+                     is_etf=hit.get("is_etf", 0), in_watchlist=0,
+                     yf_symbol=hit.get("yf_symbol"), currency=hit.get("currency", "KRW"))
+    return hit["symbol"]
+
+
+def sync_broker(conn) -> dict:
+    """증권사 잔고를 받아 예수금과 보유 스냅샷을 갈아끼운다."""
+    cid = db.get_meta(conn, BROKER_CID)
+    accounts = broker_accounts(conn)
+    if not cid or not accounts:
+        raise codef.CodefError("CF-LOCAL", "동기화할 증권사 계좌가 없습니다")
+    parsed = [broker.parse_balance(
+        codef.balance(cid, a["organization"], a["account"], a.get("password_enc")),
+        account=a.get("display") or a["account"]) for a in accounts]
+    merged = broker.merge(parsed)
+
+    rows = []
+    for h in merged["holdings"]:
+        symbol = _resolve_symbol(conn, h)
+        if symbol:
+            rows.append({**h, "symbol": symbol})
+    synced_at = datetime.now().isoformat(timespec="seconds")
+    db.replace_broker_holdings(conn, rows, synced_at)
+    # 예수금도 증권사 값이 진실이다. 매매 입력이 예수금을 증감시키던 흐름은 그대로
+    # 두되, 동기화 때마다 실제 잔고로 덮어써 오차가 누적되지 않게 한다.
+    db.set_meta(conn, "cash_krw", str(merged["cash_krw"]))
+    db.set_meta(conn, "cash_usd", str(merged["cash_usd"]))
+    db.set_meta(conn, BROKER_SYNCED_AT, synced_at)
+    return {"synced_at": synced_at, "holdings": len(rows),
+            "cash_krw": merged["cash_krw"], "cash_usd": merged["cash_usd"],
+            # 앱 심볼로 확정하지 못한 종목 — 조용히 빼면 총자산이 실제보다 작아진다
+            "unmapped": merged["unmapped"],
+            "basis_missing": [r["symbol"] for r in rows if r["basis_missing"]]}
+
+
+def _name_index(conn) -> list[tuple[str, str]]:
+    """종목명 → 심볼. 긴 이름부터 봐야 '삼성전자'가 '삼성전자우'를 가로채지 않는다."""
+    rows = [(t["name"], t["symbol"]) for t in db.list_tickers(conn) if t["name"]]
+    return sorted(rows, key=lambda r: -len(r[0]))
+
+
+def sync_broker_flows(conn, start_date: str | None = None,
+                      end_date: str | None = None) -> dict:
+    """증권사 입출금내역을 cash_flows에 가져온다 (YYYYMMDD, 기본 최근 90일).
+
+    예수금에는 반영하지 않는다 — 예수금은 잔고조회가 덮어쓰는 값이라 여기서
+    또 더하면 같은 입금이 두 번 반영됐다가 다음 동기화에 조용히 사라진다.
+    """
+    cid = db.get_meta(conn, BROKER_CID)
+    accounts = broker_accounts(conn)
+    if not cid or not accounts:
+        raise codef.CodefError("CF-LOCAL", "동기화할 증권사 계좌가 없습니다")
+    now = datetime.now()
+    end = end_date or now.strftime("%Y%m%d")
+    # 90일 — 키움 등 3개월 단위 제한에 걸리지 않는 가장 넓은 기본값
+    start = start_date or (now - timedelta(days=90)).strftime("%Y%m%d")
+
+    rows = []
+    for a in accounts:
+        label = a.get("display") or a["account"]
+        for data in codef.transactions(cid, a["organization"], a["account"],
+                                       start, end, a.get("password_enc")):
+            rows += broker.parse_transactions(data, account=label)
+
+    existing = db.cash_flow_ext_keys(conn)
+    names = _name_index(conn)
+    added = {"DEPOSIT": 0, "WITHDRAW": 0, "DIVIDEND": 0, "INTEREST": 0}
+    duplicates = skipped = 0
+    no_symbol = []
+    for r in rows:
+        ftype = broker.classify_flow(r)
+        if ftype is None:
+            skipped += 1  # 매매 대금 등 — 원장이 진실이다
+            continue
+        if r["ext_key"] in existing:
+            duplicates += 1
+            continue
+        symbol = None
+        if ftype in ("DIVIDEND", "INTEREST"):
+            symbol = next((s for n, s in names if n in r["desc"]), None)
+            if symbol is None:
+                # 종목을 못 붙인 배당은 배당 화면에서 '미지정'으로 뜬다 — 합계는
+                # 맞지만 종목별 배당수익률에는 안 잡히므로 사용자에게 알린다
+                no_symbol.append(r["desc"][:40] or r["date"])
+        db.insert_cash_flow(conn, ftype, r["amount_in"] or r["amount_out"], r["date"],
+                            symbol=symbol,
+                            # 증권 입출금내역은 원화 계좌 기준이다. 외화 계좌 거래는
+                            # 이 API로 오지 않으므로 KRW로 고정한다.
+                            currency="KRW", fx_rate=1.0,
+                            note=(r["desc"] or None), ext_key=r["ext_key"])
+        existing.add(r["ext_key"])
+        added[ftype] += 1
+    synced_at = now.isoformat(timespec="seconds")
+    db.set_meta(conn, BROKER_FLOW_SYNCED_AT, synced_at)
+    return {"start": start, "end": end, "synced_at": synced_at,
+            "added": added, "total_added": sum(added.values()),
+            "duplicates": duplicates, "skipped_trades": skipped,
+            "no_symbol": no_symbol[:10]}
+
+
+def _apply_broker_holdings(conn, holdings: dict) -> dict:
+    """원장에서 만든 보유를 증권사 스냅샷으로 대체한다.
+
+    수량·평단만 덮고 환율 이력(avg_fx)·진입 등급 같은 원장 고유 정보는 남긴다 —
+    증권사는 매수 시점 환율을 주지 않으므로 그걸 버리면 환 기여가 통째로 사라진다.
+    스냅샷에 없는 종목은 이미 판 것이므로 화면에서도 빠져야 한다.
+    """
+    rows = db.list_broker_holdings(conn)
+    if not rows:
+        return holdings
+    out = {}
+    for r in rows:
+        prev = holdings.get(r["symbol"], {})
+        out[r["symbol"]] = {
+            **prev,
+            "quantity": r["quantity"],
+            "avg_price": r["avg_price"],
+            "source": "broker",
+            # 평단을 증권사가 안 줘서 현재가로 채운 종목은 손익이 0으로 보인다
+            "basis_missing": bool(r["basis_missing"]),
+            # 원장에 없던 종목은 매수 환율을 알 수 없다 — 0으로 쓰면 '환 영향 없음'이 된다
+            "avg_fx": prev.get("avg_fx", 1.0),
+            "fx_known": prev.get("fx_known", False) if prev else False,
+        }
+    return out

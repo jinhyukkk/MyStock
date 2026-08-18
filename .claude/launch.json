@@ -14,6 +14,13 @@
       "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--app-dir", "backend", "--host", "127.0.0.1", "--port", "8722"],
       "port": 8722,
       "autoPort": true
+    },
+    {
+      "name": "mystock-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "frontend"],
+      "port": 5173,
+      "env": { "API_ORIGIN": "http://127.0.0.1:8722" }
     }
   ]
 }
