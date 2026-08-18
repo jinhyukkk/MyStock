@@ -1,5 +1,7 @@
+import urllib.parse
+
 import pytest
-from app import broker, db, service
+from app import broker, codef, db, service
 
 
 # ── CODEF 응답 파싱 ────────────────────────────────────────────────────────
@@ -21,6 +23,12 @@ def test_num_absorbs_broker_formatting():
     assert broker.num("-1500.5") == -1500.5
 
 
+def test_decode_reads_utf8_korean_names():
+    """CODEF는 한글을 UTF-8로 퍼센트 인코딩해서 보낸다."""
+    body = urllib.parse.quote('{"resItemName": "SK하이닉스"}'.encode("utf-8"))
+    assert codef._decode(body) == {"resItemName": "SK하이닉스"}
+
+
 def test_parse_balance_reads_cash_and_holdings():
     data = {"resDepositReceived": "1,000,000", "resDepositReceivedD2": "1,200,000",
             "resDepositReceivedF": "1,400,000",  # 원화환산 — 달러 예수금으로 쓰면 안 된다
@@ -33,6 +41,13 @@ def test_parse_balance_reads_cash_and_holdings():
         "code": "005930", "market": "KR", "currency": "KRW", "name": "삼성전자",
         "quantity": 10.0, "avg_price": 70000.0, "basis_missing": False,
         "account": "1234-5678"}]
+
+
+def test_usd_deposit_read_from_misnamed_field():
+    """미래에셋은 외화예수금 금액을 resProductType에 담아 준다 — 못 읽으면 통째로 0이 된다."""
+    out = broker.parse_balance({"resDepositReceivedFList": [
+        {"resProductType": "1,234.56", "resAccountCurrency": "USD"}]})
+    assert out["cash_usd"] == 1234.56
 
 
 def test_parse_balance_falls_back_to_d_when_no_d2():
@@ -67,6 +82,14 @@ def test_non_stock_products_and_zero_quantity_are_skipped():
 def test_kr_code_strips_broker_prefix():
     assert broker.normalize_code("A005930", "01") == "005930"
     assert broker.normalize_code("5930", "01") == "005930"
+
+
+def test_kr_new_format_code_keeps_letter():
+    """신형 코드에서 문자를 떼면 실재하는 다른 종목이 된다 — 엉뚱한 시세로 평가된다."""
+    assert broker.normalize_code("0167A0", "01") == "0167A0"
+    assert broker.normalize_code("A0167A0", "01") == "0167A0"
+    assert broker.normalize_code("0011B0", "01") == "0011B0"
+    assert broker.normalize_code("ABCDEF", "01") is None
 
 
 def test_unmappable_code_is_reported_not_silently_dropped():
@@ -144,6 +167,39 @@ def test_broker_only_symbol_keeps_fx_unknown(conn):
     assert service._holdings_map(conn)["AAPL"]["fx_known"] is False
 
 
+# ── 종합자산 ───────────────────────────────────────────────────────────────
+
+def test_parse_assets_keeps_only_what_stock_balance_misses():
+    """종합자산엔 보유종목·외화예수금이 같이 온다 — 그대로 더하면 같은 돈을 두 번 센다."""
+    keep, skipped = broker.parse_assets({"resItemList": [
+        # 발행어음: 상품유형이 '주식'인데 수량 0, 평가금액만 있다 → 남겨야 한다
+        {"resProductTypeCd": "01", "resItemName": "발행어음CMA(개인)",
+         "resQuantity": "0", "resValuationAmt": "3,000,000", "resAccountCurrency": "KRW"},
+        {"resProductTypeCd": "02", "resItemName": "청년형 펀드",
+         "resQuantity": "1000000", "resValuationAmt": "2,000,000", "resAccountCurrency": "KRW"},
+        # 아래 셋은 이미 세고 있다
+        {"resProductTypeCd": "01", "resItemName": "삼성전자",
+         "resQuantity": "5", "resValuationAmt": "400,000", "resAccountCurrency": "KRW"},
+        {"resProductTypeCd": "04", "resItemName": "엔비디아",
+         "resQuantity": "25", "resValuationAmt": "5,000,000", "resAccountCurrency": "KRW"},
+        {"resProductTypeCd": "99", "resItemName": "미국달러",
+         "resQuantity": "1000", "resValuationAmt": "1,400,000", "resAccountCurrency": "KRW"},
+    ]}, account="1234-5678")
+    assert [(r["name"], r["value_krw"], r["type"]) for r in keep] == [
+        ("발행어음CMA(개인)", 3000000.0, "현금성 상품"),
+        ("청년형 펀드", 2000000.0, "펀드")]
+    assert {r["name"] for r in skipped} == {"삼성전자", "엔비디아", "미국달러"}
+
+
+def test_parse_assets_skips_non_krw_valuation():
+    """통화가 원화가 아니면 그대로 더할 수 없다 — 총자산이 환율 배수만큼 어긋난다."""
+    keep, skipped = broker.parse_assets({"resItemList": [
+        {"resProductTypeCd": "06", "resItemName": "해외채권",
+         "resQuantity": "0", "resValuationAmt": "1,000", "resAccountCurrency": "USD"}]})
+    assert keep == []
+    assert skipped[0]["reason"] == "원화 평가액이 아님"
+
+
 # ── 입출금내역 ─────────────────────────────────────────────────────────────
 
 def _tr(**kw):
@@ -185,6 +241,30 @@ def test_classify_skips_trade_settlement():
     rows = broker.parse_transactions({"resTrHistoryList": [
         _tr(resAccountDesc2="주식매수", resAccountIn="0", resAccountOut="700,000")]})
     assert broker.classify_flow(rows[0]) is None
+
+
+def test_classify_skips_internal_account_transfer():
+    """본인 계좌 간 대체는 양쪽 계좌에서 다 잡힌다 — 입출금으로 세면 원금이 양방향으로 부푼다."""
+    def one(desc, **kw):
+        return broker.classify_flow(broker.parse_transactions(
+            {"resTrHistoryList": [_tr(resAccountDesc2=desc, **kw)]})[0])
+    assert one("계좌대체입금") is None
+    assert one("계좌대체출금", resAccountIn="0", resAccountOut="500,000") is None
+    # 예수금을 현금성 상품에 굴리는 스윕도 계좌 밖으로 나간 돈이 아니다
+    assert one("CMA 발행어음 중도매도") is None
+    assert one("CMA 발행어음 매수", resAccountIn="0", resAccountOut="9,000,000") is None
+
+
+def test_classify_keeps_transfer_lookalike_wording():
+    """'약정'·'장내' 같은 넓은 단어로 거르면 멀쩡한 이체가 조용히 사라진다."""
+    def one(desc):
+        return broker.classify_flow(broker.parse_transactions(
+            {"resTrHistoryList": [_tr(resAccountDesc2=desc)]})[0])
+    assert one("이체입금 약정금 정산") == "DEPOSIT"
+    assert one("장내이체입금") == "DEPOSIT"
+    # 실제로 관측되는 매매 문구는 여전히 걸러진다
+    assert one("해외주식매수입고") is None
+    assert one("주식매도입금") is None
 
 
 def test_classify_deposit_withdraw_dividend_interest():

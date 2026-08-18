@@ -167,6 +167,16 @@ def get_cash_flow(conn, flow_id):
     return conn.execute("SELECT * FROM cash_flows WHERE id=?", (flow_id,)).fetchone()
 
 
+def update_cash_flow_symbol(conn, flow_id, symbol):
+    """배당의 귀속 종목만 바꾼다.
+
+    금액·통화·환율은 입금 시점의 사실이라 건드리지 않는다 — 종목을 붙였다고 원화로
+    들어온 배당이 달러가 되지는 않는다.
+    """
+    conn.execute("UPDATE cash_flows SET symbol=? WHERE id=?", (symbol, flow_id))
+    conn.commit()
+
+
 def delete_cash_flow(conn, flow_id):
     conn.execute("DELETE FROM cash_flows WHERE id=?", (flow_id,))
     conn.commit()

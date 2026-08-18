@@ -5,6 +5,7 @@ __pycache__/
 backend/mystock.db
 backend/mystock.db-wal
 backend/mystock.db-shm
+backend/mystock.db.bak
 frontend/node_modules/
 frontend/dist/
 .idea/

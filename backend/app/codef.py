@@ -28,6 +28,7 @@ ACCOUNT_CREATE = "/v1/account/create"
 ACCOUNT_LIST = "/v1/kr/stock/a/account/account-list"
 BALANCE_INQUIRY = "/v1/kr/stock/a/account/balance-inquiry"
 TRANSACTION_LIST = "/v1/kr/stock/a/account/transaction-list"
+FINANCIAL_ASSETS = "/v1/kr/stock/a/account/financial-assets"
 
 SUCCESS = "CF-00000"
 TIMEOUT = 120  # 잔고조회는 대상 증권사 사이트를 실제로 긁는다 — 문서상 timeout 100초
@@ -166,6 +167,22 @@ def balance(connected_id: str, organization: str, account: str,
     data = _post(BALANCE_INQUIRY, body)
     rows = _as_list(data)
     return rows[0] if rows else {}
+
+
+def financial_assets(connected_id: str, organization: str, account: str,
+                     account_password_enc: str | None = None) -> list[dict]:
+    """종합자산 — 계좌의 모든 상품(발행어음·펀드·채권 등)을 원화 평가액으로 준다.
+
+    주식잔고조회는 주식만 주기 때문에 발행어음·펀드에 들어있는 돈이 총자산에서
+    통째로 빠진다. 종목별 평단·통화는 잔고조회가 정확하므로 이 응답은 '잔고조회가
+    주지 않는 자산'을 채우는 데만 쓴다.
+    """
+    body = {"connectedId": connected_id, "organization": organization,
+            "account": "".join(c for c in account if c.isdigit()),
+            "inquiryType": "0"}  # 0 = 결제기준. 2는 금융상품이 빠져 이 API를 쓰는 뜻이 없다
+    if account_password_enc:
+        body["accountPassword"] = account_password_enc
+    return _as_list(_post(FINANCIAL_ASSETS, body))
 
 
 def transactions(connected_id: str, organization: str, account: str,

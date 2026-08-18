@@ -43,6 +43,8 @@ export interface Dashboard {
   portfolio_summary: { total_value_krw: number; total_pnl_krw: number;
     total_pnl_pct: number; total_pnl_pct_of_asset: number; holdings_count: number;
     cash_krw: number; cash_usd: number; cash_usd_krw: number;
+    /** 발행어음·펀드 등 보유종목·예수금 어디에도 안 잡히는 증권사 자산 */
+    other_assets_krw: number;
     total_asset_krw: number; cash_pct: number };
   position_rule: PositionRule;
   /** 보유 중인데 STOP 룰이 없는 종목 — 알림이 울리지 않는 자리다 */
@@ -205,6 +207,8 @@ export interface Portfolio {
   totals: { total_value_krw: number; total_cost_krw: number;
     total_pnl_krw: number; total_pnl_pct: number; total_pnl_pct_of_asset: number;
     cash_krw: number; cash_usd: number; cash_usd_krw: number;
+    /** 발행어음·펀드 등 보유종목·예수금 어디에도 안 잡히는 증권사 자산 */
+    other_assets_krw: number;
     total_asset_krw: number; cash_pct: number;
     // 원화 환산에 실제로 쓴 환율 — estimated면 수집 실패로 기본값을 쓴 것이다
     usdkrw: number; usdkrw_estimated: boolean;

@@ -143,8 +143,11 @@ export default function Dashboard() {
             {' · '}평가손익 (실현손익 제외)</div>
           {/* 현금은 원화+달러 합산(cash_pct와 같은 기준) — 포트폴리오 화면과 숫자가 달라지면
               어느 쪽을 믿어야 할지 판단이 멈춘다 */}
+          {/* 기타자산을 빼놓으면 평가액+현금이 총자산에 못 미쳐, 화면이 설명하지
+              못하는 금액이 남는다 — 발행어음·펀드는 둘 어디에도 안 잡힌다 */}
           <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 4 }}>
-            평가액 {fmt(pf.total_value_krw)} · 현금 {fmt(pf.cash_krw + (pf.cash_usd_krw ?? 0))} ({pf.cash_pct}%) · 보유 {pf.holdings_count}종목</div>
+            평가액 {fmt(pf.total_value_krw)} · 현금 {fmt(pf.cash_krw + (pf.cash_usd_krw ?? 0))} ({pf.cash_pct}%)
+            {pf.other_assets_krw > 0 && ` · 기타자산 ${fmt(pf.other_assets_krw)}`} · 보유 {pf.holdings_count}종목</div>
         </div>
       </div>
 

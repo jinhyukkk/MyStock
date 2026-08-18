@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { del, post } from '../../api'
+import { del, patch, post } from '../../api'
 import { cashClampWarning, type TradeResult } from '../../trade'
 import SymbolInput from '../../components/SymbolInput'
 import { cur, fmt } from '../../format'
@@ -14,6 +14,17 @@ export default function Income() {
   const [flowForm, setFlowForm] = useState({ flow_type: 'DIVIDEND', symbol: '',
     amount: '', tax: '', flow_date: new Date().toISOString().slice(0, 10), note: '' })
   const [flowMsg, setFlowMsg] = useState<string | null>(null)
+  // 증권사에서 가져온 배당은 적요에 종목이 없어 미지정으로 들어온다 — 손으로 붙이는 자리
+  const [assigning, setAssigning] = useState<{ id: number; symbol: string } | null>(null)
+
+  const assignSymbol = async (id: number, symbol: string) => {
+    try {
+      await patch(`/api/cash-flows/${id}`, { symbol: symbol.trim().toUpperCase() || null })
+      setAssigning(null)
+      setFlowMsg(null)
+      reload()
+    } catch (e) { setFlowMsg(String(e)) }
+  }
 
   const needsSymbol = flowForm.flow_type === 'DIVIDEND' || flowForm.flow_type === 'INTEREST'
   const addFlow = async () => {
@@ -84,6 +95,14 @@ export default function Income() {
           ⓘ 올해 중 매수·매도가 있었거나 이미 정리한 종목은 보유 기간과 배당 기간이 어긋나
           <strong> 위 수익률의 분자·분모에서 함께 제외</strong>했습니다 (아래 표의 「기간 불일치」).
           받은 배당 금액 자체는 전부 포함돼 있습니다.</div>}
+        {/* 증권사 적요에는 종목이 없다('배당금입금'뿐) — 자동으로 붙일 방법이 없으므로
+            묻혀 있지 않게 알린다. 합계는 맞지만 종목별 수익률에서 빠진다. */}
+        {div.by_symbol.some(r => r.symbol === '미지정') &&
+          <div className="warn-box" style={{ marginTop: 8 }}>
+            ⚠ 종목이 지정되지 않은 배당이 있습니다 — 합계에는 들어가지만
+            <strong> 종목별 배당 수익률·배당 포함 총수익에는 잡히지 않습니다</strong>.
+            증권사 입출금내역에는 종목 정보가 없어 자동으로 붙일 수 없으니, 아래 목록에서
+            「종목 지정」으로 직접 붙여주세요.</div>}
         {div.fx_estimated && <div className="warn-box" style={{ marginTop: 8 }}>
           ⚠ 일부 달러 배당에 입금 시점 환율이 없어 <strong>현재 환율로 환산</strong>했습니다 —
           그 건들의 원화 금액은 오늘 환율이 바뀌면 함께 바뀝니다.</div>}
@@ -157,7 +176,31 @@ export default function Income() {
                 <td style={{ textAlign: 'left' }}>{f.flow_date}</td>
                 <td data-label="구분" className={f.flow_type === 'WITHDRAW' ? 'neg' : 'pos'}>
                   {FLOW_LABEL[f.flow_type] ?? f.flow_type}</td>
-                <td data-label="종목">{f.symbol ?? '—'}</td>
+                {/* 배당은 종목이 붙어야 종목별 배당수익률·총수익에 잡힌다. 증권사에서
+                    가져온 건은 종목 정보가 없으니 여기서 지정할 수 있어야 한다. */}
+                <td data-label="종목">
+                  {assigning?.id === f.id ? (
+                    <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                      <SymbolInput value={assigning.symbol} autoFocus style={{ width: 150 }}
+                                   onChange={v => setAssigning({ id: f.id, symbol: v })} />
+                      <button onClick={() => assignSymbol(f.id, assigning.symbol)}>저장</button>
+                      <button className="ghost" onClick={() => setAssigning(null)}>취소</button>
+                    </span>
+                  ) : f.symbol ? (
+                    <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                      {f.symbol}
+                      {(f.flow_type === 'DIVIDEND' || f.flow_type === 'INTEREST') &&
+                        <button className="ghost" style={{ fontSize: 11 }}
+                                onClick={() => setAssigning({ id: f.id, symbol: f.symbol ?? '' })}>
+                          변경</button>}
+                    </span>
+                  ) : (f.flow_type === 'DIVIDEND' || f.flow_type === 'INTEREST') ? (
+                    <button className="ghost" style={{ fontSize: 11 }}
+                            title="종목을 지정해야 종목별 배당 수익률과 배당 포함 총수익에 반영됩니다"
+                            onClick={() => setAssigning({ id: f.id, symbol: '' })}>
+                      미지정 · 종목 지정</button>
+                  ) : '—'}
+                </td>
                 <td data-label="세전">{cur(f.currency, f.amount)}</td>
                 <td data-label="원천징수" style={{ color: 'var(--text-dim)' }}>
                   {f.tax ? cur(f.currency, f.tax) : '—'}</td>

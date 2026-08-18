@@ -370,6 +370,26 @@ def test_build_portfolio_cash_usd():
     assert {"label": "현금", "value_krw": 500_000.0} in out["allocation"]
 
 
+def test_build_portfolio_counts_other_assets_in_total_and_weights():
+    """발행어음·펀드를 빼놓으면 총자산이 작아져 종목 비중이 실제보다 크게 나온다."""
+    holdings = {"005930": {"quantity": 10, "avg_price": 100_000.0}}
+    tickers = {"005930": {"name": "삼성전자", "market": "KR", "currency": "KRW"}}
+    args = (holdings, {"005930": 150_000.0}, tickers)
+    without = portfolio.build_portfolio(*args, usdkrw=1000.0, cash_krw=500_000.0)
+    with_other = portfolio.build_portfolio(
+        *args, usdkrw=1000.0, cash_krw=500_000.0,
+        other_assets=[{"name": "발행어음CMA(개인)", "value_krw": 1_000_000.0,
+                       "type": "현금성 상품"}])
+    t = with_other["totals"]
+    assert without["totals"]["total_asset_krw"] == 2_000_000.0
+    assert t["other_assets_krw"] == 1_000_000.0
+    assert t["total_asset_krw"] == 3_000_000.0
+    # 같은 보유가 분모만 달라져 비중이 절반으로 — 이게 빠지면 집중도를 과대평가한다
+    assert without["holdings"][0]["weight_pct"] == 75.0
+    assert with_other["holdings"][0]["weight_pct"] == 50.0
+    assert {"label": "현금성 상품", "value_krw": 1_000_000.0} in with_other["allocation"]
+
+
 def test_total_pnl_pct_of_asset_uses_total_asset_denominator():
     """평가손익률의 분모는 투자원금이다 — 현금 비중이 크면 총자산 대비와 크게 벌어진다.
 

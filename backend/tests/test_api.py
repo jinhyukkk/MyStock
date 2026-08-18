@@ -380,6 +380,28 @@ def test_deleting_a_dividend_reverses_the_cash(client):
     assert client.get("/api/portfolio").json()["totals"]["cash_krw"] == 1_000_000
 
 
+def test_assigning_symbol_to_imported_dividend(client):
+    """증권사 배당은 적요에 종목이 없어 미지정으로 들어온다 — 나중에 붙일 수 있어야
+    종목별 배당수익률에 잡힌다. 금액·통화는 입금 시점 사실이라 바뀌면 안 된다."""
+    _watch(client)
+    client.put("/api/cash", json={"amount": 1_000_000})
+    fid = client.post("/api/cash-flows", json={
+        "flow_type": "DEPOSIT", "amount": 5000, "flow_date": "2026-03-15"}).json()["id"]
+    cash_before = client.get("/api/portfolio").json()["totals"]["cash_krw"]
+
+    assert client.patch(f"/api/cash-flows/{fid}", json={"symbol": "005930"}).status_code == 200
+    row = next(r for r in client.get("/api/cash-flows").json() if r["id"] == fid)
+    assert row["symbol"] == "005930"
+    assert row["amount"] == 5000 and row["currency"] == "KRW"
+    # 귀속만 바뀐 것이므로 예수금은 그대로여야 한다 (두 번 계상 방지)
+    assert client.get("/api/portfolio").json()["totals"]["cash_krw"] == cash_before
+
+    # 되돌리기·검증
+    assert client.patch(f"/api/cash-flows/{fid}", json={"symbol": ""}).json()["symbol"] is None
+    assert client.patch(f"/api/cash-flows/{fid}", json={"symbol": "NOPE"}).status_code == 400
+    assert client.patch("/api/cash-flows/99999", json={"symbol": "005930"}).status_code == 404
+
+
 def test_withdrawal_reduces_cash(client):
     client.put("/api/cash", json={"amount": 1_000_000})
     res = client.post("/api/cash-flows", json={

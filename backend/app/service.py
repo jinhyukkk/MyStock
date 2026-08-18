@@ -410,7 +410,10 @@ def get_dashboard(conn) -> dict:
     signals.sort(key=_signal_sort_key)
     tickers_map = {t["symbol"]: dict(t) for t in active}
     pf = portfolio.build_portfolio(holdings, prices, tickers_map, senti.get("usdkrw"),
-                                   cash_krw=get_cash_krw(conn), cash_usd=get_cash_usd(conn))
+                                   cash_krw=get_cash_krw(conn), cash_usd=get_cash_usd(conn),
+                                   # 대시보드도 같은 분모를 써야 한다 — 여기만 빼면
+                                   # 같은 종목의 비중이 화면마다 다르게 나온다
+                                   other_assets=broker_other_assets(conn))
     avg_prices = {s: h["avg_price"] for s, h in holdings.items()}
     # 종목 수 룰은 비중·리스크 한도를 모두 통과하는 계좌에서도 깨진다 —
     # 추적할 수 있는 개수를 넘기면 손절 규율이 비중과 무관하게 무너진다.
@@ -478,10 +481,13 @@ def get_portfolio_view(conn) -> dict:
         cost_krw=_cost_basis_krw(holdings, tickers_map, fx),
         traded_this_year={t["symbol"] for t in trades
                           if str(t.get("trade_date", "")).startswith(str(year))})
+    other_assets = broker_other_assets(conn)
     pf = portfolio.build_portfolio(holdings, prices, tickers_map, fx,
                                    cash_krw=get_cash_krw(conn), cash_usd=get_cash_usd(conn),
                                    dividends={r["symbol"]: r["net_krw"]
-                                              for r in div["by_symbol"]})
+                                              for r in div["by_symbol"]},
+                                   other_assets=other_assets)
+    pf["other_assets"] = other_assets
     pf["dividends"] = div
     realized = portfolio.realized_pnl(trades, tickers_map, fx)
     # 해외 양도세는 5월에 따로 낸다 — 실현손익만 보고 그 돈까지 쓸 수 있다고 믿게 된다
@@ -491,10 +497,13 @@ def get_portfolio_view(conn) -> dict:
                           realized, tickers_map, year=year)}
     price_frames = {s: db.load_prices(conn, s, limit=250) for s in holdings}
     closes = {s: f["close"] for s, f in price_frames.items()}
-    # 계좌 리스크는 환율 고정 근사 — 달러 예수금도 현재 환율로 환산해 고정 현금으로 합산
+    # 계좌 리스크는 환율 고정 근사 — 달러 예수금도 현재 환율로 환산해 고정 현금으로 합산.
+    # 발행어음·펀드도 비중의 분모에 들어가야 한다(주식이 아니지만 계좌의 자산이다).
     fx_now = fx or portfolio.DEFAULT_USDKRW
-    pf["risk"] = portfolio.account_risk(holdings, closes, tickers_map, fx,
-                                        cash_krw=get_cash_krw(conn) + get_cash_usd(conn) * fx_now)
+    pf["risk"] = portfolio.account_risk(
+        holdings, closes, tickers_map, fx,
+        cash_krw=(get_cash_krw(conn) + get_cash_usd(conn) * fx_now
+                  + pf["totals"]["other_assets_krw"]))
     # 종목별 1% 룰은 합산해서 봐야 의미가 있다 — 5종목이면 총 몇 %인지 화면에 띄운다
     pf["open_risk"] = portfolio.open_risk(
         holdings, _atr_map(price_frames), tickers_map, fx,
@@ -828,6 +837,12 @@ BROKER_CID = "codef_connected_id"
 BROKER_ACCOUNTS = "codef_accounts"
 BROKER_SYNCED_AT = "last_broker_sync"
 BROKER_FLOW_SYNCED_AT = "last_broker_flow_sync"
+BROKER_OTHER_ASSETS = "broker_other_assets"
+
+
+def broker_other_assets(conn) -> list[dict]:
+    raw = db.get_meta(conn, BROKER_OTHER_ASSETS)
+    return json.loads(raw) if raw else []
 
 
 def broker_accounts(conn) -> list[dict]:
@@ -937,8 +952,26 @@ def sync_broker(conn) -> dict:
         symbol = _resolve_symbol(conn, h)
         if symbol:
             rows.append({**h, "symbol": symbol})
+    # 발행어음·펀드는 주식잔고조회에 아예 안 나온다 — 종합자산으로 따로 받는다.
+    # 이 API를 지원하지 않는 증권사도 있으므로 실패해도 동기화 전체를 멈추지 않고,
+    # 직전 스냅샷을 그대로 둔 채 실패 사실만 올린다(조용히 0으로 만들지 않는다).
+    other_assets, other_skipped, assets_failed = [], [], None
+    try:
+        for a in accounts:
+            for d in codef.financial_assets(cid, a["organization"], a["account"],
+                                            a.get("password_enc")):
+                keep, skipped = broker.parse_assets(
+                    d, account=a.get("display") or a["account"])
+                other_assets += keep
+                other_skipped += skipped
+    except codef.CodefError as e:
+        assets_failed = str(e)
+
     synced_at = datetime.now().isoformat(timespec="seconds")
     db.replace_broker_holdings(conn, rows, synced_at)
+    if assets_failed is None:
+        db.set_meta(conn, BROKER_OTHER_ASSETS,
+                    json.dumps(other_assets, ensure_ascii=False))
     # 예수금도 증권사 값이 진실이다. 매매 입력이 예수금을 증감시키던 흐름은 그대로
     # 두되, 동기화 때마다 실제 잔고로 덮어써 오차가 누적되지 않게 한다.
     db.set_meta(conn, "cash_krw", str(merged["cash_krw"]))
@@ -948,7 +981,11 @@ def sync_broker(conn) -> dict:
             "cash_krw": merged["cash_krw"], "cash_usd": merged["cash_usd"],
             # 앱 심볼로 확정하지 못한 종목 — 조용히 빼면 총자산이 실제보다 작아진다
             "unmapped": merged["unmapped"],
-            "basis_missing": [r["symbol"] for r in rows if r["basis_missing"]]}
+            "basis_missing": [r["symbol"] for r in rows if r["basis_missing"]],
+            "other_assets": other_assets,
+            "other_assets_krw": sum(a["value_krw"] for a in other_assets),
+            "other_skipped": other_skipped,
+            "assets_failed": assets_failed}
 
 
 def _name_index(conn) -> list[tuple[str, str]]:

@@ -236,6 +236,28 @@ def add_cash_flow(f: CashFlowIn, request: Request):
     return {"id": fid, "cash": cash}
 
 
+class CashFlowPatch(BaseModel):
+    symbol: str | None = None  # 빈 값이면 '미지정'으로 되돌린다
+
+
+@router.patch("/cash-flows/{flow_id}")
+def set_cash_flow_symbol(flow_id: int, body: CashFlowPatch, request: Request):
+    """배당의 귀속 종목을 나중에 지정한다.
+
+    증권사 입출금내역에는 종목 정보가 없다(적요가 '배당금입금'뿐이다). 그래서
+    가져온 배당은 미지정으로 쌓이고, 고칠 방법이 없으면 종목별 배당수익률에
+    영원히 안 잡힌다. 예수금은 건드리지 않는다 — 이미 반영된 입금이고 귀속만 바뀐다.
+    """
+    conn = _conn(request)
+    if db.get_cash_flow(conn, flow_id) is None:
+        raise HTTPException(404, "없는 현금흐름입니다")
+    symbol = (body.symbol or "").strip().upper() or None
+    if symbol and db.get_ticker(conn, symbol) is None:
+        raise HTTPException(400, "unknown symbol — 워치리스트에 먼저 추가하세요")
+    db.update_cash_flow_symbol(conn, flow_id, symbol)
+    return {"ok": True, "symbol": symbol}
+
+
 @router.delete("/cash-flows/{flow_id}")
 def remove_cash_flow(flow_id: int, request: Request):
     conn = _conn(request)
