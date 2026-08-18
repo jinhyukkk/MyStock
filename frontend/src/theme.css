@@ -272,6 +272,9 @@ details.premises > summary:hover { color: var(--text); }
   }
   /* 라벨 없는 칸(종목명·삭제 버튼)은 한 줄 전체를 쓴다 */
   .table-cards td:not([data-label]) { justify-content: flex-start; text-align: left; }
+  /* 보조 필드(수량·평단가 등 .sec)는 카드 모드에서 숨긴다 — 종목당 10칸을
+     세로로 다 쌓으면 판단에 쓰는 비중·손익이 스크롤에 묻힌다. 상세는 종목 페이지. */
+  .table-cards td.sec { display: none; }
 }
 
 /* ── 필터 칩 ──

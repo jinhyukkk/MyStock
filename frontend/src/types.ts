@@ -147,6 +147,10 @@ export interface Holding {
   quantity: number; avg_price: number; close: number | null;
   // 원가에 평단 맞춤 보정 로트가 섞였는지 — 이 행의 숫자 전체의 전제가 달라진다
   basis_adjusted: boolean;
+  // 증권사가 평균매입가를 안 줘서 현재가로 채운 행 — 손익 0은 '본전'이 아니라 '평단 모름'
+  basis_missing: boolean;
+  /** 이 수량·평단의 출처 */
+  source: 'ledger' | 'broker';
   value: number | null; pnl: number | null; pnl_pct: number | null;
   // 통화가 섞이면 종목 통화 표시만으로는 포지션 크기를 나란히 볼 수 없다
   value_krw: number | null; weight_pct: number | null;
@@ -213,6 +217,37 @@ export interface Portfolio {
   risk: AccountRisk | null;
   open_risk: OpenRisk | null;
   last_refresh: string | null;
+  broker: BrokerStatus;
+}
+export interface BrokerAccount {
+  organization: string; account: string; display: string; name: string | null;
+}
+export interface BrokerStatus {
+  /** .env에 CODEF 키가 설정되어 있는지 — 없으면 연결 자체가 불가능하다 */
+  configured: boolean;
+  env: string;
+  connected: boolean;
+  accounts: BrokerAccount[];
+  synced_at: string | null;
+  flow_synced_at: string | null;
+  holdings_count: number;
+}
+export interface BrokerFlowResult {
+  start: string; end: string; synced_at: string;
+  added: { DEPOSIT: number; WITHDRAW: number; DIVIDEND: number; INTEREST: number };
+  total_added: number;
+  /** 이미 가져온 거래 — 같은 기간을 다시 눌러도 중복으로 쌓이지 않는다 */
+  duplicates: number;
+  /** 매매 대금 줄 — 원장(trades)이 진실이라 가져오지 않는다 */
+  skipped_trades: number;
+  /** 종목을 못 붙인 배당 적요 — 합계엔 들어가지만 종목별 배당수익률엔 안 잡힌다 */
+  no_symbol: string[];
+}
+export interface BrokerSyncResult {
+  synced_at: string; holdings: number; cash_krw: number; cash_usd: number;
+  /** 앱 심볼로 확정하지 못한 종목 — 조용히 빼면 총자산이 실제보다 작아진다 */
+  unmapped: { name: string; raw_code: string; quantity: number }[];
+  basis_missing: string[];
 }
 /** 등급이 방향을 가르는가 — 매수 등급 성적 − 매도 등급 성적 (%p, 비용 차감 후) */
 export interface Discrimination {
