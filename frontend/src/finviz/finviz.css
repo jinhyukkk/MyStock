@@ -81,7 +81,12 @@
   display: flex; align-items: center; gap: 10px; padding: 10px 14px;
   color: var(--text-dim); font-size: 12.5px;
 }
-.fv-summary-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--grad); flex: none; }
+.fv-mkt { display: flex; gap: 2px; flex: none; background: var(--bg-hover); border-radius: 6px; padding: 2px; }
+.fv-mkt button {
+  border: 0; background: transparent; color: var(--text-dim); font-size: 11px; font-weight: 600;
+  padding: 3px 10px; border-radius: 4px; cursor: pointer; letter-spacing: 0.3px;
+}
+.fv-mkt button.on { background: var(--bg-card); color: var(--text); }
 .fv-summary-time { white-space: nowrap; }
 .fv-summary-text { color: var(--text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fv-more { color: var(--accent); white-space: nowrap; }

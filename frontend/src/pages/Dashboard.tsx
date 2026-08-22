@@ -8,16 +8,24 @@ import { BreadthBar, EarningsCalendar, EconCalendar, Headlines, InsiderLatest, I
          MajorNews, MarketSummary, Panel, PatternTable, QuoteTable, SignalTable } from '../finviz/Sections'
 import { BREADTH, EARNINGS, ECON_EMPTY_DATE, INSIDER_LATEST, INSIDER_TOP, PATTERNS_LEFT,
          PATTERNS_RIGHT } from '../finviz/sample'
-import type { IndexRow, MarketData } from '../finviz/types'
+import type { IndexRow, MarketData, MarketName } from '../finviz/types'
 
-/** finviz 상단 한 줄 요약 대신, 세 지수 등락으로 만든 문장. 뉴스 요약 소스가 없어
+const MARKET_KEY = 'dashboard.market'
+function initialMarket(): MarketName {
+  const v = localStorage.getItem(MARKET_KEY)
+  return v === 'US' ? 'US' : 'KR'      // 기본은 한국. 알 수 없는 값도 KR 로 떨어진다
+}
+
+/** finviz 상단 한 줄 요약 대신, 지수 등락으로 만든 문장. 뉴스 요약 소스가 없어
  *  문장을 지어내지 않고 숫자만 나열한다. */
-function summaryText(indices: IndexRow[]): string {
-  const parts = indices.filter(i => i.change_pct !== null)
-    .map(i => `${i.name} ${i.change_pct! > 0 ? '+' : ''}${i.change_pct!.toFixed(2)}%`)
-  if (parts.length === 0) return '지수 데이터를 아직 받지 못했습니다'
-  const ups = indices.filter(i => (i.change_pct ?? 0) > 0).length
-  const tone = ups === indices.length ? 'US stocks rose' : ups === 0 ? 'US stocks fell' : 'US stocks mixed'
+function summaryText(indices: IndexRow[], market: MarketName): string {
+  const shown = indices.filter(i => i.change_pct !== null)
+  if (shown.length === 0) return '지수 데이터를 아직 받지 못했습니다'
+  const parts = shown.map(i => `${i.name} ${i.change_pct! > 0 ? '+' : ''}${i.change_pct!.toFixed(2)}%`)
+  const ups = shown.filter(i => i.change_pct! > 0).length
+  const tone = market === 'KR'
+    ? (ups === shown.length ? '국내 증시 상승' : ups === 0 ? '국내 증시 하락' : '국내 증시 혼조')
+    : (ups === shown.length ? 'US stocks rose' : ups === 0 ? 'US stocks fell' : 'US stocks mixed')
   return `${tone} — ${parts.join(' · ')}`
 }
 
@@ -28,15 +36,27 @@ function summaryText(indices: IndexRow[]): string {
  * 소스가 생기면 섹션 단위로 교체한다.
  */
 export default function Dashboard() {
+  const [market, setMarket] = useState<MarketName>(initialMarket)
   const [data, setData] = useState<MarketData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [now, setNow] = useState(Date.now())
 
-  const load = useCallback(() => get<MarketData>('/api/market')
-    .then(d => { setData(d); setError(null); setNow(Date.now()) })
-    .catch(e => setError(String(e))), [])
+  const load = useCallback(() => get<MarketData>(`/api/market?market=${market}`)
+    // 빠르게 두 번 토글하면 먼저 쏜 응답이 나중에 올 수 있다 — 지금 시장이 아니면 버린다
+    .then(d => { if (d.market === market) { setData(d); setError(null); setNow(Date.now()) } })
+    .catch(e => setError(String(e))), [market])
   useEffect(() => { load() }, [load])
+
+  const pickMarket = (m: MarketName) => {
+    if (m === market) return
+    localStorage.setItem(MARKET_KEY, m)
+    setBusy(true)
+    setMarket(m)          // load 가 market 에 걸려 있어 이 한 줄로 다시 받는다
+  }
+  // 전환 요청이 끝나면(또는 실패하면) busy 를 내린다. data 를 지우지 않는 이유는
+  // 스켈레톤으로 되돌아가면 화면이 통째로 깜빡이기 때문 — 이전 시장을 두고 위에서 갱신한다.
+  useEffect(() => { setBusy(false) }, [data, error])
 
   // 백엔드는 TTL 이 지나면 백그라운드로 갱신하지만 열어둔 탭은 모른다 —
   // 탭으로 돌아올 때 다시 받고, 머무는 동안 "몇 분 전" 표기를 흘려보낸다.
@@ -54,7 +74,7 @@ export default function Dashboard() {
 
   const refresh = async () => {
     setBusy(true)
-    try { setData(await post<MarketData>('/api/market/refresh')); setNow(Date.now()) }
+    try { setData(await post<MarketData>(`/api/market/refresh?market=${market}`)); setNow(Date.now()) }
     catch (e) { setError(String(e)) }
     finally { setBusy(false) }
   }
@@ -73,14 +93,18 @@ export default function Dashboard() {
       </div>
       <div className="card skeleton" style={{ minHeight: 420 }} />
       <div className="fv-dim" style={{ textAlign: 'center', fontSize: 12 }}>
-        첫 로드는 야후 파이낸스에서 지수·스크리너·100여 종목을 받아오느라 10초쯤 걸립니다.</div>
+        {market === 'KR'
+          ? '첫 로드는 네이버·야후에서 지수와 순위 100여 종목을 받아오느라 몇 초 걸립니다.'
+          : '첫 로드는 야후 파이낸스에서 지수·스크리너·100여 종목을 받아오느라 10초쯤 걸립니다.'}</div>
     </div>
   )
 
   const stale = isStale(data.fetched_at, now)
   return (
     <div className="fv">
-      <MarketSummary time={`기준 ${relativeTime(data.fetched_at, now)}`} text={summaryText(data.indices)}
+      <MarketSummary market={market} onMarket={pickMarket}
+                     time={`기준 ${relativeTime(data.fetched_at, now)}`}
+                     text={summaryText(data.indices, market)}
                      stale={stale} failed={data.failed} busy={busy} onRefresh={refresh} />
 
       <div className="fv-row charts">
@@ -95,7 +119,8 @@ export default function Dashboard() {
         <SignalTable rows={data.signals_up} />
         <SignalTable rows={data.signals_down} gear />
         <Panel className="fv-heatmap-panel" gear>
-          <div className="fv-panel-title"><span>US Large Caps - 1 Day Performance</span></div>
+          <div className="fv-panel-title"><span>
+            {market === 'KR' ? 'KOSPI 대형주 – 1일 등락' : 'US Large Caps - 1 Day Performance'}</span></div>
           <Heatmap sectors={data.heatmap} />
         </Panel>
       </div>
@@ -122,9 +147,9 @@ export default function Dashboard() {
         <InsiderTop rows={INSIDER_TOP} />
       </div>
 
-      <div className="fv-row quotes">
-        <QuoteTable title="Futures" rows={data.futures} />
-        <QuoteTable title="Forex & Bonds" rows={data.forex_bonds} />
+      <div className="fv-row quotes" style={data.futures.length === 0 ? { gridTemplateColumns: '1fr' } : undefined}>
+        {data.futures.length > 0 && <QuoteTable title="Futures" rows={data.futures} />}
+        <QuoteTable title={market === 'KR' ? '환율 & 금리' : 'Forex & Bonds'} rows={data.forex_bonds} />
       </div>
     </div>
   )

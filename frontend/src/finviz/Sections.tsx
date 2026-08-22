@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import type { Breadth, EarningsRow, InsiderRow, PatternRow } from './sample'
-import type { Headline, MajorNewsRow, QuoteRow, SignalRow } from './types'
+import type { Headline, MajorNewsRow, MarketName, QuoteRow, SignalRow } from './types'
 
 const T = ({ s }: { s: string }) => <Link to={`/ticker/${s}`} className="fv-tk">{s}</Link>
 const pct = (v: number | null, d = 2) => v === null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(d)}%`
@@ -25,12 +25,18 @@ export function Panel({ children, gear, sample, className = '' }:
   )
 }
 
-export function MarketSummary({ time, text, stale, failed, busy, onRefresh }: {
+export function MarketSummary({ market, onMarket, time, text, stale, failed, busy, onRefresh }: {
+  market: MarketName; onMarket: (m: MarketName) => void
   time: string; text: string; stale: boolean; failed: string[]; busy: boolean; onRefresh: () => void
 }) {
   return (
     <div className="fv-summary">
-      <span className="fv-summary-dot" />
+      <div className="fv-mkt" role="group" aria-label="시장 선택">
+        {(['KR', 'US'] as const).map(m => (
+          <button key={m} className={m === market ? 'on' : ''} aria-pressed={m === market}
+                  onClick={() => onMarket(m)}>{m}</button>
+        ))}
+      </div>
       <span className={`fv-summary-time${stale ? ' warn' : ''}`}>{stale && '⚠ '}{time}</span>
       <span className="fv-summary-text">{text}</span>
       {failed.length > 0 && <span className="warn" style={{ fontSize: 12 }}
