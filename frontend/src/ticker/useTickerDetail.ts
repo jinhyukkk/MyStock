@@ -30,15 +30,25 @@ export function useTickerDetail(symbol: string | undefined) {
       const s: DetailStatus = (res as Partial<{ status: DetailStatus }>).status ?? 'ready'
       if (s === 'pending') {
         if (tries + 1 >= MAX_POLLS) {
+          // detail은 status==='ready'일 때만 non-null이어야 한다(훅 계약). ready로
+          // 남아있던 옛 값을 여기서 비우지 않으면 status는 failed인데 detail은
+          // 이전 조회의 값이 non-null로 남아 화면이 "최신"으로 오해한다.
+          setDetail(null)
           setStatus('failed')
           setError('수집이 오래 걸립니다 — 다시 시도하세요.')
           return
         }
+        // reload 중 재조회가 pending으로 끝나면 옛 ready 값을 여기서 비운다.
+        // reload() 자체에서 비우면(과거 구현) 재조회 요청이 나가는 순간부터
+        // 화면 전체가 스켈레톤으로 깜빡인다 — 여기서만 비우면 실제로
+        // "더 이상 ready가 아니다"라고 확정된 시점에만 사라진다.
+        setDetail(null)
         setStatus('pending')
         timer.current = setTimeout(() => run(mine, tries + 1), POLL_MS)
         return
       }
       if (s === 'failed') {
+        setDetail(null)
         setStatus('failed')
         setError((res as { message: string }).message)
         return
@@ -49,16 +59,21 @@ export function useTickerDetail(symbol: string | undefined) {
       setLoadedAt(Date.now())
     }).catch(e => {
       if (gen.current !== mine) return
+      setDetail(null)
       setStatus('failed')
       setError(String(e))
     })
   }, [symbol])
 
+  // detail을 여기서 비우거나 status를 loading으로 내리면 새로고침 버튼을 누를 때마다
+  // (관심 등록·매매 기록 저장 후 reload도 마찬가지) 화면이 통째로 스켈레톤으로
+  // 사라졌다가 다시 그려진다 — 요청이 나가는 그 순간에 이미 detail이 null이 되기
+  // 때문이다. 대신 run()의 각 종료 분기에서만 detail을 비워서, 응답이 실제로
+  // ready가 아닌 것으로 확정된 시점에만 화면이 바뀌게 한다. 재조회 중에는 이전
+  // ready 화면이 그대로 남고, 버튼의 busy 플래그만으로 "갱신 중…"을 표시한다.
   const reload = useCallback(() => {
     if (timer.current) clearTimeout(timer.current)
     gen.current += 1
-    setDetail(null)
-    setStatus('loading')
     setError(null)
     run(gen.current, 0)
   }, [run])
