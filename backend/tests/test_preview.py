@@ -1,6 +1,6 @@
 import pytest
 
-from app import preview
+from app import fetchers, preview
 
 
 @pytest.fixture(autouse=True)
@@ -36,3 +36,25 @@ def test_failure_is_remembered_then_expires(monkeypatch):
 
 def test_unknown_symbol_has_no_failure():
     assert preview._recent_failure("005930") is None
+
+
+SAMSUNG = {"symbol": "005930", "name": "삼성전자", "market": "KR",
+           "is_etf": 0, "yf_symbol": "005930.KS", "currency": "KRW"}
+
+
+def test_resolve_takes_exact_symbol_match(monkeypatch):
+    monkeypatch.setattr(fetchers, "search_symbols", lambda q, conn=None: [SAMSUNG])
+    assert preview._resolve("005930") == SAMSUNG
+
+
+def test_resolve_rejects_partial_match(monkeypatch):
+    # 부분 일치를 받아들이면 사용자가 요청하지 않은 종목이 그 URL에 눌러앉는다.
+    monkeypatch.setattr(fetchers, "search_symbols", lambda q, conn=None: [SAMSUNG])
+    assert preview._resolve("NOPE") is None
+
+
+def test_resolve_survives_search_failure(monkeypatch):
+    def boom(q, conn=None):
+        raise RuntimeError("network down")
+    monkeypatch.setattr(fetchers, "search_symbols", boom)
+    assert preview._resolve("005930") is None
