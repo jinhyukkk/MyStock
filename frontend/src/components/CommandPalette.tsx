@@ -4,8 +4,7 @@ import { get } from '../api'
 import type { Dashboard, SearchResult } from '../types'
 
 interface Item {
-  symbol: string; name: string; market: string; tracked: boolean
-  raw?: SearchResult
+  symbol: string; name: string; market: string
 }
 
 export default function CommandPalette() {
@@ -37,7 +36,7 @@ export default function CommandPalette() {
     inputRef.current?.focus()
     get<Dashboard>('/api/dashboard').then(d => {
       const m = new Map(d.signals.map(s => [s.symbol,
-        { symbol: s.symbol, name: s.name, market: s.market, tracked: true }]))
+        { symbol: s.symbol, name: s.name, market: s.market }]))
       setTracked(m)
       setItems([...m.values()])
     }).catch(() => {})
@@ -52,7 +51,7 @@ export default function CommandPalette() {
     const t = setTimeout(() => {
       get<SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}`).then(rs => {
         setItems(rs.map(r => tracked.get(r.symbol) ??
-          { symbol: r.symbol, name: r.name, market: r.market, tracked: false, raw: r }))
+          { symbol: r.symbol, name: r.name, market: r.market }))
         setSel(0); setPending(false)
       }).catch(() => { setItems([]); setPending(false); setSearchErr(true) })
     }, 300)
