@@ -132,9 +132,13 @@ def get_market(market: str, now: float | None = None) -> dict:
     mod = _module(market)
     blocks = list(mod.BUILDERS)
     if not any(_key(market, b) in _cache.values for b in blocks):
-        # force=True 로 첫 방문을 완전히 채운다 — TTL 이 경과 시간(now)보다 크면
-        # (예: KR investors 30분) force 없이는 그 블록만 빈 채로 남는다.
-        refresh(market, force=True, now=now)
+        # 첫 방문은 TTL 을 따지지 않고 채운다 — `_is_stale` 은 "한 번도 안 받았다"를
+        # `now - 0 > ttl` 로 판단해서, 주입된 시계가 TTL 보다 작으면 그 블록이 빈 채 남는다.
+        # 백오프는 지킨다: 전 블록이 실패한 시장은 매 요청이 여기로 다시 들어오는데,
+        # 그때 재시도까지 하면 응답이 블록 수 × 타임아웃만큼 느려진다.
+        for b in blocks:
+            if not _in_backoff(market, b, now):
+                _refresh_block(market, b, now)
     elif any(_is_stale(market, b, now) and not _in_backoff(market, b, now) for b in blocks):
         threading.Thread(target=_refresh_in_background, args=(market,), daemon=True).start()
 

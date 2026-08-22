@@ -90,6 +90,34 @@ def test_ttl_skips_fresh_blocks(monkeypatch):
     assert calls["n"] == 2
 
 
+def test_cold_cache_ignores_ttl(monkeypatch):
+    """콜드 캐시 첫 방문은 TTL 을 안 본다 — `_is_stale` 은 "한 번도 안 받았다"를
+    `now - 0 > ttl` 로 판단해서, 시계가 TTL 보다 작으면 그 블록만 빈 채로 남았었다."""
+    _ok_fetch(monkeypatch)
+    # 주입된 now(1000.0) 보다 훨씬 큰 TTL 을 줘서 예전 버그(=이 블록만 안 채워짐)를 재현한다
+    monkeypatch.setitem(market_us.TTL_SEC, "indices", 10**9)
+    m = market.get_market("US", now=1000.0)
+    assert m["indices"] and m["indices"][0]["last"] == 110.0
+
+
+def test_cold_cache_backoff_skips_retry(monkeypatch):
+    """전 블록이 실패해 캐시가 비면 매 요청이 콜드 캐시 분기로 다시 들어온다 —
+    그렇다고 백오프까지 무시하고 재시도하면 블록 수 × 타임아웃만큼 느려진다."""
+    calls = {"n": 0}
+    def boom(*a, **k):
+        calls["n"] += 1
+        raise RuntimeError("down")
+    monkeypatch.setattr(market_fetch, "intraday", boom)
+    monkeypatch.setattr(market_fetch, "daily_closes", boom)
+    monkeypatch.setattr(market_fetch, "screen", boom)
+    monkeypatch.setattr(market_fetch, "news", boom)
+    market.get_market("US", now=1000.0)          # 전 블록 실패 → cache.values 는 여전히 빈 채
+    n = calls["n"]
+    assert n > 0
+    market.get_market("US", now=1000.0 + 1)      # 백오프(3분) 안 — 재시도하면 안 된다
+    assert calls["n"] == n
+
+
 def test_pct_handles_missing():
     assert market._pct(None, 100) is None
     assert market._pct(100, None) is None
