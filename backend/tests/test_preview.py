@@ -1,17 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app import fetchers, preview, sentiment
+from app import db, fetchers, preview, sentiment
 from app.main import create_app
-
-
-@pytest.fixture(autouse=True)
-def clean_preview_state():
-    """모듈 레벨 상태는 프로세스 수명 동안 남는다 — 테스트끼리 새게 두면
-    앞 테스트의 인플라이트가 뒤 테스트를 pending으로 붙잡는다."""
-    preview.reset()
-    yield
-    preview.reset()
 
 
 def test_acquire_is_exclusive_until_released():
@@ -125,3 +116,61 @@ def test_track_flips_preview_row_into_watchlist(client):
 
 def test_track_unknown_symbol_is_404(client):
     assert client.put("/api/watchlist/NOPE").status_code == 404
+
+
+class _FakeBG:
+    """`BackgroundTasks` 대역 — job을 실제로 돌리지 않고 호출만 모은다.
+
+    인플라이트가 유지된 상태(=job이 끝나지 않은 상태)에서 반복 폴링이 몇 번
+    더 job을 띄우려 드는지 보는 게 목적이라, job을 실행해버리면 그 창을 볼 수 없다."""
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    def add_task(self, fn, *args):
+        self.calls.append((fn, args))
+
+
+def test_poll_starts_job_exactly_once_while_inflight():
+    """폴링이 반복돼도 인플라이트인 동안은 `bg.add_task`가 정확히 한 번만 불려야 한다.
+
+    이 가드가 `poll` 밖으로 빠지면(예: `_acquire` 없이 매번 add_task) 폴링 N회가
+    같은 심볼에 수집 job N개를 띄운다 — TestClient에서는 첫 job이 동기로 끝나
+    두 번째 GET이 이미 ready라서 이 회귀가 기존 테스트를 통과한 채로 숨는다."""
+    fake_bg = _FakeBG()
+    preview.poll("005930", fake_bg, None)
+    preview.poll("005930", fake_bg, None)
+    preview.poll("005930", fake_bg, None)
+    assert len(fake_bg.calls) == 1
+
+
+@pytest.fixture
+def thread_db(tmp_path):
+    tdb = db.ThreadLocalDB(str(tmp_path / "job.db"))
+    yield tdb
+    tdb.close_all()
+
+
+def test_job_releases_inflight_when_resolve_fails(thread_db, monkeypatch):
+    """`_resolve`가 None을 반환하는 경로(알 수 없는 심볼)에서도 `finally: _release`가
+    돌아야 한다 — 안 그러면 그 심볼이 프로세스가 살아 있는 동안 영원히 pending으로 굳는다."""
+    monkeypatch.setattr(fetchers, "search_symbols", lambda q, conn=None: [])
+    preview._acquire("NOPE")
+    preview._job("NOPE", thread_db)
+    assert preview.is_inflight("NOPE") is False
+
+
+def test_job_releases_inflight_when_refresh_all_raises(thread_db, monkeypatch, ohlcv_up):
+    """`refresh_all`이 예외를 던지는 경로에서도 인플라이트가 풀려야 한다 —
+    그렇지 않으면 일시적 오류 한 번이 그 심볼을 영구 pending으로 만든다."""
+    from app import service
+
+    monkeypatch.setattr(fetchers, "search_symbols", lambda q, conn=None: [SAMSUNG])
+
+    def boom(*a, **k):
+        raise RuntimeError("network down")
+    monkeypatch.setattr(service, "refresh_all", boom)
+
+    preview._acquire("005930")
+    preview._job("005930", thread_db)
+    assert preview.is_inflight("005930") is False
