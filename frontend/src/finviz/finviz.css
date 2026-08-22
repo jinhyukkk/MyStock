@@ -187,6 +187,13 @@
 .fv-earn td:first-child { width: 64px; vertical-align: top; padding-top: 6px; }
 
 /* ── 반응형: theme.css 의 820px 기준과 맞춘다 ── */
+/* 한글 종목명(최대 130px)이 영문 티커(약 40px)보다 훨씬 넓어 좁은 폭에서 시그널 표
+   넘침을 악화시킨다. 넘침 자체(finviz 데스크톱 레이아웃을 그대로 옮긴 결과)는 이 작업의
+   책임 범위가 아니라 없애지 않되, 한글 이름 때문에 더 나빠진 폭만큼은 되돌린다.
+   전체 이름은 title 속성에 남아 있고 ellipsis 로 잘리므로 정보 손실은 없다. */
+@media (max-width: 1200px) {
+  .fv-table td .fv-tk { max-width: 70px; }
+}
 @media (max-width: 1000px) {
   .fv-row.signals { grid-template-columns: 1fr 1fr; }
   .fv-row.signals > :last-child { grid-column: 1 / -1; }

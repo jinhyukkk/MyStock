@@ -126,9 +126,13 @@ export default function Dashboard() {
   const stale = isStale(data.fetched_at, now)
   return (
     <div className="fv">
+      {/* MarketSummary 의 market prop 은 토글 표시 전용 — 사용자가 방금 누른 선택을 즉시
+          보여줘야 한다. 반면 text 는 화면에 그려진 데이터(data)를 설명하므로 data.market 을 쓴다.
+          전환 도중 몇 초는 market !== data.market 일 수 있는데, 그때 토글은 새 시장을 가리키되
+          문장은 아직 화면에 있는 이전 시장 숫자를 정확히 설명해야 오독이 없다. */}
       <MarketSummary market={market} onMarket={pickMarket}
                      time={`기준 ${relativeTime(data.fetched_at, now)}`}
-                     text={summaryText(data.indices, market)}
+                     text={summaryText(data.indices, data.market)}
                      stale={stale} failed={data.failed} busy={busy} onRefresh={refresh} />
 
       <div className="fv-row charts">
@@ -143,12 +147,14 @@ export default function Dashboard() {
         {BREADTH.map(b => <BreadthBar key={b.leftLabel + b.center} b={b} />)}
       </div>
 
+      {/* 아래 라벨·소수점 분기는 전부 data.market 을 본다 — market(사용자 선택)이 아니라
+          화면에 그려진 값이 실제로 어느 시장 것인지를 설명해야 하기 때문 */}
       <div className="fv-row signals">
-        <SignalTable rows={data.signals_up} krw={market === 'KR'} />
-        <SignalTable rows={data.signals_down} gear krw={market === 'KR'} />
+        <SignalTable rows={data.signals_up} krw={data.market === 'KR'} />
+        <SignalTable rows={data.signals_down} gear krw={data.market === 'KR'} />
         <Panel className="fv-heatmap-panel" gear>
           <div className="fv-panel-title"><span>
-            {market === 'KR' ? 'KOSPI 대형주 – 1일 등락' : 'US Large Caps - 1 Day Performance'}</span></div>
+            {data.market === 'KR' ? 'KOSPI 대형주 – 1일 등락' : 'US Large Caps - 1 Day Performance'}</span></div>
           <Heatmap sectors={data.heatmap} />
         </Panel>
       </div>
@@ -177,7 +183,7 @@ export default function Dashboard() {
 
       <div className="fv-row quotes" style={data.futures.length === 0 ? { gridTemplateColumns: '1fr' } : undefined}>
         {data.futures.length > 0 && <QuoteTable title="Futures" rows={data.futures} />}
-        <QuoteTable title={market === 'KR' ? '환율 & 금리' : 'Forex & Bonds'} rows={data.forex_bonds} />
+        <QuoteTable title={data.market === 'KR' ? '환율 & 금리' : 'Forex & Bonds'} rows={data.forex_bonds} />
       </div>
     </div>
   )
