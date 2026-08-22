@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import '../finviz/finviz.css'
 import { get, post } from '../api'
 import { isStale, relativeTime } from '../time'
@@ -42,10 +42,23 @@ export default function Dashboard() {
   const [busy, setBusy] = useState(false)
   const [now, setNow] = useState(Date.now())
 
-  const load = useCallback(() => get<MarketData>(`/api/market?market=${market}`)
-    // 빠르게 두 번 토글하면 먼저 쏜 응답이 나중에 올 수 있다 — 지금 시장이 아니면 버린다
-    .then(d => { if (d.market === market) { setData(d); setError(null); setNow(Date.now()) } })
-    .catch(e => setError(String(e))), [market])
+  // 응답이 도착했을 때 "그 사이 시장이 바뀌었는가"를 봐야 한다. state 를 클로저로 읽으면
+  // 요청을 쏠 때 캡처된 옛 값이라 자기 자신과 비교하게 되어 항상 참이 된다 — ref 는 항상 최신을 가리킨다.
+  const currentMarket = useRef(market)
+  useEffect(() => { currentMarket.current = market }, [market])
+
+  const load = useCallback(() => {
+    const requested = market
+    return get<MarketData>(`/api/market?market=${requested}`)
+      .then(d => {
+        if (currentMarket.current !== requested) return   // 그 사이 토글됨 — 늦게 온 응답을 버린다
+        setData(d); setError(null); setNow(Date.now())
+      })
+      .catch(e => {
+        if (currentMarket.current !== requested) return   // 옛 요청의 실패는 지금 진행 중인 요청과 무관하다
+        setError(String(e))
+      })
+  }, [market])
   useEffect(() => { load() }, [load])
 
   const pickMarket = (m: MarketName) => {
@@ -73,10 +86,19 @@ export default function Dashboard() {
   }, [load])
 
   const refresh = async () => {
+    const requested = market
     setBusy(true)
-    try { setData(await post<MarketData>(`/api/market/refresh?market=${market}`)); setNow(Date.now()) }
-    catch (e) { setError(String(e)) }
-    finally { setBusy(false) }
+    try {
+      const d = await post<MarketData>(`/api/market/refresh?market=${requested}`)
+      // load 와 같은 이유 — 새로고침 중에 시장을 바꿨으면 늦게 온 결과를 버린다
+      if (currentMarket.current !== requested) return
+      setData(d); setNow(Date.now())
+    } catch (e) {
+      if (currentMarket.current !== requested) return
+      setError(String(e))
+    } finally {
+      if (currentMarket.current === requested) setBusy(false)
+    }
   }
 
   if (error && !data) return (
