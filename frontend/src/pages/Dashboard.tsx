@@ -102,7 +102,10 @@ export default function Dashboard() {
     try {
       const d = await post<MarketData>(`/api/market/refresh?market=${market}`)
       if (mine !== gen.current) return
-      setData(d); setNow(Date.now())
+      // load() 의 성공 분기와 대칭 — I5 로 MarketSummary 가 error 를 렌더하게 되면서
+      // 이전 실패로 남은 error 를 지우지 않으면, 새로고침이 성공해도 "갱신 실패" 배지가
+      // 계속 남는다(재리뷰 지적).
+      setData(d); setError(null); setNow(Date.now())
     } catch (e) {
       if (mine !== gen.current) return
       setError(String(e))
