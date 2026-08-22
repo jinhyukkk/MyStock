@@ -153,7 +153,7 @@ def _build_forex_bonds() -> list[dict]:
 def _build_signals(spec: list[tuple[str, str, str, int]]) -> list[dict]:
     out = []
     for kind, mkt, label, n in spec:
-        for row in naver.ranking(kind, mkt, n)[:n]:
+        for row in naver.ranking(kind, mkt, n):
             out.append({"symbol": row["symbol"], "name": row["name"], "last": row["last"],
                         "change_pct": row["change_pct"], "volume": row["volume"],
                         "signal": label})

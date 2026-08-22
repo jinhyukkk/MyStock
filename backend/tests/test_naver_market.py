@@ -6,6 +6,24 @@ import pytest
 
 from app.sources import naver
 
+# conftest의 no_network_sources가 index_basic/ranking/investor_trend/market_index를
+# 막는다(I3) — 이 파일은 그 함수들의 실제 파싱 로직 자체가 검증 대상이므로, 여기서만
+# 원래 구현으로 되돌린다. 모듈 로드 시점(테스트가 하나도 안 돈 시점)에 잡아 두면
+# conftest의 몽키패치와 무관하게 항상 진짜 구현을 가리킨다. `_get`/`_get_front`는 각
+# 테스트가 직접 stub하므로 실네트워크는 여전히 타지 않는다.
+_REAL_INDEX_BASIC = naver.index_basic
+_REAL_RANKING = naver.ranking
+_REAL_INVESTOR_TREND = naver.investor_trend
+_REAL_MARKET_INDEX = naver.market_index
+
+
+@pytest.fixture(autouse=True)
+def _use_real_market_funcs(monkeypatch):
+    monkeypatch.setattr(naver, "index_basic", _REAL_INDEX_BASIC)
+    monkeypatch.setattr(naver, "ranking", _REAL_RANKING)
+    monkeypatch.setattr(naver, "investor_trend", _REAL_INVESTOR_TREND)
+    monkeypatch.setattr(naver, "market_index", _REAL_MARKET_INDEX)
+
 
 def test_num_parses_naver_strings():
     assert naver._num("281,500") == 281500.0

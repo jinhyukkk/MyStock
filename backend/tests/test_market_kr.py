@@ -4,6 +4,12 @@ import pytest
 from app import market, market_fetch, market_kr
 from app.sources import naver
 
+# conftest의 no_network_sources가 ranking/investor_trend를 막는다(I3). 이 파일의 다른
+# 테스트는 그 스텁을 그대로 쓰지만, 아래 두 테스트는 함수 자체의 예외 동작(I1)을
+# 검증해야 하므로 실제 구현으로 되돌려 쓴다. 모듈 로드 시점(패치 전)에 잡아 둔다.
+_REAL_RANKING = naver.ranking
+_REAL_INVESTOR_TREND = naver.investor_trend
+
 
 @pytest.fixture(autouse=True)
 def fresh_cache():
@@ -138,6 +144,52 @@ def test_kr_major_news_uses_names(monkeypatch):
     _ok(monkeypatch)
     m = market.get_market("KR", now=1000.0)
     assert m["major_news"][0]["name"] is not None
+
+
+def test_ranking_raises_when_stocks_key_missing(monkeypatch):
+    """네이버가 200으로 스키마가 바뀐 응답(예: {"code": "error"})을 주면, 빈 리스트로
+    조용히 넘어가지 않고 예외를 올려야 한다 — 그래야 상위에서 실패로 잡힌다(I1)."""
+    monkeypatch.setattr(naver, "ranking", _REAL_RANKING)
+    monkeypatch.setattr(naver, "_get", lambda path, params=None: {"code": "error"})
+    with pytest.raises(ValueError):
+        naver.ranking("up", "KOSPI", 5)
+
+
+def test_investor_trend_raises_when_bizdate_missing(monkeypatch):
+    """bizdate 가 없으면(스키마 변경) 예외를 올린다 — 위와 같은 이유(I1)."""
+    monkeypatch.setattr(naver, "investor_trend", _REAL_INVESTOR_TREND)
+    monkeypatch.setattr(naver, "_get", lambda path, params=None: {"personalValue": "1"})
+    with pytest.raises(ValueError):
+        naver.investor_trend("KOSPI")
+
+
+def test_kr_signals_block_fails_without_wiping_previous_value(monkeypatch):
+    """ranking() 이 올린 예외가 market.py 까지 전파돼 블록이 failed 에 들어가고,
+    빈 리스트가 성공으로 캐시되지 않으며, 직전 성공값이 그대로 남는다 — I1 의 진짜 요점."""
+    _ok(monkeypatch)
+    first = market.get_market("KR", now=1000.0)
+    assert first["signals_up"] != [] and "signals_up" not in first["failed"]
+
+    def boom(kind, mkt, n):
+        raise ValueError(f"naver ranking missing 'stocks': {kind}/{mkt}")
+    monkeypatch.setattr(naver, "ranking", boom)
+    second = market.get_market("KR", now=2000.0)   # TTL(10분) 지나 재시도
+    assert "signals_up" in second["failed"]
+    assert second["signals_up"] == first["signals_up"]   # 이전 값 유지, []로 안 덮인다
+
+
+def test_kr_investors_block_fails_without_wiping_previous_value(monkeypatch):
+    """investor_trend() 예외 전파도 signals_up 과 같은 격리를 지킨다(I1)."""
+    _ok(monkeypatch)
+    first = market.get_market("KR", now=1000.0)
+    assert first["investors"] != [] and "investors" not in first["failed"]
+
+    def boom(m):
+        raise ValueError(f"naver investor_trend missing 'bizdate': {m}")
+    monkeypatch.setattr(naver, "investor_trend", boom)
+    second = market.get_market("KR", now=3000.0)   # TTL(30분) 지나 재시도
+    assert "investors" in second["failed"]
+    assert second["investors"] == first["investors"]   # 이전 값 유지, []로 안 덮인다
 
 
 def test_sector_map_is_well_formed():

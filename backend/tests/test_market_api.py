@@ -2,7 +2,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app import market, market_fetch, market_kr, market_us
+from app import market, market_fetch, market_us
 from app.main import create_app
 from app.sources import naver
 

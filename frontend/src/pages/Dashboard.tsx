@@ -13,8 +13,13 @@ import type { IndexRow, MarketData, MarketName } from '../finviz/types'
 
 const MARKET_KEY = 'dashboard.market'
 function initialMarket(): MarketName {
-  const v = localStorage.getItem(MARKET_KEY)
-  return v === 'US' ? 'US' : 'KR'      // 기본은 한국. 알 수 없는 값도 KR 로 떨어진다
+  // getItem 도 Safari 프라이빗 모드 등에서 throw 할 수 있다(M1) — 그때는 기본값 KR.
+  try {
+    const v = localStorage.getItem(MARKET_KEY)
+    return v === 'US' ? 'US' : 'KR'      // 기본은 한국. 알 수 없는 값도 KR 로 떨어진다
+  } catch {
+    return 'KR'
+  }
 }
 
 /** finviz 상단 한 줄 요약 대신, 지수 등락으로 만든 문장. 뉴스 요약 소스가 없어
@@ -48,29 +53,34 @@ export default function Dashboard() {
   // 같아져 옛 요청이 통과한다(ABA 문제) — 세대는 단조 증가라 왕복해도 옛 요청은 반드시 걸러진다.
   const gen = useRef(0)
 
-  const load = useCallback(() => {
+  // refresh() 와 같은 형태의 세대 가드 + finally 로 busy 를 내린다. 예전에는
+  // `useEffect(() => setBusy(false), [data, error])` 로 내렸는데, setError 를 직전과
+  // 같은 문자열로 두 번 부르면 React 가 상태 변경을 bail-out 해 deps 가 안 바뀌고
+  // 이펙트가 안 돌아 busy 가 영구히 true 로 남는 문제가 있었다(I4).
+  const load = useCallback(async () => {
     const mine = ++gen.current
-    return get<MarketData>(`/api/market?market=${market}`)
-      .then(d => {
-        if (mine !== gen.current) return   // 그 사이 새 요청이 나갔다 — 늦게 온 응답을 버린다
-        setData(d); setError(null); setNow(Date.now())
-      })
-      .catch(e => {
-        if (mine !== gen.current) return   // 옛 요청의 실패는 지금 진행 중인 최신 요청과 무관하다
-        setError(String(e))
-      })
+    try {
+      const d = await get<MarketData>(`/api/market?market=${market}`)
+      if (mine !== gen.current) return   // 그 사이 새 요청이 나갔다 — 늦게 온 응답을 버린다
+      setData(d); setError(null); setNow(Date.now())
+    } catch (e) {
+      if (mine !== gen.current) return   // 옛 요청의 실패는 지금 진행 중인 최신 요청과 무관하다
+      setError(String(e))
+    } finally {
+      // 세대가 밀렸으면 그 사이 더 최신 요청이 자기 finally 에서 busy 를 책임진다.
+      if (mine === gen.current) setBusy(false)
+    }
   }, [market])
   useEffect(() => { load() }, [load])
 
   const pickMarket = (m: MarketName) => {
     if (m === market) return
-    localStorage.setItem(MARKET_KEY, m)
     setBusy(true)
     setMarket(m)          // load 가 market 에 걸려 있어 이 한 줄로 다시 받는다
+    // localStorage.setItem 은 Safari 프라이빗 모드 등에서 throw 할 수 있다(M1) — 상태
+    // 갱신 뒤에 두고 감싸서, 저장이 실패해도 토글 자체는 항상 동작하게 한다.
+    try { localStorage.setItem(MARKET_KEY, m) } catch { /* 저장 실패는 무시 — 다음 방문에 KR 기본값으로 돌아갈 뿐 */ }
   }
-  // 전환 요청이 끝나면(또는 실패하면) busy 를 내린다. data 를 지우지 않는 이유는
-  // 스켈레톤으로 되돌아가면 화면이 통째로 깜빡이기 때문 — 이전 시장을 두고 위에서 갱신한다.
-  useEffect(() => { setBusy(false) }, [data, error])
 
   // 백엔드는 TTL 이 지나면 백그라운드로 갱신하지만 열어둔 탭은 모른다 —
   // 탭으로 돌아올 때 다시 받고, 머무는 동안 "몇 분 전" 표기를 흘려보낸다.
@@ -133,7 +143,7 @@ export default function Dashboard() {
       <MarketSummary market={market} onMarket={pickMarket}
                      time={`기준 ${relativeTime(data.fetched_at, now)}`}
                      text={summaryText(data.indices, data.market)}
-                     stale={stale} failed={data.failed} busy={busy} onRefresh={refresh} />
+                     stale={stale} failed={data.failed} error={error} busy={busy} onRefresh={refresh} />
 
       <div className="fv-row charts">
         {data.indices.map(i => <IndexChart key={i.symbol} data={i} asOf={data.fetched_at} session={data.session} />)}

@@ -14,6 +14,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+
 import requests
 
 BASE = "https://m.stock.naver.com/api"
@@ -21,8 +24,28 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 TIMEOUT = 8
 
+# 시장 데이터 한 번 갱신에 지수·환율/채권·시그널·히트맵·수급까지 최대 18회를 순차로
+# 부른다(market_kr.py 참고). 병렬 차단 사례가 보고돼 있어(모듈 헤더) 호출 사이 최소
+# 간격을 강제한다. `_get`/`_get_front` **안**에 두는 이유: 단위 테스트는 이 두 함수를
+# monkeypatch로 통째로 갈아끼우므로, 게이트를 이 안에 두면 스텁이 게이트까지 함께
+# 대체돼 테스트는 느려지지 않는다. 반대로 `index_basic` 같은 상위 함수에서 별도 함수로
+# 불렀다면 상위 함수는 테스트에서 그대로 실행되므로 매 호출 0.3초씩 잠들었을 것이다.
+# 백그라운드 갱신 스레드와 요청 스레드가 겹칠 수 있어 락으로 보호한다.
+MIN_INTERVAL_SEC = 0.3
+_rate_lock = threading.Lock()
+_last_call_at = [0.0]
+
+
+def _throttle() -> None:
+    with _rate_lock:
+        wait = MIN_INTERVAL_SEC - (time.monotonic() - _last_call_at[0])
+        if wait > 0:
+            time.sleep(wait)
+        _last_call_at[0] = time.monotonic()
+
 
 def _get(path: str, params: dict | None = None):
+    _throttle()
     r = requests.get(f"{BASE}{path}", params=params,
                      headers={"User-Agent": UA, "Accept": "application/json"},
                      timeout=TIMEOUT)
@@ -79,6 +102,7 @@ def _num(v) -> float | None:
 
 
 def _get_front(path: str, params: dict | None = None):
+    _throttle()
     r = requests.get(f"{FRONT_BASE}{path}", params=params,
                      headers={"User-Agent": UA, "Accept": "application/json"},
                      timeout=TIMEOUT)
@@ -111,8 +135,13 @@ def ranking(kind: str, market: str, n: int) -> list[dict]:
     if kind not in RANKING_KINDS:
         raise ValueError(f"unknown ranking kind: {kind}")
     d = _get(f"/stocks/{kind}/{market}", {"page": 1, "pageSize": n})
+    # "stocks" 키 자체가 없으면(스키마 변경·에러 응답) 예외를 올린다. 빈 리스트는
+    # 정상("오늘 상승 종목 없음")일 수 있으므로 키 부재와 빈 리스트를 구분해야 한다 —
+    # 구분하지 않으면 []가 성공으로 캐시돼 화면이 "빈 화면"을 정상 데이터로 보여준다.
+    if not isinstance(d, dict) or "stocks" not in d:
+        raise ValueError(f"naver ranking missing 'stocks': {kind}/{market} → {d!r}")
     out = []
-    for s in (d or {}).get("stocks", []):
+    for s in d["stocks"]:
         code = s.get("itemCode")
         if not code:
             continue
@@ -132,6 +161,9 @@ def investor_trend(market: str) -> dict:
     "오늘 수급"으로 읽히지 않게 한다.
     """
     d = _get(f"/index/{market}/trend")
+    # "bizdate" 키 자체가 없으면 예외를 올린다(I1과 같은 이유 — ranking() 주석 참고).
+    if not isinstance(d, dict) or "bizdate" not in d:
+        raise ValueError(f"naver investor_trend missing 'bizdate': {market} → {d!r}")
     biz = str(d.get("bizdate") or "")
     date = f"{biz[:4]}-{biz[4:6]}-{biz[6:8]}" if len(biz) == 8 else None
     return {"date": date, "personal": _num(d.get("personalValue")),

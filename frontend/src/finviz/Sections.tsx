@@ -25,9 +25,10 @@ export function Panel({ children, gear, sample, className = '' }:
   )
 }
 
-export function MarketSummary({ market, onMarket, time, text, stale, failed, busy, onRefresh }: {
+export function MarketSummary({ market, onMarket, time, text, stale, failed, error, busy, onRefresh }: {
   market: MarketName; onMarket: (m: MarketName) => void
-  time: string; text: string; stale: boolean; failed: string[]; busy: boolean; onRefresh: () => void
+  time: string; text: string; stale: boolean; failed: string[]; error: string | null
+  busy: boolean; onRefresh: () => void
 }) {
   return (
     <div className="fv-summary">
@@ -41,6 +42,10 @@ export function MarketSummary({ market, onMarket, time, text, stale, failed, bus
       <span className="fv-summary-text">{text}</span>
       {failed.length > 0 && <span className="warn" style={{ fontSize: 12 }}
         title={failed.join(', ')}>일부 갱신 실패 ({failed.length})</span>}
+      {/* 데이터가 이미 있는 상태에서 요청이 실패했을 때(I5) — 예: KR 화면을 보다가 US 로
+          전환했는데 US 요청이 실패하면, 토글만 옮겨간 채 안내 없이 KR 화면이 남는다.
+          전문은 title 에 — 한 줄짜리 요약만 상시 노출한다. */}
+      {error && <span className="warn" style={{ fontSize: 12 }} title={error}>갱신 실패</span>}
       <button className="ghost" style={{ fontSize: 12, padding: '4px 10px' }}
               onClick={onRefresh} disabled={busy}>{busy ? '갱신 중…' : '새로고침'}</button>
     </div>
@@ -253,9 +258,11 @@ export function InsiderTop({ rows }: { rows: InsiderRow[] }) {
   )
 }
 
-/** 순매수 금액(억원). 부호를 항상 붙인다 — 수급은 방향이 값보다 먼저 읽혀야 한다. */
+/** 순매수 금액(억원). 부호를 항상 붙인다 — 수급은 방향이 값보다 먼저 읽혀야 한다.
+ *  마이너스는 U+002D(하이픈-마이너스)로 통일한다 — `pct()` 의 `toFixed` 가 만드는
+ *  부호와 같은 글리프여야 같은 화면에서 마이너스가 두 종류로 안 보인다(M4). */
 const flow = (v: number | null) =>
-  v === null ? '—' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toLocaleString('ko-KR')}억`
+  v === null ? '—' : `${v > 0 ? '+' : v < 0 ? '-' : ''}${Math.abs(v).toLocaleString('ko-KR')}억`
 
 /** 투자자별 순매수. 한국 시장에서 "누가 사고 누가 팔았나"는 지수 등락만큼 자주 보는 값이고
  *  finviz 에는 대응 블록이 없어 새로 만든다. 집계 기준일을 같이 찍는 이유: 장 마감 후
