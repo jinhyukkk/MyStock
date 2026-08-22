@@ -6,7 +6,8 @@
 """
 from __future__ import annotations
 
-from app import market_fetch as fetch
+from app import market_breadth, market_calendar, market_fetch as fetch, market_history
+from app import market_insider
 from app.market import _chg, _pct
 
 SESSION = {"tz": "America/New_York", "open": "09:30", "close": "16:00"}
@@ -19,7 +20,17 @@ TTL_SEC = {
     "signals_down": 10 * 60,
     "heatmap": 15 * 60,
     "headlines": 15 * 60,
+    # 일봉·공시 기반 블록은 갱신 비용이 커서 TTL 을 길게(한국판과 같은 기준).
+    "breadth": 30 * 60,
+    "patterns": 30 * 60,
+    "econ": 6 * 60 * 60,
+    "earnings": 6 * 60 * 60,
+    "insider": 6 * 60 * 60,
 }
+
+# 첫 화면을 기다리게 하지 않는 블록 — 종목마다 외부 호출이라 수십 초가 걸린다.
+# S&P 500 일봉(24초, 실측 2026-08-22)도 여기 둔다.
+SLOW_BLOCKS = ("breadth", "patterns", "earnings", "insider")
 
 INDICES = [("S&P 500", "^GSPC"), ("NASDAQ", "^IXIC"), ("DOW", "^DJI")]
 FUTURES = [("Crude Oil", "CL=F", 2), ("Natural Gas", "NG=F", 4), ("Gold", "GC=F", 2),
@@ -99,6 +110,26 @@ def _build_headlines() -> list[dict]:
     return fetch.news(HEADLINES_SYMBOL, limit=HEADLINES_COUNT)
 
 
+def _build_breadth() -> dict:
+    h = market_history.history("US")
+    return {"universe": h["label"], "as_of": h["as_of"],
+            "bars": market_breadth.breadth(h["closes"])}
+
+
+def _build_patterns() -> dict:
+    h = market_history.history("US")
+    return {"universe": h["label"], "as_of": h["as_of"],
+            "rows": market_breadth.patterns(h["closes"], h["names"])}
+
+
+def _build_earnings() -> dict:
+    return market_calendar.earnings(market_history.history("US")["rows"])
+
+
+def _build_insider() -> dict:
+    return market_insider.insider("US", market_history.history("US")["rows"])
+
+
 BUILDERS = {
     "indices": _build_indices,
     "futures": lambda: _build_quotes(FUTURES),
@@ -107,4 +138,9 @@ BUILDERS = {
     "signals_down": lambda: _build_signals(SCREENS_DOWN),
     "heatmap": _build_heatmap,
     "headlines": _build_headlines,
+    "breadth": _build_breadth,
+    "patterns": _build_patterns,
+    "econ": lambda: market_calendar.econ("US"),
+    "earnings": _build_earnings,
+    "insider": _build_insider,
 }

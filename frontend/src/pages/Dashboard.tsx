@@ -4,11 +4,9 @@ import { get, post } from '../api'
 import { isStale, relativeTime } from '../time'
 import IndexChart from '../finviz/IndexChart'
 import Heatmap from '../finviz/Heatmap'
-import { BreadthBar, EarningsCalendar, EconCalendar, Headlines, InsiderLatest, InsiderTop,
+import { BreadthRow, EarningsCalendar, EconCalendar, Headlines, InsiderLatest, InsiderTop,
          InvestorFlows, MajorNews, MarketSummary, Panel, PatternTable, QuoteTable,
          SignalTable } from '../finviz/Sections'
-import { BREADTH, EARNINGS, ECON_EMPTY_DATE, INSIDER_LATEST, INSIDER_TOP, PATTERNS_LEFT,
-         PATTERNS_RIGHT } from '../finviz/sample'
 import type { IndexRow, MarketData, MarketName } from '../finviz/types'
 
 const MARKET_KEY = 'dashboard.market'
@@ -37,9 +35,11 @@ function summaryText(indices: IndexRow[], market: MarketName): string {
 
 /**
  * 메인 페이지 — finviz.com 홈 구성, MyStock 테마.
- * 실데이터(`/api/market`): 지수 차트·시그널 표·히트맵·Major Movers·헤드라인·선물·환율/채권.
- * 샘플("샘플" 배지, `finviz/sample.ts`): Breadth·차트패턴·경제/실적 캘린더·인사이더 —
- * 소스가 생기면 섹션 단위로 교체한다.
+ * 모든 칸이 `/api/market` 실데이터다. 샘플은 없다.
+ * - 지수·시그널·히트맵·Major Movers·헤드라인·선물·환율/채권: 네이버/야후 시세
+ * - Breadth·차트패턴: 시총 상위 유니버스 일봉에서 자체 계산(backend/app/market_breadth.py)
+ * - 실적·인사이더: 종목마다 외부 호출이라 첫 화면 뒤 백그라운드로 채워진다(SLOW_BLOCKS)
+ * - 경제지표: 무료 키가 필요한 소스(ECOS·FRED) — 키가 없으면 그 칸이 발급 안내를 띄운다
  */
 export default function Dashboard() {
   const [market, setMarket] = useState<MarketName>(initialMarket)
@@ -157,7 +157,7 @@ export default function Dashboard() {
       )}
 
       <div className="fv-row breadth">
-        {BREADTH.map(b => <BreadthBar key={b.leftLabel + b.center} b={b} />)}
+        <BreadthRow block={data.breadth} />
       </div>
 
       {/* 아래 라벨·소수점 분기는 전부 data.market 을 본다 — market(사용자 선택)이 아니라
@@ -176,8 +176,8 @@ export default function Dashboard() {
       <div className="fv-row patterns">
         <div className="fv-col">
           <div className="fv-row two">
-            <PatternTable rows={PATTERNS_LEFT} />
-            <PatternTable rows={PATTERNS_RIGHT} />
+            <PatternTable block={data.patterns} half="left" />
+            <PatternTable block={data.patterns} half="right" />
           </div>
           <Headlines rows={data.headlines} now={now} />
         </div>
@@ -185,13 +185,15 @@ export default function Dashboard() {
       </div>
 
       <div className="fv-row calendar">
-        <EconCalendar emptyDate={ECON_EMPTY_DATE} />
-        <EarningsCalendar rows={EARNINGS} />
+        <EconCalendar block={data.econ} />
+        {/* 실적 일정은 유니버스 상위 종목만 본다 — 어디까지 본 목록인지 꼬리표로 남긴다 */}
+        <EarningsCalendar block={data.earnings} universe={data.breadth.universe} />
       </div>
 
       <div className="fv-row insider">
-        <InsiderLatest rows={INSIDER_LATEST} />
-        <InsiderTop rows={INSIDER_TOP} />
+        <InsiderLatest block={data.insider} krw={data.market === 'KR'}
+                       universe={data.breadth.universe} />
+        <InsiderTop block={data.insider} />
       </div>
 
       <div className="fv-row quotes" style={data.futures.length === 0 ? { gridTemplateColumns: '1fr' } : undefined}>

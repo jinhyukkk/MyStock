@@ -56,6 +56,8 @@ _SOURCE_FUNCS = {
     "app.sources.daum": ["quote"],
     "app.sources.krx_desc": ["describe"],
     "app.sources.dart": ["elestock", "stock_total", "corp_code", "available"],
+    "app.sources.fred": ["release_dates"],
+    "app.sources.ecos": ["key_statistics"],
 }
 
 
@@ -73,7 +75,43 @@ def no_network_sources(monkeypatch):
         for fn in funcs:
             monkeypatch.setattr(mod, fn, _blocked(f"{module_name}.{fn}"), raising=False)
     # `available()`만 예외 — 키 유무 판정이라 호출돼도 네트워크를 타지 않는다.
-    monkeypatch.setattr(importlib.import_module("app.sources.dart"),
-                        "available", lambda: False)
+    # 키가 실제로 있는 개발 PC 에서도 테스트는 "키 없음" 경로를 타야 결과가 같다.
+    for name in ("app.sources.dart", "app.sources.fred", "app.sources.ecos"):
+        monkeypatch.setattr(importlib.import_module(name), "available", lambda: False)
     # 회사 자료 갱신의 종목 간 sleep은 테스트에서 의미가 없다(8종목이면 2.4초).
     monkeypatch.setattr(importlib.import_module("app.company"), "SYMBOL_SLEEP_SEC", 0)
+
+
+# --- 대시보드 유니버스·일봉도 기본적으로 합성값으로 -------------------------------
+# breadth·패턴·실적·인사이더 블록은 `market_fetch`가 yfinance/FinanceDataReader를 직접
+# 부른다(`app.sources.*`가 아니라서 위 차단에 안 걸린다). 막기만 하면 블록이 실패로
+# 잡혀 `failed == []`를 보는 기존 테스트가 깨지므로, **성공하는 가짜 값**을 넣는다.
+_FAKE_UNIVERSE = [("005930", "삼성전자", "005930.KS"), ("000660", "SK하이닉스", "000660.KS"),
+                  ("035420", "NAVER", "035420.KS")]
+
+
+@pytest.fixture(autouse=True)
+def fake_market_universe(monkeypatch):
+    from datetime import date, timedelta
+
+    from app import market_fetch, market_history
+
+    market_history.reset_cache()
+
+    def _matrix(symbols, period="1y"):
+        idx = pd.bdate_range(end="2026-08-21", periods=260)
+        return pd.DataFrame({s: np.linspace(100, 160, len(idx)) for s in symbols}, index=idx)
+
+    monkeypatch.setattr(market_fetch, "krx_listing", lambda: [
+        {"symbol": c, "name": n, "market": "KOSPI", "marcap": 1e12, "change_pct": 1.0}
+        for c, n, _ in _FAKE_UNIVERSE])
+    monkeypatch.setattr(market_fetch, "sp500_listing", lambda: [
+        {"symbol": s, "name": s} for s in ("AAPL", "MSFT", "NVDA")])
+    monkeypatch.setattr(market_fetch, "daily_closes_matrix", _matrix)
+    monkeypatch.setattr(market_fetch, "earnings_date",
+                        lambda sym: (date.today() + timedelta(days=3)).isoformat())
+    monkeypatch.setattr(market_fetch, "insider_transactions", lambda sym, limit=6: [
+        {"owner": "HONG GILDONG", "relation": "Officer", "date": "2026-08-18",
+         "transaction": "Sale", "shares": 100.0, "value": 5000.0, "price": 50.0, "url": None}])
+    yield
+    market_history.reset_cache()
