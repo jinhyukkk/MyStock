@@ -132,7 +132,9 @@ def get_market(market: str, now: float | None = None) -> dict:
     mod = _module(market)
     blocks = list(mod.BUILDERS)
     if not any(_key(market, b) in _cache.values for b in blocks):
-        refresh(market, now=now)
+        # force=True 로 첫 방문을 완전히 채운다 — TTL 이 경과 시간(now)보다 크면
+        # (예: KR investors 30분) force 없이는 그 블록만 빈 채로 남는다.
+        refresh(market, force=True, now=now)
     elif any(_is_stale(market, b, now) and not _in_backoff(market, b, now) for b in blocks):
         threading.Thread(target=_refresh_in_background, args=(market,), daemon=True).start()
 
@@ -156,6 +158,7 @@ def get_market(market: str, now: float | None = None) -> dict:
     return out
 
 
-from app import market_us  # noqa: E402 — 위 정의를 시장 모듈이 import 한다
+from app import market_kr, market_us  # noqa: E402 — 위 정의를 시장 모듈이 import 한다
 
 MARKETS["US"] = market_us
+MARKETS["KR"] = market_kr
