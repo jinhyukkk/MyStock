@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import type { Breadth, EarningsRow, InsiderRow, PatternRow } from './sample'
-import type { Headline, MajorNewsRow, MarketName, QuoteRow, SignalRow } from './types'
+import type { Headline, InvestorRow, MajorNewsRow, MarketName, QuoteRow, SignalRow } from './types'
 
 const T = ({ s }: { s: string }) => <Link to={`/ticker/${s}`} className="fv-tk">{s}</Link>
 const pct = (v: number | null, d = 2) => v === null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(d)}%`
@@ -250,6 +250,37 @@ export function InsiderTop({ rows }: { rows: InsiderRow[] }) {
         </tbody>
       </table>
     </Panel>
+  )
+}
+
+/** 순매수 금액(억원). 부호를 항상 붙인다 — 수급은 방향이 값보다 먼저 읽혀야 한다. */
+const flow = (v: number | null) =>
+  v === null ? '—' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toLocaleString('ko-KR')}억`
+
+/** 투자자별 순매수. 한국 시장에서 "누가 사고 누가 팔았나"는 지수 등락만큼 자주 보는 값이고
+ *  finviz 에는 대응 블록이 없어 새로 만든다. 집계 기준일을 같이 찍는 이유: 장 마감 후
+ *  집계라 장중에는 전일 값이 보이는데, 날짜가 없으면 오늘 수급으로 읽힌다. */
+export function InvestorFlows({ rows }: { rows: InvestorRow[] }) {
+  return (
+    <>
+      {rows.map(r => (
+        <Panel key={r.market} className="fv-flow">
+          <div className="fv-panel-title">
+            <span>{r.market} 투자자 순매수</span>
+            <span className="fv-dim" style={{ fontWeight: 400 }}>{r.date ?? '기준일 미상'}</span>
+          </div>
+          <div className="fv-flow-row">
+            {([['개인', r.personal], ['외국인', r.foreign], ['기관', r.institution]] as const).map(
+              ([label, v]) => (
+                <div key={label}>
+                  <p className="fv-dim">{label}</p>
+                  <p className={`fv-flow-v ${sign(v)}`}>{flow(v)}</p>
+                </div>
+              ))}
+          </div>
+        </Panel>
+      ))}
+    </>
   )
 }
 

@@ -25,6 +25,7 @@
 .fv-row.calendar { grid-template-columns: 1fr minmax(340px, 560px); }
 .fv-row.insider { grid-template-columns: 1fr minmax(340px, 560px); }
 .fv-row.quotes { grid-template-columns: 1fr 1fr; }
+.fv-row.flows { grid-template-columns: repeat(2, 1fr); }
 
 /* ── 패널: theme.css 의 .card 와 같은 유리 카드. hover 들림 효과는 표가 많은
    화면에서 마우스만 움직여도 화면이 출렁여 제외 ── */
@@ -45,6 +46,13 @@
 .fv-panel-title {
   font-weight: 600; font-size: 13px; padding: 12px 14px 10px; border-bottom: 1px solid var(--border);
 }
+/* 투자자 수급 패널: 제목 옆에 집계 기준일을 오른쪽 끝으로 밀어 붙인다 */
+.fv-flow .fv-panel-title { display: flex; justify-content: space-between; align-items: baseline; }
+.fv-flow-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 10px 12px 12px; }
+.fv-flow-row p { margin: 0; font-size: 11px; }
+.fv-flow-v { font-size: 15px; font-weight: 700; margin-top: 3px !important; font-variant-numeric: tabular-nums; }
+.fv-flow-v.up { color: var(--buy); }
+.fv-flow-v.down { color: var(--sell); }
 
 /* ── 표: theme.css 의 table 규칙과 같은 결, 밀도만 finviz 처럼 촘촘하게 ── */
 .fv-table { width: 100%; border-collapse: collapse; }
@@ -187,7 +195,7 @@
 }
 @media (max-width: 820px) {
   .fv-row.charts, .fv-row.signals, .fv-row.patterns, .fv-row.two, .fv-row.calendar, .fv-row.insider,
-  .fv-row.quotes, .fv-row.breadth { grid-template-columns: 1fr; }
+  .fv-row.quotes, .fv-row.breadth, .fv-row.flows { grid-template-columns: 1fr; }
   .fv-row.signals > :last-child { grid-column: auto; }
   .fv-panel { overflow-x: auto; }
   .fv-summary { flex-wrap: wrap; }

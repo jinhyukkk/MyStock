@@ -5,7 +5,8 @@ import { isStale, relativeTime } from '../time'
 import IndexChart from '../finviz/IndexChart'
 import Heatmap from '../finviz/Heatmap'
 import { BreadthBar, EarningsCalendar, EconCalendar, Headlines, InsiderLatest, InsiderTop,
-         MajorNews, MarketSummary, Panel, PatternTable, QuoteTable, SignalTable } from '../finviz/Sections'
+         InvestorFlows, MajorNews, MarketSummary, Panel, PatternTable, QuoteTable,
+         SignalTable } from '../finviz/Sections'
 import { BREADTH, EARNINGS, ECON_EMPTY_DATE, INSIDER_LATEST, INSIDER_TOP, PATTERNS_LEFT,
          PATTERNS_RIGHT } from '../finviz/sample'
 import type { IndexRow, MarketData, MarketName } from '../finviz/types'
@@ -133,6 +134,10 @@ export default function Dashboard() {
       <div className="fv-row charts">
         {data.indices.map(i => <IndexChart key={i.symbol} data={i} asOf={data.fetched_at} session={data.session} />)}
       </div>
+
+      {data.investors.length > 0 && (
+        <div className="fv-row flows"><InvestorFlows rows={data.investors} /></div>
+      )}
 
       <div className="fv-row breadth">
         {BREADTH.map(b => <BreadthBar key={b.leftLabel + b.center} b={b} />)}
