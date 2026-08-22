@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import type { Breadth, EarningsRow, InsiderRow, PatternRow } from './sample'
-import type { Headline, MajorNewsRow, QuoteRow, SignalRow } from './types'
+import type { Headline, InvestorRow, MajorNewsRow, MarketName, QuoteRow, SignalRow } from './types'
 
 const T = ({ s }: { s: string }) => <Link to={`/ticker/${s}`} className="fv-tk">{s}</Link>
 const pct = (v: number | null, d = 2) => v === null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(d)}%`
@@ -25,16 +25,27 @@ export function Panel({ children, gear, sample, className = '' }:
   )
 }
 
-export function MarketSummary({ time, text, stale, failed, busy, onRefresh }: {
-  time: string; text: string; stale: boolean; failed: string[]; busy: boolean; onRefresh: () => void
+export function MarketSummary({ market, onMarket, time, text, stale, failed, error, busy, onRefresh }: {
+  market: MarketName; onMarket: (m: MarketName) => void
+  time: string; text: string; stale: boolean; failed: string[]; error: string | null
+  busy: boolean; onRefresh: () => void
 }) {
   return (
     <div className="fv-summary">
-      <span className="fv-summary-dot" />
+      <div className="fv-mkt" role="group" aria-label="시장 선택">
+        {(['KR', 'US'] as const).map(m => (
+          <button key={m} className={m === market ? 'on' : ''} aria-pressed={m === market}
+                  onClick={() => onMarket(m)}>{m}</button>
+        ))}
+      </div>
       <span className={`fv-summary-time${stale ? ' warn' : ''}`}>{stale && '⚠ '}{time}</span>
       <span className="fv-summary-text">{text}</span>
       {failed.length > 0 && <span className="warn" style={{ fontSize: 12 }}
         title={failed.join(', ')}>일부 갱신 실패 ({failed.length})</span>}
+      {/* 데이터가 이미 있는 상태에서 요청이 실패했을 때(I5) — 예: KR 화면을 보다가 US 로
+          전환했는데 US 요청이 실패하면, 토글만 옮겨간 채 안내 없이 KR 화면이 남는다.
+          전문은 title 에 — 한 줄짜리 요약만 상시 노출한다. */}
+      {error && <span className="warn" style={{ fontSize: 12 }} title={error}>갱신 실패</span>}
       <button className="ghost" style={{ fontSize: 12, padding: '4px 10px' }}
               onClick={onRefresh} disabled={busy}>{busy ? '갱신 중…' : '새로고침'}</button>
     </div>
@@ -61,17 +72,19 @@ export function BreadthBar({ b }: { b: Breadth }) {
   )
 }
 
-export function SignalTable({ rows, gear }: { rows: SignalRow[]; gear?: boolean }) {
+export function SignalTable({ rows, gear, krw }: { rows: SignalRow[]; gear?: boolean; krw?: boolean }) {
   return (
     <Panel gear={gear}>
       <table className="fv-table">
-        <thead><tr><th>Ticker</th><th>Last</th><th>Change %</th><th>Volume</th><th className="l">Signal</th></tr></thead>
+        <thead><tr><th>{krw ? '종목' : 'Ticker'}</th><th>{krw ? '현재가' : 'Last'}</th>
+          <th>Change %</th><th>{krw ? '거래량' : 'Volume'}</th><th className="l">Signal</th></tr></thead>
         <tbody>
           {rows.length === 0 && <tr><td colSpan={5} className="c fv-dim">스크리너 응답 없음</td></tr>}
           {rows.map((r, i) => (
             <tr key={i}>
-              <td><span className="fv-logo" aria-hidden>{r.symbol[0]}</span><T s={r.symbol} /></td>
-              <td className="n">{num(r.last, 2)}</td>
+              <td><span className="fv-logo" aria-hidden>{(r.name ?? r.symbol)[0]}</span>
+                <Link to={`/ticker/${r.symbol}`} className="fv-tk" title={r.symbol}>{r.name ?? r.symbol}</Link></td>
+              <td className="n">{num(r.last, krw ? 0 : 2)}</td>
               <td className={`n ${sign(r.change_pct)}`}>{pct(r.change_pct)}</td>
               <td className="n">{vol(r.volume)}</td>
               <td className="l"><span className="fv-signal">{r.signal}</span></td>
@@ -110,7 +123,7 @@ export function MajorNews({ rows }: { rows: MajorNewsRow[] }) {
         {rows.length === 0 && <div className="fv-major-row fv-dim">—</div>}
         {rows.map(r => (
           <div key={r.symbol} className="fv-major-row">
-            <T s={r.symbol} />
+            <Link to={`/ticker/${r.symbol}`} className="fv-tk" title={r.symbol}>{r.name ?? r.symbol}</Link>
             <span className={`fv-badge ${sign(r.change_pct)}`}>{pct(r.change_pct)}</span>
           </div>
         ))}
@@ -242,6 +255,39 @@ export function InsiderTop({ rows }: { rows: InsiderRow[] }) {
         </tbody>
       </table>
     </Panel>
+  )
+}
+
+/** 순매수 금액(억원). 부호를 항상 붙인다 — 수급은 방향이 값보다 먼저 읽혀야 한다.
+ *  마이너스는 U+002D(하이픈-마이너스)로 통일한다 — `pct()` 의 `toFixed` 가 만드는
+ *  부호와 같은 글리프여야 같은 화면에서 마이너스가 두 종류로 안 보인다(M4). */
+const flow = (v: number | null) =>
+  v === null ? '—' : `${v > 0 ? '+' : v < 0 ? '-' : ''}${Math.abs(v).toLocaleString('ko-KR')}억`
+
+/** 투자자별 순매수. 한국 시장에서 "누가 사고 누가 팔았나"는 지수 등락만큼 자주 보는 값이고
+ *  finviz 에는 대응 블록이 없어 새로 만든다. 집계 기준일을 같이 찍는 이유: 장 마감 후
+ *  집계라 장중에는 전일 값이 보이는데, 날짜가 없으면 오늘 수급으로 읽힌다. */
+export function InvestorFlows({ rows }: { rows: InvestorRow[] }) {
+  return (
+    <>
+      {rows.map(r => (
+        <Panel key={r.market} className="fv-flow">
+          <div className="fv-panel-title">
+            <span>{r.market} 투자자 순매수</span>
+            <span className="fv-dim" style={{ fontWeight: 400 }}>{r.date ?? '기준일 미상'}</span>
+          </div>
+          <div className="fv-flow-row">
+            {([['개인', r.personal], ['외국인', r.foreign], ['기관', r.institution]] as const).map(
+              ([label, v]) => (
+                <div key={label}>
+                  <p className="fv-dim">{label}</p>
+                  <p className={`fv-flow-v ${sign(v)}`}>{flow(v)}</p>
+                </div>
+              ))}
+          </div>
+        </Panel>
+      ))}
+    </>
   )
 }
 

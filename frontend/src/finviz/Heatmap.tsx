@@ -82,12 +82,13 @@ export default function Heatmap({ sectors: input }: { sectors: HeatSector[] }) {
                 const font = size > 90 ? 22 : size > 60 ? 15 : size > 40 ? 11 : size > 26 ? 8 : 0
                 return (
                   <Link key={t.symbol} to={`/ticker/${t.symbol}`} className="fv-cell"
-                        title={`${t.symbol} ${t.change_pct === null ? '—' : (t.change_pct > 0 ? '+' : '') + t.change_pct.toFixed(2) + '%'}`}
+                        title={`${t.name ? t.name + ' ' : ''}${t.symbol} ${t.change_pct === null ? '—' : (t.change_pct > 0 ? '+' : '') + t.change_pct.toFixed(2) + '%'}`}
                         style={{ left: pct(c.x, inner.w), top: pct(c.y, inner.h),
                                  width: pct(c.w, inner.w), height: pct(c.h, inner.h),
                                  background: color(t.change_pct), fontSize: font }}>
                     {font > 0 && <>
-                      <span className="fv-cell-t">{t.symbol}</span>
+                      {/* 한글 이름은 영문 티커보다 넓다 — 글자가 작아지는 칸에서는 코드가 낫다 */}
+                      <span className="fv-cell-t">{font >= 11 ? (t.name ?? t.symbol) : t.symbol}</span>
                       {font >= 11 && t.change_pct !== null && <span className="fv-cell-c">
                         {t.change_pct > 0 ? '+' : ''}{t.change_pct.toFixed(2)}%</span>}
                     </>}
