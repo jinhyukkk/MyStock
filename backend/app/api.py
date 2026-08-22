@@ -114,6 +114,19 @@ def add_watch(item: WatchItem, request: Request):
     return {"ok": True}
 
 
+@router.put("/watchlist/{symbol}")
+def track_watch(symbol: str, request: Request):
+    """이미 있는 행의 플래그만 세운다.
+
+    `POST /api/watchlist`는 yf_symbol·currency까지 본문으로 받는데, 임시 조회로 만들어진
+    행은 그 값이 이미 정확하다. 프론트가 메타데이터를 되돌려 보내면 틀릴 여지만 생긴다."""
+    conn = _conn(request)
+    if not db.get_ticker(conn, symbol):
+        raise HTTPException(404, "ticker not found")
+    db.set_watchlist(conn, symbol, 1)
+    return {"ok": True}
+
+
 @router.delete("/watchlist/{symbol}")
 def remove_watch(symbol: str, request: Request):
     db.remove_from_watchlist(_conn(request), symbol)

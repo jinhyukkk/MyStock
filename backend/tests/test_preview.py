@@ -111,3 +111,17 @@ def test_registered_ticker_is_ready_and_tracked(client):
     out = client.get("/api/tickers/005930").json()
     assert out["status"] == "ready"
     assert out["tracked"] is True
+
+
+def test_track_flips_preview_row_into_watchlist(client):
+    client.get("/api/tickers/005930")
+    assert client.get("/api/tickers/005930").json()["tracked"] is False
+
+    assert client.put("/api/watchlist/005930").status_code == 200
+    assert client.get("/api/tickers/005930").json()["tracked"] is True
+    # 등록했으니 이제 대시보드(=시간당 갱신 대상)에도 나타난다.
+    assert len(client.get("/api/dashboard").json()["signals"]) == 1
+
+
+def test_track_unknown_symbol_is_404(client):
+    assert client.put("/api/watchlist/NOPE").status_code == 404
