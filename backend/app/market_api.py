@@ -14,11 +14,12 @@ router = APIRouter(prefix="/api")
 @router.get("/market")
 async def get_market():
     # 첫 호출은 야후를 동기로 기다린다(수 초). 이벤트 루프를 막지 않도록 스레드로.
-    return await asyncio.to_thread(market.get_market)
+    # US 고정 — Task 4 에서 ?market= 쿼리와 KR 기본값을 붙인다.
+    return await asyncio.to_thread(market.get_market, "US")
 
 
 @router.post("/market/refresh")
 async def refresh_market():
     """TTL 무시하고 전부 다시 받는다 — 화면의 '새로고침' 버튼."""
-    await asyncio.to_thread(lambda: market.refresh(force=True))
-    return await asyncio.to_thread(market.get_market)
+    await asyncio.to_thread(lambda: market.refresh("US", force=True))
+    return await asyncio.to_thread(market.get_market, "US")
