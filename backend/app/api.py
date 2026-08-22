@@ -1,9 +1,9 @@
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
 
-from app import codef, db, fetchers, service
+from app import codef, db, fetchers, preview, service
 
 router = APIRouter(prefix="/api")
 
@@ -68,11 +68,20 @@ def search(q: str, request: Request):
 
 
 @router.get("/tickers/{symbol}")
-def ticker_detail(symbol: str, request: Request):
-    out = service.get_ticker_detail(_conn(request), symbol)
+def ticker_detail(symbol: str, request: Request, bg: BackgroundTasks):
+    """미등록 심볼도 연다 — 없으면 백그라운드로 해석·수집하고 pending을 준다.
+
+    404를 주지 않는 이유는 `/company`와 같다. 심볼 해석이 캐시 없는 외부 호출이라
+    요청 경로에서 할 수 없고, 그러면 첫 응답 시점에 존재 여부를 아직 모른다."""
+    conn = _conn(request)
+    t = db.get_ticker(conn, symbol)
+    if not t:
+        return preview.poll(symbol, bg, request.app.state.db)
+    out = service.get_ticker_detail(conn, symbol)
     if out is None:
         raise HTTPException(404, "ticker not found")
-    return out
+    # 추가 필드만 얹는다. 기존 필드를 건드리면 구버전 빌드본이 깨진다.
+    return {**out, "status": "ready", "tracked": bool(t["in_watchlist"])}
 
 
 @router.get("/tickers/{symbol}/company")

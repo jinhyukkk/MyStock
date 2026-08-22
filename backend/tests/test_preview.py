@@ -1,6 +1,8 @@
 import pytest
+from fastapi.testclient import TestClient
 
-from app import fetchers, preview
+from app import fetchers, preview, sentiment
+from app.main import create_app
 
 
 @pytest.fixture(autouse=True)
@@ -41,6 +43,9 @@ def test_unknown_symbol_has_no_failure():
 SAMSUNG = {"symbol": "005930", "name": "삼성전자", "market": "KR",
            "is_etf": 0, "yf_symbol": "005930.KS", "currency": "KRW"}
 
+FAKE_SENTI = {"vix": 18.0, "vkospi": None, "cnn_fg": 60, "crypto_fg": 50,
+              "usdkrw": 1300.0, "failed": []}
+
 
 def test_resolve_takes_exact_symbol_match(monkeypatch):
     monkeypatch.setattr(fetchers, "search_symbols", lambda q, conn=None: [SAMSUNG])
@@ -58,3 +63,51 @@ def test_resolve_survives_search_failure(monkeypatch):
         raise RuntimeError("network down")
     monkeypatch.setattr(fetchers, "search_symbols", boom)
     assert preview._resolve("005930") is None
+
+
+@pytest.fixture
+def client(tmp_path, ohlcv_up, monkeypatch):
+    monkeypatch.setattr(fetchers, "fetch_ohlcv", lambda *a, **k: ohlcv_up)
+    monkeypatch.setattr(fetchers, "fetch_fundamentals", lambda *a, **k: None)
+    monkeypatch.setattr(fetchers, "search_symbols", lambda q, conn=None: [SAMSUNG])
+    monkeypatch.setattr(sentiment, "fetch_sentiment", lambda: dict(FAKE_SENTI))
+    app = create_app(db_path=str(tmp_path / "t.db"), refresh_on_start=False)
+    with TestClient(app) as c:
+        yield c
+
+
+def test_unregistered_symbol_is_pending_then_ready(client):
+    first = client.get("/api/tickers/005930")
+    assert first.status_code == 200
+    assert first.json() == {"status": "pending", "symbol": "005930"}
+
+    second = client.get("/api/tickers/005930").json()
+    assert second["status"] == "ready"
+    assert second["tracked"] is False
+    # 기존 필드가 그대로 나가야 한다 — 구버전 빌드본도 계속 동작해야 하므로.
+    assert len(second["candles"]) > 0
+    assert second["signal"]["swing_grade"]
+    assert second["cost_rates"]["fee_pct"] >= 0
+
+
+def test_preview_row_stays_out_of_the_refresh_loop(client):
+    client.get("/api/tickers/005930")
+    assert client.get("/api/tickers/005930").json()["status"] == "ready"
+    # in_watchlist=0 + 미보유라 `_active_tickers`에 안 들어간다.
+    # 들어가면 한 번 열어본 종목 수만큼 매시간 외부 호출이 늘어난다.
+    assert client.get("/api/dashboard").json()["signals"] == []
+
+
+def test_unresolvable_symbol_reports_failed(client):
+    assert client.get("/api/tickers/NOPE").json()["status"] == "pending"
+    out = client.get("/api/tickers/NOPE").json()
+    assert out["status"] == "failed"
+    assert out["message"] == "알 수 없는 심볼입니다 — 종목 코드를 확인하세요."
+
+
+def test_registered_ticker_is_ready_and_tracked(client):
+    client.post("/api/watchlist", json=SAMSUNG)
+    client.post("/api/refresh")
+    out = client.get("/api/tickers/005930").json()
+    assert out["status"] == "ready"
+    assert out["tracked"] is True
