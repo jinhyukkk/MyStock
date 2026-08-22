@@ -90,8 +90,7 @@ export default function CommandPalette() {
               <span><strong>{it.name}</strong>
                 <span style={{ color: 'var(--text-dim)', fontSize: 12 }}> {it.symbol} · {it.market}</span>
               </span>
-              <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
-                {it.tracked ? '이동 ↵' : '추가 후 이동 ↵'}</span>
+              <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>이동 ↵</span>
             </div>
           ))}
           {!pending && !searchErr && q.trim() && items.length === 0 &&
