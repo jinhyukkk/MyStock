@@ -42,20 +42,20 @@ export default function Dashboard() {
   const [busy, setBusy] = useState(false)
   const [now, setNow] = useState(Date.now())
 
-  // 응답이 도착했을 때 "그 사이 시장이 바뀌었는가"를 봐야 한다. state 를 클로저로 읽으면
-  // 요청을 쏠 때 캡처된 옛 값이라 자기 자신과 비교하게 되어 항상 참이 된다 — ref 는 항상 최신을 가리킨다.
-  const currentMarket = useRef(market)
-  useEffect(() => { currentMarket.current = market }, [market])
+  // 요청마다 세대를 올리고, 응답이 왔을 때 자기 세대가 아직 최신인지만 본다. 시장 값으로
+  // 비교하면(예: currentMarket.current !== requested) KR→US→KR 처럼 왕복했을 때 값이 우연히
+  // 같아져 옛 요청이 통과한다(ABA 문제) — 세대는 단조 증가라 왕복해도 옛 요청은 반드시 걸러진다.
+  const gen = useRef(0)
 
   const load = useCallback(() => {
-    const requested = market
-    return get<MarketData>(`/api/market?market=${requested}`)
+    const mine = ++gen.current
+    return get<MarketData>(`/api/market?market=${market}`)
       .then(d => {
-        if (currentMarket.current !== requested) return   // 그 사이 토글됨 — 늦게 온 응답을 버린다
+        if (mine !== gen.current) return   // 그 사이 새 요청이 나갔다 — 늦게 온 응답을 버린다
         setData(d); setError(null); setNow(Date.now())
       })
       .catch(e => {
-        if (currentMarket.current !== requested) return   // 옛 요청의 실패는 지금 진행 중인 요청과 무관하다
+        if (mine !== gen.current) return   // 옛 요청의 실패는 지금 진행 중인 최신 요청과 무관하다
         setError(String(e))
       })
   }, [market])
@@ -86,18 +86,19 @@ export default function Dashboard() {
   }, [load])
 
   const refresh = async () => {
-    const requested = market
+    const mine = ++gen.current   // load 와 같은 세대 카운터를 공유 — 토글 중 새로고침이 겹쳐도 최신만 반영
     setBusy(true)
     try {
-      const d = await post<MarketData>(`/api/market/refresh?market=${requested}`)
-      // load 와 같은 이유 — 새로고침 중에 시장을 바꿨으면 늦게 온 결과를 버린다
-      if (currentMarket.current !== requested) return
+      const d = await post<MarketData>(`/api/market/refresh?market=${market}`)
+      if (mine !== gen.current) return
       setData(d); setNow(Date.now())
     } catch (e) {
-      if (currentMarket.current !== requested) return
+      if (mine !== gen.current) return
       setError(String(e))
     } finally {
-      if (currentMarket.current === requested) setBusy(false)
+      // 세대가 밀렸으면 그 사이 더 최신 요청(load 또는 refresh)이 자기 finally 에서
+      // busy 를 책임진다 — 여기서 내리면 아직 진행 중인 최신 요청의 busy 를 조기에 끈다.
+      if (mine === gen.current) setBusy(false)
     }
   }
 
