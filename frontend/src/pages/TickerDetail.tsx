@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { get, post } from '../api'
+import { get, post, put } from '../api'
 import { isStale, relativeTime } from '../time'
 import type { Company, TickerDetail as Detail } from '../types'
+import { useTickerDetail } from '../ticker/useTickerDetail'
 import TradeDialog from '../components/TradeDialog'
 import QuoteHeader from '../components/quote/QuoteHeader'
 import QuoteChart, { type PriceLevel } from '../components/quote/QuoteChart'
@@ -73,20 +74,16 @@ const TABS: [string, string][] = [
 
 export default function TickerDetail() {
   const { symbol } = useParams()
-  const [detail, setDetail] = useState<Detail | null>(null)
+  const { detail, status, error, loadedAt, reload } = useTickerDetail(symbol)
+  const now = loadedAt
   // 회사 자료(뉴스·재무·애널리스트·내부자)는 첫 페인트 뒤에 따로 받는다 —
   // 개요 응답은 이미 candles 200봉을 싣고 있고, 이 4블록은 전부 스크롤 아래에 있다.
   const [company, setCompany] = useState<Company | null>(null)
   const [companyError, setCompanyError] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
   const [tradeOpen, setTradeOpen] = useState<'BUY' | 'SELL' | null>(null)
   const [busy, setBusy] = useState(false)
-  const [now, setNow] = useState(Date.now())
+  const [actionError, setActionError] = useState<string | null>(null)
   const [tab, setTab] = useState('top')
-
-  const load = () => get<Detail>(`/api/tickers/${symbol}`)
-    .then(d => { setDetail(d); setError(null); setNow(Date.now()) })
-    .catch(e => setError(String(e)))
 
   const loadCompany = () => {
     setCompanyError(null)
@@ -97,22 +94,29 @@ export default function TickerDetail() {
 
   /** 이 종목만 갱신 — 전체 갱신은 수 초 걸린다. 회사 자료도 같은 버튼으로 강제 갱신된다. */
   const refresh = async () => {
-    setBusy(true)
-    try { await post(`/api/refresh?symbol=${encodeURIComponent(symbol!)}`); await load(); await loadCompany() }
-    catch (e) { setError(String(e)) }
+    setBusy(true); setActionError(null)
+    try { await post(`/api/refresh?symbol=${encodeURIComponent(symbol!)}`); reload(); await loadCompany() }
+    catch (e) { setActionError(String(e)) }
     finally { setBusy(false) }
   }
 
-  // 심볼이 바뀔 때만 다시 받는다 — load를 의존성에 넣으면 매 렌더마다 요청이 나간다
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { load(); setCompany(null) }, [symbol])
-  // 첫 페인트를 막지 않는다 — 상세가 그려진 뒤 다음 프레임에서 회사 자료를 부른다
+  /** 조회만 하던 종목을 워치리스트로 올린다. 여기서만 등록된다 —
+   *  검색해서 열어본 것이 저절로 워치리스트에 쌓이면 "지켜보기로 정한 것"이 무의미해진다. */
+  const track = async () => {
+    setBusy(true); setActionError(null)
+    try { await put(`/api/watchlist/${encodeURIComponent(symbol!)}`); reload() }
+    catch (e) { setActionError(String(e)) }
+    finally { setBusy(false) }
+  }
+
+  useEffect(() => { setCompany(null) }, [symbol])
+  // 회사 자료는 ready 이후에만 부른다 — pending 중에는 /company가 404를 준다
   useEffect(() => {
-    if (!detail) return
+    if (status !== 'ready' || !detail) return
     const t = setTimeout(loadCompany, 0)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detail?.symbol])
+  }, [status, detail?.symbol])
 
   // 탭 활성 상태는 스크롤 위치를 따라간다 — 클릭한 탭만 켜두면 스크롤 후 거짓말이 된다
   useEffect(() => {
@@ -127,14 +131,18 @@ export default function TickerDetail() {
     return () => io.disconnect()
   }, [detail])
 
-  if (error) return (
+  if (status === 'failed') return (
     <div className="card">
-      <div style={{ color: 'var(--sell)' }}>불러오기 실패: {error}</div>
-      <button style={{ marginTop: 10 }} onClick={() => { setError(null); load() }}>다시 시도</button>
+      <div style={{ color: 'var(--sell)' }}>{error ?? '불러오기 실패'}</div>
+      <button style={{ marginTop: 10 }} onClick={reload}>다시 시도</button>
     </div>
   )
   if (!detail) return (
     <div className="grid">
+      {/* pending은 "멈춘 것"이 아니라 "받는 중"이다 — 구분해 주지 않으면
+          사용자가 새로고침을 반복하며 같은 수집을 기다린다 */}
+      {status === 'pending' &&
+        <div className="quote-note">시세를 받아오는 중…</div>}
       <div className="card skeleton" style={{ minHeight: 80 }} />
       <div className="card skeleton" style={{ minHeight: 380 }} />
       <div className="card skeleton" style={{ minHeight: 240 }} />
@@ -176,6 +184,10 @@ export default function TickerDetail() {
     <div className="quote">
       <QuoteHeader detail={detail} change={change} stale={stale} now={now} busy={busy}
                    onRefresh={refresh} onTrade={() => setTradeOpen(holdingSellSignal ? 'SELL' : 'BUY')} />
+      {!detail.tracked &&
+        <button onClick={track} disabled={busy} title="워치리스트에 추가">관심 등록</button>}
+      {actionError &&
+        <div className="quote-note" style={{ color: 'var(--sell)' }}>{actionError}</div>}
 
       <div className={`quote-verdict ${v.tone}`}>
         <span>{v.text}</span>
@@ -195,7 +207,7 @@ export default function TickerDetail() {
         position={risk ? { stopPrice: risk.stop_price, stopSource: risk.stop_source,
                            totalAssetKrw: risk.total_asset_krw, fxRate: risk.fx_rate,
                            maxWeightPct: risk.max_weight_pct } : null}
-        onClose={() => setTradeOpen(null)} onSaved={load} />}
+        onClose={() => setTradeOpen(null)} onSaved={reload} />}
 
       <nav className="quote-tabs" aria-label="섹션">
         {TABS.map(([id, label]) => (
