@@ -4,6 +4,9 @@ import { createChart, CandlestickSeries, LineSeries, HistogramSeries, LineStyle,
 import type { Candle } from '../../types'
 
 const CHART_OPTS = {
+  // 컨테이너 폭이 잡히기 전에 createChart가 돌면 캔버스가 기본 300px로 굳는다(빌드본에서
+  // 재현). autoSize는 ResizeObserver로 컨테이너를 따라가므로 첫 레이아웃·창 크기 변경 모두 안전.
+  autoSize: true,
   layout: { background: { color: 'transparent' }, textColor: '#8b93a3', fontSize: 11 },
   grid: { vertLines: { color: '#1c2230' }, horzLines: { color: '#1c2230' } },
   timeScale: { borderColor: '#232a36' },
@@ -26,6 +29,7 @@ export default function QuoteChart({ candles, levels }: { candles: Candle[]; lev
   const macdRef = useRef<HTMLDivElement>(null)
   const chartsRef = useRef<IChartApi[]>([])
   const [tf, setTf] = useState<number | null>(132)
+  const levelsKey = JSON.stringify(levels)
 
   useEffect(() => {
     if (!mainRef.current || !rsiRef.current || !macdRef.current || candles.length === 0) return
@@ -91,9 +95,11 @@ export default function QuoteChart({ candles, levels }: { candles: Candle[]; lev
     chartsRef.current = charts
     applyTimeframe(charts, candles.length, tf)
     return () => { charts.forEach(c => c.remove()); chartsRef.current = [] }
-    // tf는 아래 effect가 따로 적용한다 — 버튼마다 차트를 다시 만들 이유가 없다
+    // tf는 아래 effect가 따로 적용한다 — 버튼마다 차트를 다시 만들 이유가 없다.
+    // levels는 부모가 렌더마다 새 배열로 넘기므로 내용 키로 비교한다 — 참조로 비교하면
+    // 회사 자료 도착·탭 변경 같은 무관한 렌더에도 차트 세 개가 통째로 다시 만들어진다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candles, levels])
+  }, [candles, levelsKey])
 
   useEffect(() => { applyTimeframe(chartsRef.current, candles.length, tf) }, [tf, candles.length])
 

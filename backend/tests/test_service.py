@@ -563,3 +563,25 @@ def test_risk_block_exposes_the_denominator_behind_its_own_percentages(conn):
     assert r["total_asset_krw"] == service.get_portfolio_view(conn)["totals"]["total_asset_krw"]
     assert r["fx_rate"] == 1.0
     assert service.get_ticker_detail(conn, "AAPL")["risk"]["fx_rate"] == 1300.0
+
+
+def test_refresh_reports_company_failures_without_breaking_prices(conn):
+    """회사 자료 소스가 전부 막힌 상태(conftest 기본)에서도 시세·시그널은 갱신되고,
+    실패는 `failed_tickers`가 아니라 `failed_company`로 따로 보고된다 —
+    사용자가 해야 할 일이 다르기 때문이다."""
+    out = service.refresh_all(conn)
+    assert out["refreshed"] is True
+    assert out["failed_tickers"] == []
+    assert set(out["failed_company"]) == {"005930", "AAPL"}
+    assert db.get_latest_signal(conn, "005930") is not None
+
+
+def test_detail_exposes_profile_and_snapshot(conn):
+    service.refresh_all(conn)
+    d = service.get_ticker_detail(conn, "005930")
+    # 캐시가 비어 있으면 profile·snapshot 모두 pending 골격 (계약 v2 B1)
+    assert d["profile"]["status"] == "pending"
+    assert d["profile"]["note"]
+    assert d["snapshot"]["status"] == "pending"
+    assert d["snapshot"]["note"]
+    assert d["fundamentals"] == {"per": 15.0}  # 기존 계약 유지

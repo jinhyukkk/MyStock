@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { changeFromPrev, perfPct, perfYtdPct, range52w, smaGapPct, relVolume, avgVolume,
-         pctOf } from './stats.ts'
+         pctOf, volatility, avgTurnover } from './stats.ts'
 import type { Candle } from '../types.ts'
 
 /** n일치 일봉. 종가는 100, 101, 102 … 로 하루 1씩 오른다. 거래량은 1000 고정. */
@@ -80,4 +80,28 @@ test('pctOf: 소수 둘째 자리 반올림', () => {
   assert.equal(pctOf(103, 100), 3)
   assert.equal(pctOf(100, 103), -2.91)
   assert.equal(pctOf(100, 0), null)
+})
+
+test('volatility: 종가가 매일 같은 폭으로 오르면 수익률 분산이 0에 가깝다', () => {
+  const c = candles(30)   // 100,101,102… 수익률이 조금씩 줄어드는 등차 수열
+  const v = volatility(c, 5)
+  assert.ok(v !== null && v <= 0.01, `기대: 0에 가까움, 실제: ${v}`)
+})
+test('volatility: 한 봉만 크게 튀면 표준편차가 그 폭을 반영한다', () => {
+  const c = candles(10)
+  c[9].close = c[8].close * 1.1      // 마지막 봉 +10%
+  const v = volatility(c, 5)
+  assert.ok(v !== null && v > 3, `기대: >3, 실제: ${v}`)
+})
+test('volatility: 봉이 모자라면 null', () => {
+  assert.equal(volatility(candles(3), 5), null)
+})
+
+test('avgTurnover: 직전 n봉 (종가 × 거래량) 평균', () => {
+  const c = candles(5)               // 종가 100..104, 거래량 1000
+  // 최근 3봉 종가 102,103,104 → (102+103+104)*1000/3 = 103000
+  assert.equal(avgTurnover(c, 3), 103000)
+})
+test('avgTurnover: 봉이 없으면 null', () => {
+  assert.equal(avgTurnover([], 20), null)
 })

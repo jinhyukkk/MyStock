@@ -11,6 +11,7 @@ import Settings from './pages/portfolio/Settings'
 
 // 차트 라이브러리(recharts, lightweight-charts)를 쓰는 페이지만 지연 로딩
 const TickerDetail = lazy(() => import('./pages/TickerDetail'))
+const TickerAnalysis = lazy(() => import('./pages/ticker/Analysis'))
 const PortfolioLayout = lazy(() => import('./pages/portfolio/PortfolioLayout'))
 const Watchlist = lazy(() => import('./pages/Watchlist'))
 
@@ -24,6 +25,9 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/ticker/:symbol" element={
             <Suspense fallback={fallback}><TickerDetail /></Suspense>} />
+          {/* 개요에서 뺀 MyStock 고유 판단 블록(시그널·백테스트·플랜·룰·히스토리)의 집 */}
+          <Route path="/ticker/:symbol/analysis" element={
+            <Suspense fallback={fallback}><TickerAnalysis /></Suspense>} />
           <Route path="/portfolio" element={
             <Suspense fallback={fallback}><PortfolioLayout /></Suspense>}>
             <Route index element={<Holdings />} />

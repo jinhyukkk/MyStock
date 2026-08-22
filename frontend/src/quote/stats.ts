@@ -54,3 +54,30 @@ export function relVolume(c: Candle[], bars: number): number | null {
   if (!avg || c.length === 0) return null
   return Math.round(c[c.length - 1].volume / avg * 100) / 100
 }
+
+/** 일간 수익률의 표준편차(%). finviz Volatility 칸(주=5봉, 월=21봉).
+ *
+ *  ATR은 갭을 포함한 절대 폭이고 이건 종가 수익률의 흩어짐이라 서로 다른 질문에
+ *  답한다 — 둘 다 스냅샷에 있어야 "폭"과 "흔들림"을 구분할 수 있다. */
+export function volatility(c: Candle[], bars: number): number | null {
+  if (c.length < bars + 1) return null
+  const w = c.slice(-(bars + 1))
+  const r: number[] = []
+  for (let i = 1; i < w.length; i++) {
+    const prev = w[i - 1].close
+    if (!prev) return null
+    r.push((w[i].close / prev - 1) * 100)
+  }
+  const mean = r.reduce((s, x) => s + x, 0) / r.length
+  const varc = r.reduce((s, x) => s + (x - mean) ** 2, 0) / r.length
+  return Math.round(Math.sqrt(varc) * 100) / 100
+}
+
+/** 직전 n봉 평균 거래대금(종가×거래량, 종목 통화).
+ *
+ *  거래량만으로는 5만 원 주식과 500달러 주식의 유동성을 비교할 수 없다. */
+export function avgTurnover(c: Candle[], bars: number): number | null {
+  const w = c.slice(-bars)
+  if (w.length === 0) return null
+  return Math.round(w.reduce((s, x) => s + x.close * x.volume, 0) / w.length)
+}

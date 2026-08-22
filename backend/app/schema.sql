@@ -81,3 +81,17 @@ CREATE TABLE IF NOT EXISTS broker_holdings (
   basis_missing INTEGER NOT NULL DEFAULT 0,
   synced_at TEXT NOT NULL
 );
+-- 회사 자료(프로필·스냅샷·재무·뉴스·컨센서스·내부자) 캐시. 종목상세 요청 경로에서
+-- yfinance/네이버를 직접 부르면 화면이 1~3초씩 멈추므로, 갱신 루프가 여기 채워두고
+-- 화면은 이 표만 읽는다. 실패해도 payload/fetched_at은 남겨서 "원래 없는 종목"과
+-- "이번에 못 받은 종목"을 화면이 구분할 수 있게 한다(error/attempted_at만 갱신).
+CREATE TABLE IF NOT EXISTS company_cache (
+  symbol TEXT NOT NULL,
+  block TEXT NOT NULL,          -- profile|snapshot|financials|news|ratings|insiders
+  payload TEXT NOT NULL,        -- JSON
+  source TEXT,
+  fetched_at TEXT NOT NULL,     -- 마지막 '성공' 시각
+  attempted_at TEXT,            -- 마지막 시도(성공/실패 무관) — 실패 재시도 backoff 기준
+  error TEXT,                   -- 마지막 실패 사유. 성공 시 NULL로 지운다
+  PRIMARY KEY (symbol, block)
+);

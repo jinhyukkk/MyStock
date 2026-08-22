@@ -467,3 +467,61 @@ def test_position_rule_is_readable_without_the_dashboard(client):
     assert client.get("/api/position-rule").json() == {"min": 4, "max": 7}
     client.put("/api/position-rule", json={"min": 2, "max": 5})
     assert client.get("/api/position-rule").json() == {"min": 2, "max": 5}
+
+
+# --- 종목상세 회사 자료 (tickerdetail) ------------------------------------------
+
+DETAIL_KEYS = ["fundamentals", "signal", "candles", "risk", "cost_rates", "cash",
+               "dividends", "history", "rules", "entry_review", "last_refresh"]
+
+
+def _add_and_refresh(client):
+    client.post("/api/watchlist", json={"symbol": "005930", "name": "삼성전자",
+                                        "market": "KR", "is_etf": 0,
+                                        "yf_symbol": "005930.KS", "currency": "KRW"})
+    client.post("/api/refresh")
+
+
+def test_detail_keeps_existing_keys_and_adds_company(client):
+    """AC-1/AC-2 — 기존 11개 키는 하나도 사라지지 않고 profile·snapshot만 추가된다.
+    빌드본이 구버전일 수 있으므로 필드 제거·개명은 곧 화면 파손이다."""
+    _add_and_refresh(client)
+    d = client.get("/api/tickers/005930").json()
+    for key in DETAIL_KEYS:
+        assert key in d, key
+    assert "profile" in d and "snapshot" in d
+    # 계약 v2 B1 — 캐시가 없어도 profile은 null이 아니라 pending 골격 + 안내 문구다.
+    # null이면 화면이 문구를 스스로 지어내고, 그 문구가 BE의 4블록 문구와 갈라진다.
+    assert d["profile"]["status"] == "pending"
+    assert d["profile"]["note"]
+    assert set(d["snapshot"]["perf"]) == {"w1", "m1", "m3", "m6", "ytd",
+                                          "y1", "y3", "y5", "y10"}
+    assert d["snapshot"]["recommendation_scale"] == "1=strong_buy..5=strong_sell"
+
+
+def test_company_endpoint_returns_200_when_empty(client):
+    """캐시가 비어도 200 + 전 블록 pending. 404를 주면 화면이 '없는 종목'과 못 가른다."""
+    _add_and_refresh(client)
+    res = client.get("/api/tickers/005930/company")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["symbol"] == "005930"
+    for block in ("financials", "news", "ratings", "insiders"):
+        assert body[block]["status"] in ("ok", "pending", "unavailable")
+    assert client.get("/api/tickers/NOPE/company").status_code == 404
+
+
+def test_detail_never_calls_network(client):
+    """AC-13 — `app.sources` 전 모듈이 AssertionError를 던지는 상태(conftest 기본)에서도
+    종목상세·회사 자료 요청은 200이어야 한다. 요청 경로에 외부 호출이 남아 있으면 여기서
+    깨진다 — 실제로는 화면이 yfinance 응답을 3초 기다리는 상태다."""
+    import app.sources.daum, app.sources.naver, app.sources.yf
+    with pytest.raises(AssertionError):
+        app.sources.yf.quote_info("AAPL")
+    with pytest.raises(AssertionError):
+        app.sources.naver.integration("005930")
+    with pytest.raises(AssertionError):
+        app.sources.daum.quote("005930")
+    _add_and_refresh(client)
+    assert client.get("/api/tickers/005930").status_code == 200
+    assert client.get("/api/tickers/005930/company").status_code == 200

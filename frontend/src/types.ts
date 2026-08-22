@@ -139,6 +139,10 @@ export interface TickerDetail {
   /** 현재 포지션을 열었을 때의 근거. 물타기는 "얼마나 물렸나"가 아니라
    *  "그때 산 이유가 아직 서 있나"로 결정해야 한다. 보유가 없으면 null. */
   entry_review: EntryReview | null;
+  /** 회사 프로필·finviz 84칸 스냅샷. 백엔드가 아직 안 붙였거나 캐시 전이면 없다 —
+   *  선택 필드라 구버전 응답에서도 화면이 그대로 뜬다. */
+  profile?: Profile | null;
+  snapshot?: Snapshot | null;
   last_refresh: string | null;
 }
 export interface EntryReview {
@@ -330,4 +334,116 @@ export interface Trade {
   fee: number | null; tax: number | null;
   note: string | null; grade_at_trade: string | null;
   exclude_from_stats: number;
+}
+
+/* ── 종목상세 회사 자료 (spec 20_spec.md §5) ──
+   전부 백엔드가 뒤늦게 붙이는 신규 필드다. 구버전 백엔드(또는 구버전 빌드본)에서도
+   화면이 컴파일·렌더돼야 하므로 TickerDetail 쪽 진입점은 선택 필드로 선언한다. */
+export interface Profile {
+  sector: string | null; industry: string | null; country: string | null;
+  exchange: string | null; employees: number | null; ipo_date: string | null;
+  website: string | null;
+  description: string | null; description_truncated?: boolean;
+  /** 계약 v2 — 회사 자료 수집 전이면 'pending' + note(BE가 쓴 한국어 문구).
+   *  BE가 아직 안 내려주는 동안도 화면이 서야 하므로 선택 필드다. */
+  status?: 'ok' | 'pending';
+  note?: string | null;
+  // KR 종목에서 'en'이면 화면이 "영문 원문" 배지를 붙인다 — 한국어 개요를 못 받은 상태다
+  description_lang: 'ko' | 'en' | null;
+  source: string; fetched_at: string | null;
+}
+/** 기간별 성과(%). candles는 200봉뿐이라 1년 이상은 백엔드(price_cache)만 만들 수 있다. */
+export interface SnapshotPerf {
+  w1: number | null; m1: number | null; m3: number | null; m6: number | null;
+  ytd: number | null; y1: number | null; y3: number | null; y5: number | null;
+  y10: number | null;
+}
+/** finviz 84칸 중 백엔드가 외부 소스에서 채우는 값. 하위 키는 전부 null 허용. */
+export interface Snapshot {
+  market_cap: number | null; enterprise_value: number | null;
+  income_ttm: number | null; sales_ttm: number | null;
+  book_per_share: number | null; cash_per_share: number | null;
+  dividend_est: number | null; dividend_ttm: number | null;
+  // 계약 v2 — fundamentals.dividend_yield와 달리 §5.1 퍼센트 정규화·스케일 가드를 거친 값
+  dividend_yield_pct?: number | null;
+  dividend_ex_date: string | null;
+  dividend_growth_3y_pct: number | null; dividend_growth_5y_pct: number | null;
+  payout_pct: number | null;
+  pe: number | null; forward_pe: number | null; peg: number | null;
+  ps: number | null; pb: number | null; pc: number | null; p_fcf: number | null;
+  ev_ebitda: number | null; ev_sales: number | null;
+  quick_ratio: number | null; current_ratio: number | null;
+  debt_eq: number | null; lt_debt_eq: number | null; float_pct: number | null;
+  eps_ttm: number | null; eps_next_y: number | null; eps_next_q: number | null;
+  eps_this_y_pct: number | null; eps_next_y_pct: number | null; eps_next_5y_pct: number | null;
+  eps_past_3y_pct: number | null; eps_past_5y_pct: number | null;
+  sales_past_3y_pct: number | null; sales_past_5y_pct: number | null;
+  eps_yoy_ttm_pct: number | null; sales_yoy_ttm_pct: number | null;
+  eps_qoq_pct: number | null; sales_qoq_pct: number | null;
+  earnings_date: string | null; earnings_timing: string | null;
+  eps_surprise_pct: number | null; sales_surprise_pct: number | null;
+  insider_own_pct: number | null; insider_trans_pct: number | null;
+  inst_own_pct: number | null; inst_trans_pct: number | null;
+  // KR은 기관 변동 대신 외국인 지분이 온다 — 값이 있는 쪽을 화면이 고른다
+  foreign_own_pct: number | null;
+  roa_pct: number | null; roe_pct: number | null; roic_pct: number | null;
+  gross_margin_pct: number | null; oper_margin_pct: number | null; profit_margin_pct: number | null;
+  shares_outstanding: number | null; shares_float: number | null;
+  short_float_pct: number | null; short_ratio: number | null; short_interest: number | null;
+  beta: number | null;
+  perf: SnapshotPerf;
+  // 1=강력매수 기준으로 백엔드가 정규화해서 보낸다. scale 문자열이 이 전제를 고정한다.
+  recommendation_mean: number | null; recommendation_scale: string;
+  target_price: number | null;
+  sources: string[]; fetched_at: string | null;
+  status: 'ok' | 'pending';
+  // pending일 때 BE가 쓴 사용자 문구 — 프론트가 같은 문구를 다시 만들지 않는다
+  note?: string | null;
+}
+/** /company의 4블록 공통 래퍼. note는 백엔드가 만든 한국어 문구를 그대로 렌더한다 —
+ *  같은 분기 로직을 프론트에 복제하면 두 곳이 서로 다른 말을 하게 된다. */
+export interface CompanyBlock {
+  status: 'ok' | 'pending' | 'unavailable';
+  note: string | null; source: string | null; fetched_at: string | null;
+}
+export interface FinancialsItem {
+  period: string; end_date: string | null;
+  eps: number | null; sales: number | null; shares_outstanding: number | null;
+  // 컨센서스 추정치 — 실적으로 읽히면 안 되므로 화면에서 반투명 + (E)
+  estimate: boolean;
+}
+export interface Financials extends CompanyBlock {
+  annual: FinancialsItem[]; quarterly: FinancialsItem[];
+  shares_note: string | null;
+}
+export interface NewsItem {
+  published_at: string; title: string; source: string | null; url: string; lang: 'ko' | 'en';
+}
+export interface News extends CompanyBlock { items: NewsItem[] }
+export interface RatingsConsensus {
+  recommendation_mean: number | null; recommendation_label: string | null;
+  target_mean: number | null; target_upside_pct: number | null;
+  analyst_count: number | null; as_of: string | null;
+}
+export interface RatingChange {
+  date: string; firm: string; action: string;
+  from_grade: string | null; to_grade: string | null;
+  from_target: number | null; to_target: number | null;
+}
+export interface ResearchReport { date: string; firm: string; title: string; url: string | null }
+export interface Ratings extends CompanyBlock {
+  consensus: RatingsConsensus | null;
+  changes: RatingChange[];
+  // KR 대체 — 증권사별 등급 변경 이력을 주는 무료 소스가 없어 리포트 목록으로 대신한다
+  reports: ResearchReport[];
+}
+export interface InsiderItem {
+  name: string; relation: string | null; date: string; transaction: string;
+  price: number | null; shares: number | null; value: number | null;
+  shares_total: number | null; url: string | null;
+}
+export interface Insiders extends CompanyBlock { items: InsiderItem[] }
+export interface Company {
+  symbol: string;
+  financials: Financials; news: News; ratings: Ratings; insiders: Insiders;
 }

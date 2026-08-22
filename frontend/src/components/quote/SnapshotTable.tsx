@@ -4,6 +4,9 @@ import type { ReactNode } from 'react'
 export interface SnapCell {
   label: string
   value: ReactNode
+  /** 한 칸에 두 값을 놓을 때의 보조값(52주 고가 `126.71 -36.75%`, 변동성 주/월).
+   *  finviz도 같은 칸에 두 숫자를 쓴다 — 칸을 늘리면 84칸 격자가 깨진다. */
+  sub?: string | null
   tone?: 'pos' | 'neg' | 'warn' | null
   title?: string
 }
@@ -20,7 +23,9 @@ export default function SnapshotTable({ cells, id }: { cells: SnapCell[]; id?: s
         ? <div key={i} className="snap-cell" aria-hidden="true" />
         : <div key={i} className="snap-cell" title={c.title}>
             <span className="snap-label">{c.label}</span>
-            <span className={`snap-value${c.tone ? ` ${c.tone}` : ''}`}>{c.value}</span>
+            <span className={`snap-value${c.tone ? ` ${c.tone}` : ''}`}>{c.value}
+              {/* 구분자를 문자로 넣는다 — 여백만으로는 '172,043 9.94%'가 한 숫자로 읽힌다 */}
+              {c.sub && <small>{` · ${c.sub}`}</small>}</span>
           </div>)}
     </div>
   )

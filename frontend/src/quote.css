@@ -85,7 +85,7 @@
 .snap-value.pos { color: var(--buy); }
 .snap-value.neg { color: var(--sell); }
 .snap-value.warn { color: var(--warn); }
-.snap-value small { font-weight: 400; color: var(--text-dim); font-size: 11px; margin-left: 4px; }
+.snap-value small { font-weight: 400; color: var(--text-dim); font-size: 11px; margin-left: 2px; }
 .snap-value .badge { padding: 1px 8px; min-width: 0; font-size: 11px; }
 @media (max-width: 1000px) {
   .snapshot { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -97,6 +97,11 @@
 }
 @media (max-width: 640px) {
   .snapshot { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* 2쌍/행에서는 한 칸이 170px뿐이라 라벨이 말줄임된다('EPS 전년동기(분...').
+     무엇을 재는 칸인지 모르게 되므로, 좁은 화면에서는 라벨·값 둘 다 줄바꿈을 허용한다.
+     숫자 자체는 공백이 없어 중간에서 끊기지 않는다. */
+  .snap-label { white-space: normal; overflow: visible; text-overflow: clip; }
+  .snap-value { white-space: normal; flex-shrink: 1; text-align: right; }
   .snap-cell:nth-child(4n) { border-right: 1px solid var(--border); }
   .snap-cell:nth-child(2n) { border-right: 0; }
   .snap-cell:nth-child(n) { background: transparent; }
@@ -142,3 +147,55 @@
 .kv-sub { font-size: 11px; color: var(--text-dim); padding: 2px 0 4px; }
 .quote .warn-box { margin-top: 8px; }
 .quote details.premises { margin-top: 8px; }
+
+/* ── finviz 구성 추가 블록 (재무·뉴스·애널리스트·회사 설명·내부자) ── */
+
+/* 헤더의 섹터·산업·국가·거래소·직원수 — 링크가 아니라 사실의 나열이다 */
+.quote-facts { margin-top: 2px; }
+.quote-facts .sep { margin-right: 6px; }
+
+/* 판정 줄 우측의 분석 링크 — 근거를 다른 화면으로 옮겼으니 입구가 판정 옆에 있어야 한다 */
+.quote-verdict { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.verdict-link { font-size: 12px; font-weight: 600; color: var(--accent); white-space: nowrap; }
+
+/* 좁은 화면에서 탭 줄은 가로로 잘려 마지막 `분석` 탭이 화면 밖에 있었다. 그 탭은
+   손절 룰 등록·백테스트로 가는 앱 유일의 입구라, 잘렸다는 '어포던스'만으로는 부족하다 —
+   줄바꿈해서 전부 보이게 한다(세로 28px 비용). 스크롤 어포던스는 잘림 자체를 없앤 뒤엔 불필요. */
+@media (max-width: 720px) {
+  .quote-tabs { flex-wrap: wrap; overflow-x: visible; }
+  .quote-tab { padding: 7px 10px; }
+}
+
+/* 탭 줄의 링크형 탭(분석 / ← 개요) */
+a.quote-tab { display: inline-block; text-decoration: none; }
+a.quote-tab:hover { color: var(--text); }
+
+/* 블록 빈 상태 — 이유 문장을 표 자리에 그대로 놓는다 */
+.block-empty {
+  padding: 10px 12px; border: 1px dashed var(--border); border-radius: 6px;
+  line-height: 1.6;
+}
+
+/* 재무 막대 3종 */
+.fin-charts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.fin-charts > * { min-width: 0; }
+.fin-chart-title { font-size: 12px; font-weight: 600; color: var(--text-dim); margin-bottom: 2px; }
+@media (max-width: 860px) { .fin-charts { grid-template-columns: 1fr; } }
+
+/* 뉴스 목록 — 날짜가 바뀌는 줄에만 구분선을 준다 */
+.news-list { list-style: none; margin: 0; padding: 0; }
+.news-item {
+  display: flex; gap: 8px; align-items: baseline; padding: 4px 0; font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.news-item.new-day { border-top: 1px solid var(--border); }
+.news-time { color: var(--text-dim); font-variant-numeric: tabular-nums; flex-shrink: 0; min-width: 44px; }
+.news-item a { flex: 1; min-width: 0; }
+.news-src { color: var(--text-dim); flex-shrink: 0; }
+@media (max-width: 640px) {
+  .news-item { flex-wrap: wrap; }
+  .news-item a { flex-basis: 100%; order: 3; }
+}
+
+/* 회사 설명 — 한 단락. 읽는 글이라 표보다 행간을 넓힌다 */
+.company-desc { font-size: 13px; line-height: 1.75; color: var(--text); margin: 0; max-width: 90ch; }

@@ -57,7 +57,9 @@ def dashboard(request: Request):
 
 @router.post("/refresh")
 def refresh(request: Request, symbol: str | None = None):
-    return service.refresh_all(_conn(request), symbol)
+    # 종목 지정 새로고침 = 사용자가 버튼을 눌렀고 이미 스피너가 돌고 있다는 뜻이라,
+    # 회사 자료도 TTL을 무시하고 지금 받아온다(§6.3 요청 경로 외부 호출 금지의 유일한 예외).
+    return service.refresh_all(_conn(request), symbol, force_company=symbol is not None)
 
 
 @router.get("/search")
@@ -71,6 +73,16 @@ def ticker_detail(symbol: str, request: Request):
     if out is None:
         raise HTTPException(404, "ticker not found")
     return out
+
+
+@router.get("/tickers/{symbol}/company")
+def ticker_company(symbol: str, request: Request):
+    """회사 자료 4블록. 캐시가 비어도 200 + status:"pending" — 404를 주면 화면이
+    '없는 종목'과 '아직 수집 전'을 구분하지 못한다."""
+    conn = _conn(request)
+    if not db.get_ticker(conn, symbol):
+        raise HTTPException(404, "ticker not found")
+    return service.get_company(conn, symbol)
 
 
 @router.get("/tickers/{symbol}/backtest")

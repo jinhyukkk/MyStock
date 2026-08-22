@@ -7,7 +7,7 @@ import requests
 
 import pandas as pd
 
-from app import (backtest, broker, codef, costs, db, fetchers, indicators,
+from app import (backtest, broker, codef, company, costs, db, fetchers, indicators,
                  portfolio, scoring, sentiment)
 
 BACKTEST_DAYS = 1100  # 약 3년 — 한 국면짜리 400일 검증은 상승장 착시를 못 거른다
@@ -23,8 +23,14 @@ def _active_tickers(conn):
     return list(watch.values())
 
 
-def refresh_all(conn, symbol: str | None = None) -> dict:
-    """symbol 지정 시 해당 종목만 갱신 — 종목 추가 직후 전체 갱신(수 초) 대신 사용."""
+def refresh_all(conn, symbol: str | None = None, force_company: bool = False) -> dict:
+    """symbol 지정 시 해당 종목만 갱신 — 종목 추가 직후 전체 갱신(수 초) 대신 사용.
+
+    `force_company=True`는 사용자가 새로고침 버튼을 눌렀을 때만 준다. TTL을 무시하고
+    회사 자료 6블록을 지금 받아온다(최대 10초). 기본값이 False인 이유는, 증권사 동기화가
+    새로 편입된 종목마다 이 함수를 부르기 때문이다 — 거기서 강제 갱신이 걸리면
+    잔고 한 번 맞추는 데 종목 수 × 6콜이 동기로 붙는다.
+    """
     broker_failed = None
     if symbol is None:
         senti = sentiment.fetch_sentiment()
@@ -72,8 +78,20 @@ def refresh_all(conn, symbol: str | None = None) -> dict:
         holdings = _holdings_map(conn)
         avg_prices = {s: h["avg_price"] for s, h in holdings.items()}
         _notify_telegram(conn, check_rules(conn, bars, avg_prices))
+    # 회사 자료는 시세·시그널이 끝난 뒤에 받는다. 네이버·다음은 비공식 API라 언제든
+    # 죽을 수 있는데, 그 실패가 시세 갱신이나 알림까지 끌고 내려가면 안 된다.
+    failed_company = []
+    try:
+        held = set(_holdings_map(conn)) if symbol is None else set()
+        failed_company = company.refresh_company_blocks(
+            conn, targets, force=force_company, held=held)
+    except Exception as e:
+        failed_company = [f"ALL:{type(e).__name__}"]
     return {"refreshed": True, "failed_sources": senti.get("failed", []),
-            "failed_tickers": failed_tickers, "broker_failed": broker_failed}
+            "failed_tickers": failed_tickers, "broker_failed": broker_failed,
+            # 시세 실패(failed_tickers)와 섞지 않는다 — 회사 자료가 비는 것과
+            # 시그널이 낡는 것은 사용자가 해야 할 일이 다르다
+            "failed_company": failed_company}
 
 
 def _is_partial_bar(df) -> bool:
@@ -842,7 +860,17 @@ def get_ticker_detail(conn, symbol) -> dict | None:
         "rules": [dict(r) for r in db.list_rules(conn, symbol)],
         # 물타기 직전에 필요한 것은 평단 대비 %가 아니라 "왜 샀는지가 아직 유효한가"다
         "entry_review": _entry_review(conn, symbol, sig),
+        # 회사 자료는 캐시(company_cache)만 읽는다. 여기서 외부를 부르면 yfinance
+        # info 1~3초가 종목상세 첫 페인트에 그대로 얹힌다.
+        "profile": company.get_profile(conn, symbol),
+        "snapshot": company.get_snapshot(conn, symbol),
     }
+
+
+def get_company(conn, symbol) -> dict:
+    """종목상세 하단 4블록(재무·뉴스·컨센서스·내부자). 조립은 company.py가 한다 —
+    service.py는 이미 1300줄이라 화면 하나가 여기서 더 자라면 다른 화면이 같이 흔들린다."""
+    return company.get_company(conn, symbol)
 
 
 def _entry_review(conn, symbol: str, sig) -> dict | None:
