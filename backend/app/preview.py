@@ -1,9 +1,10 @@
 """미등록 종목의 임시 조회(preview).
 
 종목 상세는 `tickers` 행이 있어야 열린다. 이 모듈은 행이 없는 심볼을 요청받았을 때
-백그라운드에서 해석·수집해 행을 만든다. 요청 경로에서 하지 않는 이유는 두 가지다 —
-심볼 해석(`fetchers.search_symbols`)이 캐시 없는 FinanceDataReader 호출이고,
-`refresh_all`의 시세·시그널·재무 수집이 수 초 걸린다.
+백그라운드에서 해석·수집해 행을 만든다. 요청 경로에서 하지 않는 이유는
+`refresh_all`의 시세·시그널·재무 수집이 수 초 걸리기 때문이다 — 심볼 해석
+자체(`fetchers.search_symbols`)는 `_krx_listing`이 `@lru_cache(maxsize=1)`라
+프로세스 첫 호출 이후로는 빠르다.
 
 여기서 만든 행은 `in_watchlist=0`이라 `service._active_tickers`의 시간당 갱신 대상에
 들어가지 않는다. 한 번 열어본 것만으로 매시간 외부 호출이 늘어나면 안 된다.
@@ -44,6 +45,16 @@ def _acquire(symbol: str) -> bool:
 def _release(symbol: str) -> None:
     with _lock:
         _inflight.discard(symbol)
+
+
+def is_inflight(symbol: str) -> bool:
+    """이 심볼의 수집 job이 아직 돌고 있으면 True.
+
+    `_job`은 `db.upsert_ticker`를 먼저 commit하고 나서(행이 생김) `refresh_all`로
+    시세를 채운다(수 초). 그 사이에는 행이 있어도 candles/signal/risk가 비어 있다 —
+    `api.ticker_detail`이 행의 존재만 보고 ready를 주면 폴링이 그 창에서 멈춰버린다."""
+    with _lock:
+        return symbol in _inflight
 
 
 def _fail(symbol: str, message: str) -> None:

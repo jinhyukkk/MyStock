@@ -71,12 +71,19 @@ def search(q: str, request: Request):
 def ticker_detail(symbol: str, request: Request, bg: BackgroundTasks):
     """미등록 심볼도 연다 — 없으면 백그라운드로 해석·수집하고 pending을 준다.
 
-    404를 주지 않는 이유는 `/company`와 같다. 심볼 해석이 캐시 없는 외부 호출이라
-    요청 경로에서 할 수 없고, 그러면 첫 응답 시점에 존재 여부를 아직 모른다."""
+    404를 주지 않는 이유는 `/company`와 같다. `refresh_all`의 시세·시그널·재무 수집이
+    수 초 걸려 요청 경로에서 할 수 없고, 그러면 첫 응답 시점에 존재 여부를 아직 모른다."""
     conn = _conn(request)
     t = db.get_ticker(conn, symbol)
     if not t:
         return preview.poll(symbol, bg, request.app.state.db)
+    # 행이 있어도 그 심볼의 preview job이 아직 진행 중이면(=시세가 아직 안 붙었으면)
+    # ready를 주면 안 된다. `db.upsert_ticker`는 job 초반에 즉시 commit되고
+    # `refresh_all`(시세·시그널·재무)은 그 뒤 수 초 더 걸린다 — 그 창에 도착한
+    # 폴링이 candles=[]/signal=null인 "ready"를 받으면 훅이 폴링을 영구 중단해버린다.
+    # 등록된(워치리스트/보유) 종목은 preview job이 절대 돌지 않으므로 이 분기를 타지 않는다.
+    if preview.is_inflight(symbol):
+        return {"status": "pending", "symbol": symbol}
     out = service.get_ticker_detail(conn, symbol)
     if out is None:
         raise HTTPException(404, "ticker not found")
