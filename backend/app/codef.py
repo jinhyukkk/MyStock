@@ -109,7 +109,11 @@ def _decode(text: str) -> dict:
         raise CodefError("CF-LOCAL", f"CODEF 응답을 해석하지 못했습니다 — {text[:120]}") from e
 
 
-def _post(path: str, body: dict) -> dict:
+def post_raw(path: str, body: dict) -> dict:
+    """CODEF 응답 전체(result + data)를 디코딩만 해서 돌려준다.
+
+    원데이터 보관용 — 실패 응답도 result 블록째로 받는다. 일반 호출자는 _post를 쓴다.
+    """
     try:
         res = requests.post(host() + path, json=body, timeout=TIMEOUT,
                             headers={"Authorization": f"Bearer {_access_token()}",
@@ -118,7 +122,11 @@ def _post(path: str, body: dict) -> dict:
         raise CodefError("CF-LOCAL", f"CODEF 연결 실패 — {e}") from e
     if res.status_code != 200:
         raise CodefError("CF-LOCAL", f"{path} 실패 (HTTP {res.status_code})")
-    payload = _decode(res.text)
+    return _decode(res.text)
+
+
+def _post(path: str, body: dict) -> dict:
+    payload = post_raw(path, body)
     result = payload.get("result") or {}
     if result.get("code") != SUCCESS:
         raise CodefError(result.get("code", "CF-LOCAL"),
