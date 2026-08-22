@@ -66,12 +66,15 @@ export default function Analysis() {
 
   // `/backtest`는 tickers 행이 없으면 404다. pending 중에 쏘면 수집이 끝나기도 전에
   // 백테스트 블록이 에러로 굳는다 — ready가 된 뒤에만 부른다.
-  useEffect(() => { setBacktest(null) }, [symbol])
+  // deps는 `detail?.symbol`(TickerDetail.tsx와 동일)이어야 한다 — `symbol`(URL 파라미터)을
+  // 쓰면 A(ready) → B로 라우팅되는 첫 렌더에서 status가 아직 A의 'ready'로 남아 있는 동안
+  // symbol만 B로 바뀌어 effect가 발화한다. B가 미등록이면 아직 행이 없어 404가 뜬다.
+  useEffect(() => { setBacktest(null); setBtError(null); setBtLoading(true) }, [symbol])
   useEffect(() => {
     if (status !== 'ready') return
     loadBacktest()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, symbol])
+  }, [status, detail?.symbol])
 
   // 탭 활성 상태는 스크롤 위치를 따라간다 — 클릭한 탭만 켜두면 스크롤 후 거짓말이 된다
   useEffect(() => {
@@ -88,7 +91,9 @@ export default function Analysis() {
 
   if (status === 'failed') return (
     <div className="card">
-      <div style={{ color: 'var(--sell)' }}>{error ?? '불러오기 실패'}</div>
+      <div style={{ color: 'var(--sell)' }}>
+        {error ? `종목 정보를 불러오지 못했습니다: ${error}` : '다시 불러오는 중…'}
+      </div>
       <button style={{ marginTop: 10 }} onClick={reload}>다시 시도</button>
     </div>
   )

@@ -133,7 +133,9 @@ export default function TickerDetail() {
 
   if (status === 'failed') return (
     <div className="card">
-      <div style={{ color: 'var(--sell)' }}>{error ?? '불러오기 실패'}</div>
+      <div style={{ color: 'var(--sell)' }}>
+        {error ? `종목 정보를 불러오지 못했습니다: ${error}` : '다시 불러오는 중…'}
+      </div>
       <button style={{ marginTop: 10 }} onClick={reload}>다시 시도</button>
     </div>
   )
