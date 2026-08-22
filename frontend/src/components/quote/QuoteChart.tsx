@@ -6,6 +6,9 @@ import type { Candle } from '../../types'
 const CHART_OPTS = {
   // 컨테이너 폭이 잡히기 전에 createChart가 돌면 캔버스가 기본 300px로 굳는다(빌드본에서
   // 재현). autoSize는 ResizeObserver로 컨테이너를 따라가므로 첫 레이아웃·창 크기 변경 모두 안전.
+  // 단 컨테이너 높이는 CSS(.quote-chart-main/.quote-chart-sub)로 반드시 고정해야 한다 —
+  // auto면 차트가 자기 높이를 다시 재는 루프가 되어 아래로 끝없이 늘어난다. 아래 height
+  // 옵션은 ResizeObserver가 없을 때만 쓰이는 폴백이라 CSS 값과 같게 유지한다.
   autoSize: true,
   layout: { background: { color: 'transparent' }, textColor: '#8b93a3', fontSize: 11 },
   grid: { vertLines: { color: '#1c2230' }, horzLines: { color: '#1c2230' } },
@@ -118,11 +121,11 @@ export default function QuoteChart({ candles, levels }: { candles: Candle[]; lev
           {levels.map(l => <span key={l.label}><i style={{ background: l.color }} />{l.label}</span>)}
         </div>
       </div>
-      <div ref={mainRef} />
+      <div className="quote-chart-main" ref={mainRef} />
       <div className="chart-sub-label">RSI (14)</div>
-      <div ref={rsiRef} />
+      <div className="quote-chart-sub" ref={rsiRef} />
       <div className="chart-sub-label">MACD (12,26,9)</div>
-      <div ref={macdRef} />
+      <div className="quote-chart-sub" ref={macdRef} />
     </div>
   )
 }
