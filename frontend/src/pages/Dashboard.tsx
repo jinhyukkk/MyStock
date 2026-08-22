@@ -131,7 +131,7 @@ export default function Dashboard() {
                      stale={stale} failed={data.failed} busy={busy} onRefresh={refresh} />
 
       <div className="fv-row charts">
-        {data.indices.map(i => <IndexChart key={i.symbol} data={i} asOf={data.fetched_at} />)}
+        {data.indices.map(i => <IndexChart key={i.symbol} data={i} asOf={data.fetched_at} session={data.session} />)}
       </div>
 
       <div className="fv-row breadth">
@@ -139,8 +139,8 @@ export default function Dashboard() {
       </div>
 
       <div className="fv-row signals">
-        <SignalTable rows={data.signals_up} />
-        <SignalTable rows={data.signals_down} gear />
+        <SignalTable rows={data.signals_up} krw={market === 'KR'} />
+        <SignalTable rows={data.signals_down} gear krw={market === 'KR'} />
         <Panel className="fv-heatmap-panel" gear>
           <div className="fv-panel-title"><span>
             {market === 'KR' ? 'KOSPI 대형주 – 1일 등락' : 'US Large Caps - 1 Day Performance'}</span></div>

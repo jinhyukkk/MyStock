@@ -67,17 +67,19 @@ export function BreadthBar({ b }: { b: Breadth }) {
   )
 }
 
-export function SignalTable({ rows, gear }: { rows: SignalRow[]; gear?: boolean }) {
+export function SignalTable({ rows, gear, krw }: { rows: SignalRow[]; gear?: boolean; krw?: boolean }) {
   return (
     <Panel gear={gear}>
       <table className="fv-table">
-        <thead><tr><th>Ticker</th><th>Last</th><th>Change %</th><th>Volume</th><th className="l">Signal</th></tr></thead>
+        <thead><tr><th>{krw ? '종목' : 'Ticker'}</th><th>{krw ? '현재가' : 'Last'}</th>
+          <th>Change %</th><th>{krw ? '거래량' : 'Volume'}</th><th className="l">Signal</th></tr></thead>
         <tbody>
           {rows.length === 0 && <tr><td colSpan={5} className="c fv-dim">스크리너 응답 없음</td></tr>}
           {rows.map((r, i) => (
             <tr key={i}>
-              <td><span className="fv-logo" aria-hidden>{r.symbol[0]}</span><T s={r.symbol} /></td>
-              <td className="n">{num(r.last, 2)}</td>
+              <td><span className="fv-logo" aria-hidden>{(r.name ?? r.symbol)[0]}</span>
+                <Link to={`/ticker/${r.symbol}`} className="fv-tk" title={r.symbol}>{r.name ?? r.symbol}</Link></td>
+              <td className="n">{num(r.last, krw ? 0 : 2)}</td>
               <td className={`n ${sign(r.change_pct)}`}>{pct(r.change_pct)}</td>
               <td className="n">{vol(r.volume)}</td>
               <td className="l"><span className="fv-signal">{r.signal}</span></td>
@@ -116,7 +118,7 @@ export function MajorNews({ rows }: { rows: MajorNewsRow[] }) {
         {rows.length === 0 && <div className="fv-major-row fv-dim">—</div>}
         {rows.map(r => (
           <div key={r.symbol} className="fv-major-row">
-            <T s={r.symbol} />
+            <Link to={`/ticker/${r.symbol}`} className="fv-tk" title={r.symbol}>{r.name ?? r.symbol}</Link>
             <span className={`fv-badge ${sign(r.change_pct)}`}>{pct(r.change_pct)}</span>
           </div>
         ))}

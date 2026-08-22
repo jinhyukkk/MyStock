@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react'
-import type { IndexRow } from './types'
+import type { IndexRow, Session } from './types'
 
 // 세로 배치. 가격 영역을 키운 이유: 지수 장중 변동은 0.5% 안팎이라 캔들 몸통이
 // 90px 안에서는 1px 미만으로 뭉개져 "선 하나"로 보였다.
@@ -7,7 +7,20 @@ const PAD = { top: 10, right: 54, bottom: 20, left: 10 }
 const PRICE_H = 148, VOL_GAP = 10, VOL_H = 38
 const H = PAD.top + PRICE_H + VOL_GAP + VOL_H + PAD.bottom
 const MIN_W = 300
-const TIMES = ['10AM', '11AM', '12PM', '1PM', '2PM', '3PM', '4PM']
+
+/** 장 시작~마감 사이 정시 라벨과 그 시각의 실제 시(24h). 미국은 10AM…4PM, 한국은 10…15.
+ *  상수로 박아두면 한국 장(09:00–15:30)에 4PM 이 찍힌다. hour 를 같이 들고 있는 이유는
+ *  5분봉 인덱스를 "개장 시각과의 분(分) 차이"로 계산해야 해서다 — 미국은 09:30 개장이라
+ *  10AM이 6번째 봉이지만, 한국은 09:00 개장이라 10시가 12번째 봉이다(상수 오프셋을 쓰면 어긋난다). */
+function hourLabels(s: Session): { hour: number; label: string }[] {
+  const h0 = Number(s.open.slice(0, 2)), h1 = Number(s.close.slice(0, 2))
+  const us = s.tz.startsWith('America')
+  const out: { hour: number; label: string }[] = []
+  for (let h = h0 + 1; h <= h1; h++) {
+    out.push({ hour: h, label: us ? `${h % 12 === 0 ? 12 : h % 12}${h < 12 ? 'AM' : 'PM'}` : String(h) })
+  }
+  return out
+}
 
 /** 카드 실폭을 재서 그대로 좌표계로 쓴다. viewBox 를 고정폭으로 두면 카드가 넓어져도
  *  차트는 340px 로 가운데 박혀 있고(양옆 여백) 글자도 작은 채로 남는다.
@@ -35,13 +48,19 @@ const fmtVol = (v: number) =>
 /** finviz 홈 상단 지수 미니 차트 — 5분봉 캔들 + 거래량 + 우측 가격축 + 마지막가 라벨.
  *  전일 종가 점선을 같이 그린다: 캔들만 있으면 지금이 플러스인지 마이너스인지
  *  머리글 숫자를 읽어야만 알 수 있다. */
-export default function IndexChart({ data, asOf }: { data: IndexRow; asOf: string | null }) {
+export default function IndexChart({ data, asOf, session }:
+  { data: IndexRow; asOf: string | null; session: Session }) {
   const box = useRef<HTMLDivElement>(null)
   const W = useWidth(box)
+  const TIMES = hourLabels(session)
+  const [openH, openM] = [Number(session.open.slice(0, 2)), Number(session.open.slice(3, 5))]
   // 값이 빠진 봉(거래 정지 등)은 그리지 않는다 — NaN 좌표가 하나 있으면 SVG 전체가 안 그려진다
   const cs = data.candles.filter((c): c is { o: number; h: number; l: number; c: number; v: number } =>
     c.o !== null && c.h !== null && c.l !== null && c.c !== null && c.v !== null)
-  const dateLabel = asOf ? new Date(asOf).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''
+  const dateLabel = asOf
+    ? new Date(asOf).toLocaleDateString(session.tz.startsWith('Asia') ? 'ko-KR' : 'en-US',
+        { month: 'short', day: 'numeric' })
+    : ''
   const head = (
     <div className="fv-chart-head">
       <span className="fv-chart-name">{data.name}</span>
@@ -102,13 +121,14 @@ export default function IndexChart({ data, asOf }: { data: IndexRow; asOf: strin
           {showPrev && prev !== null && (
             <line x1={PAD.left} x2={W - PAD.right} y1={y(prev)} y2={y(prev)} className="fv-prev" />
           )}
-          {/* 시간축 — 09:30 개장 → 10AM은 6번째 5분봉, 이후 매시 12봉.
-              장중이라 봉이 모자라면 그 시간 라벨은 그리지 않는다(빈 자리에 글자만 뜬다) */}
-          {TIMES.map((t, i) => {
-            const idx = 6 + i * 12
+          {/* 시간축 — 정시 라벨의 5분봉 인덱스는 "개장 시각과의 분(分) 차이 / 5"로 구한다.
+              미국은 09:30 개장이라 10AM이 6번째 봉, 한국은 09:00 개장이라 10시가 12번째 봉이라
+              시장마다 오프셋이 다르다. 장중이라 봉이 모자라면 그 라벨은 그리지 않는다. */}
+          {TIMES.map(({ hour, label }) => {
+            const idx = (hour * 60 - (openH * 60 + openM)) / 5
             if (idx > n) return null
-            return <text key={t} x={PAD.left + idx * step} y={H - 6} className="fv-axis"
-                         textAnchor="middle">{t}</text>
+            return <text key={label} x={PAD.left + idx * step} y={H - 6} className="fv-axis"
+                         textAnchor="middle">{label}</text>
           })}
           {/* 거래량 막대 + 최대 거래량 라벨 (예전의 0.5~2.0 눈금은 실제 값이 아닌 장식이라 뺐다) */}
           <line x1={PAD.left} x2={W - PAD.right} y1={volTop + VOL_H} y2={volTop + VOL_H} className="fv-grid" />

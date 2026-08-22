@@ -5,6 +5,9 @@
 .fv { font-size: 13px; color: var(--text); display: grid; gap: 14px; }
 .fv a.fv-tk { color: var(--accent); }
 .fv a.fv-tk:hover { text-decoration: underline; }
+/* 한글 종목명은 영문 티커보다 길다 — 칸을 넘기지 말고 자른다 */
+.fv-table td .fv-tk { display: inline-block; max-width: 130px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .fv .up { color: var(--buy); } .fv .down { color: var(--sell); }
 .fv .fv-dim { color: var(--text-dim); }
 .fv .c { text-align: center; }
@@ -144,6 +147,7 @@
   font-weight: 700; line-height: 1.05; transition: filter 0.15s ease;
 }
 .fv-cell:hover { filter: brightness(1.25); }
+.fv-cell-t { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fv-cell-c { font-weight: 500; font-size: 0.62em; opacity: 0.9; }
 
 /* ── Major News ── */
