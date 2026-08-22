@@ -1,9 +1,9 @@
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
 
-from app import codef, db, fetchers, service
+from app import codef, db, fetchers, preview, service
 
 router = APIRouter(prefix="/api")
 
@@ -68,11 +68,27 @@ def search(q: str, request: Request):
 
 
 @router.get("/tickers/{symbol}")
-def ticker_detail(symbol: str, request: Request):
-    out = service.get_ticker_detail(_conn(request), symbol)
+def ticker_detail(symbol: str, request: Request, bg: BackgroundTasks):
+    """미등록 심볼도 연다 — 없으면 백그라운드로 해석·수집하고 pending을 준다.
+
+    404를 주지 않는 이유는 `/company`와 같다. `refresh_all`의 시세·시그널·재무 수집이
+    수 초 걸려 요청 경로에서 할 수 없고, 그러면 첫 응답 시점에 존재 여부를 아직 모른다."""
+    conn = _conn(request)
+    t = db.get_ticker(conn, symbol)
+    if not t:
+        return preview.poll(symbol, bg, request.app.state.db)
+    # 행이 있어도 그 심볼의 preview job이 아직 진행 중이면(=시세가 아직 안 붙었으면)
+    # ready를 주면 안 된다. `db.upsert_ticker`는 job 초반에 즉시 commit되고
+    # `refresh_all`(시세·시그널·재무)은 그 뒤 수 초 더 걸린다 — 그 창에 도착한
+    # 폴링이 candles=[]/signal=null인 "ready"를 받으면 훅이 폴링을 영구 중단해버린다.
+    # 등록된(워치리스트/보유) 종목은 preview job이 절대 돌지 않으므로 이 분기를 타지 않는다.
+    if preview.is_inflight(symbol):
+        return {"status": "pending", "symbol": symbol}
+    out = service.get_ticker_detail(conn, symbol)
     if out is None:
         raise HTTPException(404, "ticker not found")
-    return out
+    # 추가 필드만 얹는다. 기존 필드를 건드리면 구버전 빌드본이 깨진다.
+    return {**out, "status": "ready", "tracked": bool(t["in_watchlist"])}
 
 
 @router.get("/tickers/{symbol}/company")
@@ -102,6 +118,19 @@ def add_watch(item: WatchItem, request: Request):
     db.upsert_ticker(conn, item.symbol, item.market, item.name,
                      is_etf=item.is_etf, in_watchlist=1,
                      yf_symbol=item.yf_symbol, currency=item.currency)
+    return {"ok": True}
+
+
+@router.put("/watchlist/{symbol}")
+def track_watch(symbol: str, request: Request):
+    """이미 있는 행의 플래그만 세운다.
+
+    `POST /api/watchlist`는 yf_symbol·currency까지 본문으로 받는데, 임시 조회로 만들어진
+    행은 그 값이 이미 정확하다. 프론트가 메타데이터를 되돌려 보내면 틀릴 여지만 생긴다."""
+    conn = _conn(request)
+    if not db.get_ticker(conn, symbol):
+        raise HTTPException(404, "ticker not found")
+    db.set_watchlist(conn, symbol, 1)
     return {"ok": True}
 
 

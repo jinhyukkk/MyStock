@@ -5,6 +5,19 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from app import preview
+
+
+@pytest.fixture(autouse=True)
+def clean_preview_state():
+    """모듈 레벨 상태는 프로세스 수명 동안 남는다 — 테스트끼리 새게 두면
+    앞 테스트의 인플라이트가 뒤 테스트를 pending으로 붙잡는다.
+    (test_api.py 등 preview를 직접 다루지 않는 테스트도 순서·추가 테스트에 따라
+    깨질 수 있어 conftest에서 전체 테스트에 적용한다.)"""
+    preview.reset()
+    yield
+    preview.reset()
+
 @pytest.fixture
 def ohlcv_up():
     """300일 완만한 상승 추세 + 노이즈 (결정적)."""

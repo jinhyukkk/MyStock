@@ -145,6 +145,16 @@ export interface TickerDetail {
   snapshot?: Snapshot | null;
   last_refresh: string | null;
 }
+/** `GET /api/tickers/{symbol}` 응답.
+ *
+ *  미등록 종목은 백그라운드 수집이 끝날 때까지 pending이 온다. 실패에 404가 아니라
+ *  status를 쓰는 이유는 백엔드 주석 참고 — 첫 응답 시점엔 '없는 종목'인지
+ *  '아직 수집 전'인지 구분할 수 없다. */
+export type TickerDetailReady = TickerDetail & { status: 'ready'; tracked: boolean }
+export type TickerDetailResponse =
+  | { status: 'pending'; symbol: string }
+  | { status: 'failed'; symbol: string; message: string }
+  | TickerDetailReady
 export interface EntryReview {
   first_entry_date: string; first_entry_price: number;
   entry_note: string | null; entry_grade: string | null;

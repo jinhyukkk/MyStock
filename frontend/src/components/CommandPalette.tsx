@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { get, post } from '../api'
+import { get } from '../api'
 import type { Dashboard, SearchResult } from '../types'
 
 interface Item {
-  symbol: string; name: string; market: string; tracked: boolean
-  raw?: SearchResult          // 미등록 종목이면 워치리스트 추가에 사용
+  symbol: string; name: string; market: string
 }
 
 export default function CommandPalette() {
@@ -13,7 +12,6 @@ export default function CommandPalette() {
   const [q, setQ] = useState('')
   const [items, setItems] = useState<Item[]>([])
   const [sel, setSel] = useState(0)
-  const [busy, setBusy] = useState(false)
   const [pending, setPending] = useState(false)   // 검색 API 응답 대기 중
   const [searchErr, setSearchErr] = useState(false)
   const [tracked, setTracked] = useState<Map<string, Item>>(new Map())
@@ -38,7 +36,7 @@ export default function CommandPalette() {
     inputRef.current?.focus()
     get<Dashboard>('/api/dashboard').then(d => {
       const m = new Map(d.signals.map(s => [s.symbol,
-        { symbol: s.symbol, name: s.name, market: s.market, tracked: true }]))
+        { symbol: s.symbol, name: s.name, market: s.market }]))
       setTracked(m)
       setItems([...m.values()])
     }).catch(() => {})
@@ -53,24 +51,16 @@ export default function CommandPalette() {
     const t = setTimeout(() => {
       get<SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}`).then(rs => {
         setItems(rs.map(r => tracked.get(r.symbol) ??
-          { symbol: r.symbol, name: r.name, market: r.market, tracked: false, raw: r }))
+          { symbol: r.symbol, name: r.name, market: r.market }))
         setSel(0); setPending(false)
       }).catch(() => { setItems([]); setPending(false); setSearchErr(true) })
     }, 300)
     return () => clearTimeout(t)
   }, [q, open, tracked])
 
-  const pick = async (it: Item) => {
-    if (busy) return
-    if (!it.tracked && it.raw) {
-      setBusy(true)
-      try {
-        await post('/api/watchlist', it.raw)
-        await post(`/api/refresh?symbol=${encodeURIComponent(it.symbol)}`)
-      }
-      catch { setBusy(false); return }
-      setBusy(false)
-    }
+  /** 등록하지 않고 바로 연다 — 상세 화면이 알아서 수집한다.
+   *  여기서 워치리스트에 넣으면 "한 번 열어본 것"과 "지켜보기로 정한 것"이 섞인다. */
+  const pick = (it: Item) => {
     setOpen(false)
     navigate(`/ticker/${it.symbol}`)
   }
@@ -86,8 +76,8 @@ export default function CommandPalette() {
     <div className="palette-overlay" onClick={() => setOpen(false)}>
       <div className="palette" onClick={e => e.stopPropagation()}>
         <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
-               onKeyDown={onInputKey} disabled={busy}
-               placeholder={busy ? '종목 추가 중…' : '종목 이름 또는 심볼 검색'} />
+               onKeyDown={onInputKey}
+               placeholder="종목 이름 또는 심볼 검색" />
         <div className="palette-list">
           {pending && <div className="palette-item" style={{ color: 'var(--text-dim)' }}>검색 중…</div>}
           {!pending && searchErr &&
@@ -99,8 +89,7 @@ export default function CommandPalette() {
               <span><strong>{it.name}</strong>
                 <span style={{ color: 'var(--text-dim)', fontSize: 12 }}> {it.symbol} · {it.market}</span>
               </span>
-              <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
-                {it.tracked ? '이동 ↵' : '추가 후 이동 ↵'}</span>
+              <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>이동 ↵</span>
             </div>
           ))}
           {!pending && !searchErr && q.trim() && items.length === 0 &&

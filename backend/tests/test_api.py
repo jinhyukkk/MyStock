@@ -238,8 +238,11 @@ def test_rules_crud(client):
     assert len(client.get("/api/rules").json()) == 1
     assert client.delete(f"/api/rules/{rid}").status_code == 200
 
-def test_ticker_detail_404(client):
-    assert client.get("/api/tickers/NOPE").status_code == 404
+def test_ticker_detail_unknown_symbol_reports_failed(client):
+    # 404가 아니라 status로 알린다 — 심볼 해석이 네트워크를 타므로 첫 응답 시점에는
+    # 그 종목이 없는 건지 아직 수집 전인지 구분할 수 없다.
+    assert client.get("/api/tickers/NOPE").json()["status"] == "pending"
+    assert client.get("/api/tickers/NOPE").json()["status"] == "failed"
 
 def test_ticker_detail_ok(client):
     client.post("/api/watchlist", json={"symbol": "005930", "name": "삼성전자",
