@@ -8,9 +8,8 @@ yfinance 에 국내 국채·투자자 수급이 없어 한쪽으로 통일할 �
 """
 from __future__ import annotations
 
-import re
-
-from app import market_fetch as fetch
+from app import market_breadth, market_calendar, market_fetch as fetch, market_history
+from app import market_insider
 from app.market import _chg, _pct
 from app.sources import naver
 
@@ -25,7 +24,17 @@ TTL_SEC = {
     "heatmap": 15 * 60,
     "investors": 30 * 60,   # 장 마감 후 하루 한 번 바뀐다
     "headlines": 15 * 60,
+    # 아래 네 블록은 일봉·공시 기반이라 장중에 자주 바뀌지 않는다. 갱신 비용이 커서
+    # (유니버스 200 종목 1년치, 종목별 호출) TTL 을 길게 잡는다.
+    "breadth": 30 * 60,
+    "patterns": 30 * 60,
+    "econ": 6 * 60 * 60,
+    "earnings": 6 * 60 * 60,
+    "insider": 6 * 60 * 60,
 }
+
+# 첫 화면을 기다리게 하지 않는 블록 — 종목마다 외부 호출이라 수십 초가 걸린다.
+SLOW_BLOCKS = ("earnings", "insider")
 
 # (표시명, yfinance 심볼(5분봉), 네이버 코드(가격))
 INDICES = [("코스피", "^KS11", "KOSPI"), ("코스닥", "^KQ11", "KOSDAQ"),
@@ -51,10 +60,6 @@ INVESTOR_MARKETS = ["KOSPI", "KOSDAQ"]
 HEADLINES_SYMBOL = "^KS11"
 HEADLINES_COUNT = 8
 SECTOR_FALLBACK = "기타"
-
-# 우선주 이름 규칙. 코드가 0 으로 끝나지 않는다는 조건과 **함께** 써야 한다 —
-# 이름만 보면 '미래에셋대우'(006800, 보통주) 같은 회사가 걸린다.
-_PREFERRED_NAME = re.compile(r"우[A-Z]?$")
 
 # 시총 상위 100 종목의 섹터(2026-08-22 KOSPI 기준 수기 분류). 구성과 가중치는 네이버
 # 실시간이고 여기 있는 건 섹터 이름뿐이라 유지 부담이 작다. 없는 코드는 "기타"로 떨어진다 —
@@ -112,8 +117,7 @@ def _is_company(row: dict) -> bool:
     큰 칸이 둘로 중복된다."""
     if row.get("is_etf"):
         return False
-    code, name = row.get("symbol") or "", row.get("name") or ""
-    return not (not code.endswith("0") and _PREFERRED_NAME.search(name))
+    return not market_history.is_preferred(row.get("symbol") or "", row.get("name") or "")
 
 
 def _build_indices() -> list[dict]:
@@ -186,6 +190,26 @@ def _build_headlines() -> list[dict]:
     return fetch.news(HEADLINES_SYMBOL, limit=HEADLINES_COUNT)
 
 
+def _build_breadth() -> dict:
+    h = market_history.history("KR")
+    return {"universe": h["label"], "as_of": h["as_of"],
+            "bars": market_breadth.breadth(h["closes"])}
+
+
+def _build_patterns() -> dict:
+    h = market_history.history("KR")
+    return {"universe": h["label"], "as_of": h["as_of"],
+            "rows": market_breadth.patterns(h["closes"], h["names"])}
+
+
+def _build_earnings() -> dict:
+    return market_calendar.earnings(market_history.history("KR")["rows"])
+
+
+def _build_insider() -> dict:
+    return market_insider.insider("KR", market_history.history("KR")["rows"])
+
+
 BUILDERS = {
     "indices": _build_indices,
     "forex_bonds": _build_forex_bonds,
@@ -194,4 +218,9 @@ BUILDERS = {
     "heatmap": _build_heatmap,
     "investors": _build_investors,
     "headlines": _build_headlines,
+    "breadth": _build_breadth,
+    "patterns": _build_patterns,
+    "econ": lambda: market_calendar.econ("KR"),
+    "earnings": _build_earnings,
+    "insider": _build_insider,
 }

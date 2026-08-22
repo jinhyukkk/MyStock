@@ -1,8 +1,8 @@
 import { Link } from 'react-router-dom'
-import type { Breadth, EarningsRow, InsiderRow, PatternRow } from './sample'
-import type { Headline, InvestorRow, MajorNewsRow, MarketName, QuoteRow, SignalRow } from './types'
+import type { BreadthBlock, EarningsBlock, EconBlock, Headline, InsiderBlock, InvestorRow,
+              MajorNewsRow, MarketName, PatternBlock, PatternTicker, QuoteRow,
+              SignalRow } from './types'
 
-const T = ({ s }: { s: string }) => <Link to={`/ticker/${s}`} className="fv-tk">{s}</Link>
 const pct = (v: number | null, d = 2) => v === null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(d)}%`
 const sign = (v: number | null) => v === null ? '' : v > 0 ? 'up' : v < 0 ? 'down' : ''
 const num = (v: number | null, d: number) =>
@@ -12,16 +12,52 @@ const vol = (v: number | null) =>
   v === null ? '—' : v >= 1e9 ? `${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `${(v / 1e6).toFixed(2)}M`
   : v >= 1e3 ? `${(v / 1e3).toFixed(2)}K` : v.toFixed(0)
 
-/** finviz 패널 공통 껍데기. `sample` 이면 우상단에 "샘플" 배지 — 실데이터 섹션과 섞여
- *  있을 때 어느 숫자가 오늘 시장인지 화면이 말해주지 않으면 샘플값으로 판단하게 된다. */
-export function Panel({ children, gear, sample, className = '' }:
-  { children: React.ReactNode; gear?: boolean; sample?: boolean; className?: string }) {
+/** finviz 패널 공통 껍데기. `scope` 는 우상단 꼬리표(예: "코스피·코스닥 시총 200 · 08-21") —
+ *  이 화면의 breadth·패턴은 전 종목이 아니라 유니버스에서 센 값이라, 무엇을 센 숫자인지
+ *  패널이 스스로 말하지 않으면 시장 전체 통계로 읽힌다. */
+export function Panel({ children, gear, scope, className = '' }:
+  { children: React.ReactNode; gear?: boolean; scope?: string; className?: string }) {
   return (
     <div className={`fv-panel ${className}`}>
-      {sample && <span className="fv-sample" title="실데이터 소스가 아직 없어 finviz 관찰값을 그대로 보여줍니다">샘플</span>}
-      {gear && !sample && <span className="fv-gear" aria-hidden>⚙</span>}
+      {scope && <span className="fv-scope">{scope}</span>}
+      {gear && !scope && <span className="fv-gear" aria-hidden>⚙</span>}
       {children}
     </div>
+  )
+}
+
+/** 유니버스 꼬리표. 기준일이 있으면 "…시총 200 · 08-21". */
+function scopeOf(b: { universe?: string; as_of?: string | null }): string | undefined {
+  if (!b.universe) return undefined
+  return b.as_of ? `${b.universe} · ${b.as_of.slice(5)}` : b.universe
+}
+
+/** 빈 표 한 줄 안내. 셋을 구분한다:
+ *  - `status` 없음  → 아직 안 받은 칸(느린 블록은 첫 화면 뒤 백그라운드로 채워진다)
+ *  - `unavailable` → 소스가 없다(키 미설정). 왜 비었는지를 안내로 그대로 보여준다
+ *  - `ok` 인데 0줄 → 진짜로 해당 기간에 일정이 없다
+ *  구분 없이 빈 표를 두면 "오늘은 아무 일도 없었다"로 읽힌다. */
+function BlockNote({ block, cols, loading = '수집 중…', empty = '해당 없음' }:
+  { block: { status?: string; note?: string | null }; cols: number
+    loading?: string; empty?: string }) {
+  const text = block.status === 'unavailable' ? (block.note ?? '소스 없음')
+    : block.status === 'ok' ? empty : loading
+  return <tr><td colSpan={cols} className="c fv-dim" style={{ whiteSpace: 'normal' }}>{text}</td></tr>
+}
+
+const tickerLink = (t: PatternTicker) => (
+  <Link key={t.symbol} to={`/ticker/${t.symbol}`} className="fv-tk" title={t.symbol}>
+    {t.name ?? t.symbol}</Link>
+)
+
+/** 좁은 칸(패턴 표 4열)에서 쓰는 표기. 국내 코드(005930)는 사람이 못 읽으니 이름을,
+ *  미국 티커(AAPL)는 이름("Thermo Fisher Scientific")보다 티커가 짧고 더 통용된다. */
+const compactTicker = (t: PatternTicker) => {
+  const numeric = /^\d+$/.test(t.symbol)
+  return (
+    <Link key={t.symbol} to={`/ticker/${t.symbol}`} className="fv-tk"
+          title={t.name ? `${t.name} (${t.symbol})` : t.symbol}>
+      {numeric ? (t.name ?? t.symbol) : t.symbol}</Link>
   )
 }
 
@@ -52,23 +88,37 @@ export function MarketSummary({ market, onMarket, time, text, stale, failed, err
   )
 }
 
-export function BreadthBar({ b }: { b: Breadth }) {
-  // 가운데 회색 띠(미변동)는 좌우 합이 100 에 못 미치는 만큼
-  const mid = Math.max(0, 100 - b.leftPct - b.rightPct)
+/** 상승/하락·신고가/신저가·SMA 위아래 네 줄. 개수를 같이 찍는 이유: 52주 신고가처럼
+ *  분모가 몇 종목뿐인 줄도 있어서, 비율만 보면 200 종목을 센 줄과 구분이 안 된다. */
+export function BreadthRow({ block }: { block: BreadthBlock }) {
+  const bars = block.bars ?? []
+  if (bars.length === 0)
+    return <div className="fv-breadth fv-dim" style={{ padding: '10px 12px' }}>시장 내부 지표 수집 중…</div>
   return (
-    <div className="fv-breadth">
-      <span className="fv-sample">샘플</span>
-      <div className="fv-breadth-labels">
-        <div className="left"><p>{b.leftLabel}</p><p>{b.leftPct.toFixed(1)}% ({b.leftN.toLocaleString('en-US')})</p></div>
-        {b.center && <div className="center">{b.center}</div>}
-        <div className="right"><p>{b.rightLabel}</p><p>({b.rightN.toLocaleString('en-US')}) {b.rightPct.toFixed(1)}%</p></div>
-      </div>
-      <div className="fv-breadth-bar">
-        <div className="l" style={{ width: `${b.leftPct}%` }} />
-        <div className="m" style={{ width: `${mid}%` }} />
-        <div className="r" style={{ width: `${b.rightPct}%` }} />
-      </div>
-    </div>
+    <>
+      {bars.map(b => {
+        // 가운데 회색 띠(보합)는 좌우 합이 100 에 못 미치는 만큼
+        const mid = Math.max(0, 100 - b.left_pct - b.right_pct)
+        const scope = scopeOf(block)
+        return (
+          <div className="fv-breadth" key={b.left_label + (b.center ?? '')}
+               title={scope ? `${scope} 기준` : undefined}>
+            <div className="fv-breadth-labels">
+              <div className="left"><p>{b.left_label}</p>
+                <p>{b.left_pct.toFixed(1)}% ({b.left_n.toLocaleString('en-US')})</p></div>
+              {b.center && <div className="center">{b.center}</div>}
+              <div className="right"><p>{b.right_label}</p>
+                <p>({b.right_n.toLocaleString('en-US')}) {b.right_pct.toFixed(1)}%</p></div>
+            </div>
+            <div className="fv-breadth-bar">
+              <div className="l" style={{ width: `${b.left_pct}%` }} />
+              <div className="m" style={{ width: `${mid}%` }} />
+              <div className="r" style={{ width: `${b.right_pct}%` }} />
+            </div>
+          </div>
+        )
+      })}
+    </>
   )
 }
 
@@ -96,15 +146,24 @@ export function SignalTable({ rows, gear, krw }: { rows: SignalRow[]; gear?: boo
   )
 }
 
-export function PatternTable({ rows }: { rows: PatternRow[] }) {
+/** 자체 탐지한 차트 패턴. `half` 로 좌/우 표를 나눈다(finviz 와 같은 2열 배치).
+ *  종목 칸이 4개 미만인 줄이 있어 빈 칸을 채워 열을 맞춘다. */
+export function PatternTable({ block, half }: { block: PatternBlock; half: 'left' | 'right' }) {
+  const all = block.rows ?? []
+  const mid = Math.ceil(all.length / 2)
+  const rows = half === 'left' ? all.slice(0, mid) : all.slice(mid)
   return (
-    <Panel sample>
+    <Panel scope={half === 'left' ? scopeOf(block) : undefined}>
       <table className="fv-table fv-patterns">
-        <thead><tr><th colSpan={4}>Tickers</th><th className="l">Signal</th></tr></thead>
+        <thead><tr><th colSpan={4}>{half === 'left' ? '종목' : ''}</th>
+          <th className="l">패턴</th></tr></thead>
         <tbody>
+          {all.length === 0 && <BlockNote block={{}} cols={5} loading="차트 패턴 계산 중…" />}
           {rows.map(r => (
             <tr key={r.signal}>
-              {r.tickers.map(t => <td key={t}><T s={t} /></td>)}
+              {r.tickers.map(t => <td key={t.symbol}>{compactTicker(t)}</td>)}
+              {Array.from({ length: Math.max(0, 4 - r.tickers.length) },
+                          (_, i) => <td key={`pad${i}`} />)}
               <td className="l"><span className="fv-pattern-ico" aria-hidden>{r.icon}</span>
                 <span className="fv-signal">{r.signal}</span></td>
             </tr>
@@ -171,34 +230,57 @@ export function Headlines({ rows, now }: { rows: Headline[]; now: number }) {
   )
 }
 
-export function EconCalendar({ emptyDate }: { emptyDate: string }) {
+/** 경제지표. 국내는 한국은행 100대 지표의 최신값, 미국은 FRED 발표 예정일 —
+ *  소스가 주는 것이 달라 표 머리도 다르다. 예상치·실제치 칸을 두지 않는 이유는
+ *  무료 소스에 컨센서스가 없어서다(빈 칸이 "예상 없음"으로 읽히는 게 더 나쁘다). */
+export function EconCalendar({ block }: { block: EconBlock }) {
+  const rows = block.rows ?? []
+  const release = block.kind === 'release'
   return (
-    <Panel sample>
+    <Panel>
       <table className="fv-table fv-econ">
         <thead><tr>
-          <th className="l">Date</th><th className="l">Time</th><th className="l">Impact</th><th className="l">Release</th>
-          <th className="l">For</th><th>Actual</th><th>Expected</th><th>Prior</th>
+          <th className="l">{release ? '발표일' : '기준시점'}</th>
+          <th className="l">{release ? '경제지표 발표 예정' : '주요 경제지표'}</th>
+          {!release && <th>값</th>}
         </tr></thead>
         <tbody>
-          <tr><td className="l">{emptyDate}</td><td colSpan={7} className="c fv-dim">No economic releases today</td></tr>
+          {rows.length === 0 && <BlockNote block={block} cols={3}
+            empty={release ? '예정된 지표 발표 없음' : '지표 없음'} />}
+          {rows.map((r, i) => (
+            <tr key={i}>
+              <td className="l fv-dim">{r.date ?? '—'}</td>
+              <td className="l wrap">{r.name}</td>
+              {!release && <td className="n">{r.value ?? '—'}
+                {r.unit && <span className="fv-dim"> {r.unit}</span>}</td>}
+            </tr>
+          ))}
         </tbody>
       </table>
     </Panel>
   )
 }
 
-export function EarningsCalendar({ rows }: { rows: EarningsRow[] }) {
+/** 실적 발표 예정. 유니버스 상위 종목만 본다(종목당 야후 1회 호출) — 그래서
+ *  "이 목록이 전부"가 아니라는 걸 꼬리표로 남긴다. */
+export function EarningsCalendar({ block, universe }: { block: EarningsBlock; universe?: string }) {
+  const rows = block.rows ?? []
+  // "코스피·코스닥 시총 200 상위 40종목" — 어느 목록의 어디까지를 훑었는지 한 줄로
+  const scope = [universe, block.scope].filter(Boolean).join(' ') || undefined
   // finviz는 8칸 고정 열이지만 이 화면의 우측 열(~350px)에는 안 들어간다 — 줄바꿈되는 칩으로
   return (
-    <Panel sample>
+    <Panel scope={scope}>
       <table className="fv-table fv-earn">
-        <thead><tr><th className="l">Date</th><th className="l">Earnings Release</th></tr></thead>
+        <thead><tr><th className="l">발표일</th><th className="l">실적 발표 예정</th></tr></thead>
         <tbody>
+          {rows.length === 0 && <BlockNote block={block} cols={2}
+            loading="실적 일정 수집 중… (첫 로드 뒤 잠시)"
+            empty="유니버스 상위 종목의 예정된 실적 발표 없음" />}
           {rows.map(r => (
             <tr key={r.date}>
-              <td className="l fv-dim">{r.date}</td>
+              <td className="l fv-dim">{r.date.slice(5)}</td>
               <td className="l wrap"><div className="fv-chips">
-                {r.tickers.map(t => <T key={t} s={t} />)}</div></td>
+                {r.tickers.map(tickerLink)}</div></td>
             </tr>
           ))}
         </tbody>
@@ -207,25 +289,47 @@ export function EarningsCalendar({ rows }: { rows: EarningsRow[] }) {
   )
 }
 
-export function InsiderLatest({ rows }: { rows: InsiderRow[] }) {
+/** 매수/매도 방향. 소스마다 표기가 달라(yfinance "Sale"/"Purchase", DART "장내매수")
+ *  문자열을 그대로 색으로 옮기지 않고 여기서 한 번에 판정한다. 모르면 색을 안 준다 —
+ *  방향을 잘못 칠하는 것이 안 칠하는 것보다 나쁘다. */
+function side(t: string): 'buy' | 'sale' | '' {
+  const s = (t || '').toLowerCase()
+  if (s.includes('purchase') || s.includes('buy') || t.includes('매수') || t.includes('취득')) return 'buy'
+  if (s.includes('sale') || s.includes('sell') || t.includes('매도') || t.includes('처분')) return 'sale'
+  return ''
+}
+const rowClass = (t: string) => {
+  const s = side(t)
+  return s === 'buy' ? 'fv-row-buy' : s === 'sale' ? 'fv-row-sale' : ''
+}
+const qty = (v: number | null) => v === null ? '—' : v.toLocaleString('en-US')
+
+export function InsiderLatest({ block, krw, universe }:
+  { block: InsiderBlock; krw?: boolean; universe?: string }) {
+  const rows = block.latest ?? []
+  const scope = [universe, block.scope].filter(Boolean).join(' ') || undefined
   return (
-    <Panel sample>
+    <Panel scope={scope}>
       <table className="fv-table">
         <thead><tr>
-          <th className="l">Ticker</th><th className="l">Latest Insider Trading</th><th className="l">Relationship</th>
-          <th className="l">Date</th><th className="l">Transaction</th><th>Cost</th><th>#Shares</th><th>Value($)</th>
+          <th className="l">종목</th><th className="l">최근 내부자 거래</th><th className="l">직위</th>
+          <th className="l">일자</th><th className="l">유형</th><th>단가</th><th>수량</th>
+          <th>{krw ? '금액' : 'Value($)'}</th>
         </tr></thead>
         <tbody>
+          {rows.length === 0 && <BlockNote block={block} cols={8}
+            loading="내부자 거래 수집 중… (첫 로드 뒤 잠시)"
+            empty="최근 신고된 내부자 거래 없음" />}
           {rows.map((r, i) => (
-            <tr key={i} className={r.transaction === 'Buy' ? 'fv-row-buy' : 'fv-row-sale'}>
-              <td className="l"><T s={r.ticker} /></td>
-              <td className="l">{r.owner}</td>
-              <td className="l">{r.relationship}</td>
-              <td className="l">{r.date}</td>
-              <td className="l">{r.transaction}</td>
-              <td className="n">{r.cost.toFixed(2)}</td>
-              <td className="n">{r.shares.toLocaleString('en-US')}</td>
-              <td className="n">{r.value.toLocaleString('en-US')}</td>
+            <tr key={i} className={rowClass(r.transaction)}>
+              <td className="l">{tickerLink(r)}</td>
+              <td className="l wrap">{r.owner || '—'}</td>
+              <td className="l">{r.relation || '—'}</td>
+              <td className="l">{r.date ?? '—'}</td>
+              <td className="l">{r.transaction || '—'}</td>
+              <td className="n">{num(r.price, 2)}</td>
+              <td className="n">{qty(r.shares)}</td>
+              <td className="n">{qty(r.value)}</td>
             </tr>
           ))}
         </tbody>
@@ -234,22 +338,30 @@ export function InsiderLatest({ rows }: { rows: InsiderRow[] }) {
   )
 }
 
-export function InsiderTop({ rows }: { rows: InsiderRow[] }) {
+export function InsiderTop({ block }: { block: InsiderBlock }) {
+  const rows = block.top ?? []
+  // 정렬 기준이 시장마다 다르다(거래대금 / 변동 수량) — 머리글에 그 기준을 그대로 쓴다
+  const label = block.top_label ?? '주요 내부자 거래'
+  const byShares = label.includes('수량')
   return (
-    <Panel sample>
+    <Panel>
       <table className="fv-table fv-insider-top">
         <thead><tr>
-          <th className="l">Ticker</th><th className="l">Top Insider Trading</th><th className="l">Date</th>
-          <th className="l">Transaction</th><th>Value($)</th>
+          <th className="l">종목</th><th className="l">{label}</th><th className="l">일자</th>
+          <th className="l">유형</th><th>{byShares ? '수량' : '금액'}</th>
         </tr></thead>
         <tbody>
+          {/* 안내문은 왼쪽 표에 이미 한 번 나갔다 — 같은 문단을 나란히 두 번 두면
+              화면 절반이 안내문이 된다 */}
+          {rows.length === 0 && <BlockNote block={{ ...block, note: '소스 없음 — 왼쪽 표의 안내 참고' }}
+            cols={5} loading="내부자 거래 수집 중…" empty="—" />}
           {rows.map((r, i) => (
-            <tr key={i} className={r.transaction === 'Buy' ? 'fv-row-buy' : 'fv-row-sale'}>
-              <td className="l"><T s={r.ticker} /></td>
-              <td className="l wrap">{r.owner}</td>
-              <td className="l">{r.date}</td>
-              <td className="l">{r.transaction}</td>
-              <td className="n">{r.value.toLocaleString('en-US')}</td>
+            <tr key={i} className={rowClass(r.transaction)}>
+              <td className="l">{tickerLink(r)}</td>
+              <td className="l wrap">{r.owner || '—'}</td>
+              <td className="l">{r.date ?? '—'}</td>
+              <td className="l">{r.transaction || '—'}</td>
+              <td className="n">{qty(byShares ? r.shares : r.value)}</td>
             </tr>
           ))}
         </tbody>

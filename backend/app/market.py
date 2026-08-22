@@ -23,6 +23,9 @@ MAJOR_NEWS_COUNT = 16
 # 시장이 안 주는 블록은 이 기본값으로 나간다 — 프론트가 필드 유무를 분기하지 않게.
 EMPTY_BLOCKS = ("indices", "futures", "forex_bonds", "signals_up", "signals_down",
                 "heatmap", "headlines", "investors")
+# 값이 목록이 아니라 객체인 블록. 화면이 `status`/`note`(왜 비었는지)를 같이 읽어야 하는
+# 칸들이라 빈 목록으로 뭉갤 수 없다 — 빈 표는 "오늘 일정 없음"으로 오독된다.
+EMPTY_OBJECT_BLOCKS = ("breadth", "patterns", "econ", "earnings", "insider")
 
 
 def _pct(last, prev) -> float | None:
@@ -131,15 +134,19 @@ def get_market(market: str, now: float | None = None) -> dict:
     now = time.time() if now is None else now
     mod = _module(market)
     blocks = list(mod.BUILDERS)
-    if not any(_key(market, b) in _cache.values for b in blocks):
-        # 첫 방문은 TTL 을 따지지 않고 채운다 — `_is_stale` 은 "한 번도 안 받았다"를
-        # `now - 0 > ttl` 로 판단해서, 주입된 시계가 TTL 보다 작으면 그 블록이 빈 채 남는다.
-        # 백오프는 지킨다: 전 블록이 실패한 시장은 매 요청이 여기로 다시 들어오는데,
-        # 그때 재시도까지 하면 응답이 블록 수 × 타임아웃만큼 느려진다.
-        for b in blocks:
-            if not _in_backoff(market, b, now):
-                _refresh_block(market, b, now)
-    elif any(_is_stale(market, b, now) and not _in_backoff(market, b, now) for b in blocks):
+    slow = set(getattr(mod, "SLOW_BLOCKS", ()))
+    # 첫 방문은 TTL 을 따지지 않고 채운다 — `_is_stale` 은 "한 번도 안 받았다"를
+    # `now - 0 > ttl` 로 판단해서, 주입된 시계가 TTL 보다 작으면 그 블록이 빈 채 남는다.
+    # 백오프는 지킨다: 전 블록이 실패한 시장은 매 요청이 여기로 다시 들어오는데,
+    # 그때 재시도까지 하면 응답이 블록 수 × 타임아웃만큼 느려진다.
+    # **느린 블록(SLOW_BLOCKS)은 여기서 기다리지 않는다** — 실적·인사이더는 종목마다
+    # 외부 호출이라 첫 화면이 1분 넘게 비게 된다. 백그라운드로 채우고, 화면은 그 칸만
+    # "수집 중"으로 둔다.
+    for b in blocks:
+        if b in slow or _key(market, b) in _cache.values or _in_backoff(market, b, now):
+            continue
+        _refresh_block(market, b, now)
+    if any(_is_stale(market, b, now) and not _in_backoff(market, b, now) for b in blocks):
         threading.Thread(target=_refresh_in_background, args=(market,), daemon=True).start()
 
     with _cache.lock:
@@ -149,6 +156,8 @@ def get_market(market: str, now: float | None = None) -> dict:
     oldest = min(times) if times else None
     heatmap = values.get("heatmap") or []
     out = {b: values.get(b) or [] for b in EMPTY_BLOCKS}
+    # 아직 안 받은 객체 블록은 `{}` 로 나간다 — 프론트는 status 가 없으면 "수집 중"으로 읽는다
+    out.update({b: values.get(b) or {} for b in EMPTY_OBJECT_BLOCKS})
     out.update({
         "market": market,
         "session": mod.SESSION,
