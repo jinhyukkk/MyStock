@@ -121,9 +121,21 @@ HEADLINES_SYMBOL = "^KS11"
 | `futures` | `[]` 고정 — 소스 없음. 빌더 자체를 두지 않는다 |
 | `forex_bonds` | `exchange`/`bond`는 `naver.market_index(category, code)`, `yf`는 `market_fetch.daily_closes` |
 | `signals_up/down` | `naver.ranking(kind, market, n)` → `{symbol, name, last, change_pct, volume, signal}` |
-| `heatmap` | `naver.ranking("marketValue", "KOSPI", 100)` → `SECTOR_OF.get(code, "기타")`로 묶음. `weight = marketValue`(억원). 섹터 순서는 섹터 내 시총 합 내림차순 |
+| `heatmap` | `naver.ranking("marketValue", "KOSPI", 100)` → ETF·우선주 제외 → `SECTOR_OF.get(code, "기타")`로 묶음. `weight = market_value`(억원). 섹터 순서는 섹터 내 시총 합 내림차순 |
 | `investors` | `naver.investor_trend(m)` × `INVESTOR_MARKETS` → `{market, date, personal, foreign, institution}` |
 | `headlines` | `market_fetch.news("^KS11", 8)` |
+
+**히트맵에서 걸러내는 것 (실측 2026-08-22로 추가).** 네이버 시총 상위 100에는 ETF 11개
+(KODEX 200, TIGER 미국S&P500, KODEX 머니마켓액티브 …)와 우선주 2개(삼성전자우, 현대차2우B)가
+섞여 있다. ETF는 회사가 아니고 우선주는 보통주와 같은 회사라 큰 칸이 중복된다.
+
+- ETF: 응답의 `stockEndType == "etf"` — 같은 응답에 있는 값이라 추가 호출이 없다.
+- 우선주: **종목코드가 `0`으로 끝나지 않고** 이름이 `우` 또는 `우[A-Z]`로 끝나는 것.
+  두 조건을 모두 요구하는 이유는 이름만 보면 `미래에셋대우`(006800, 보통주) 같은 회사가
+  걸리기 때문이다. 실측에서 이 규칙은 005935·005387만 걸렀고 006800은 남겼다.
+
+`pageSize=100`을 받아 걸러내면 87종목이 남는다(실측). `pageSize=120`은 응답이 JSON이
+아니므로 100이 상한이다. 히트맵에는 87칸이면 충분하고, 개수를 늘리려고 페이지를 더 받지 않는다.
 
 `SECTOR_OF` 수기 매핑에 대하여: US판도 구성종목·비중을 상수로 들고 있다. KR판은 구성과
 가중치는 네이버 실시간이고 **섹터 이름만** 상수라 유지 부담이 더 작다. 시총 상위 100개 중
@@ -145,7 +157,7 @@ HEADLINES_SYMBOL = "^KS11"
 def index_basic(code: str) -> dict          # {last, prev_close, change, change_pct, traded_at}
 def ranking(kind: str, market: str, n: int) -> list[dict]
     # kind: up|down|searchTop|marketValue, market: KOSPI|KOSDAQ
-    # → [{symbol, name, last, change_pct, volume, market_value}]  (market_value 억원)
+    # → [{symbol, name, last, change_pct, volume, market_value, is_etf}]  (market_value 억원)
 def investor_trend(market: str) -> dict     # {date: "2026-08-21", personal, foreign, institution}  (억원)
 def market_index(category: str, code: str) -> dict   # {last, prev_close, change, change_pct}
 ```
