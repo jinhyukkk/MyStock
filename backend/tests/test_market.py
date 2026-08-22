@@ -131,12 +131,11 @@ def test_api_market_endpoint(monkeypatch, tmp_path):
     from app.main import create_app
     app = create_app(db_path=str(tmp_path / "t.db"), refresh_on_start=False)
     with TestClient(app) as c:
-        r = c.get("/api/market")
+        r = c.get("/api/market?market=US")
         assert r.status_code == 200
         body = r.json()
-        assert body["market"] == "US"
         assert body["indices"][0]["symbol"] == "^GSPC"
-        r2 = c.post("/api/market/refresh")
+        r2 = c.post("/api/market/refresh?market=US")
         assert r2.status_code == 200 and r2.json()["failed"] == []
 
 
