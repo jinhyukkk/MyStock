@@ -3,7 +3,8 @@ import { Link, useParams } from 'react-router-dom'
 import { del, get, post } from '../../api'
 import { isStale } from '../../time'
 import { cur } from '../../format'
-import type { Backtest, TickerDetail as Detail } from '../../types'
+import type { Backtest } from '../../types'
+import { useTickerDetail } from '../../ticker/useTickerDetail'
 import SignalBadge from '../../components/SignalBadge'
 import ScoreBar from '../../components/ScoreBar'
 import TradeDialog from '../../components/TradeDialog'
@@ -32,25 +33,21 @@ const TABS: [string, string][] = [
 
 export default function Analysis() {
   const { symbol } = useParams()
-  const [detail, setDetail] = useState<Detail | null>(null)
+  const { detail, status, error, loadedAt, reload } = useTickerDetail(symbol)
+  const now = loadedAt
   const [backtest, setBacktest] = useState<Backtest | null>(null)
   const [btError, setBtError] = useState<string | null>(null)
   // 백테스트는 상세와 별개 요청이라 먼저 그려지는 프레임이 존재한다. 그 프레임에서
   // "표본 부족"이라고 단정하면 아직 오지 않은 근거를 없다고 말하는 셈이 된다.
   const [btLoading, setBtLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const [ruleType, setRuleType] = useState('TARGET')
   const [ruleValue, setRuleValue] = useState('')
   const [ruleMsg, setRuleMsg] = useState<string | null>(null)
   const [tradeOpen, setTradeOpen] = useState<'BUY' | 'SELL' | null>(null)
   const [sellQuantity, setSellQuantity] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
-  const [now, setNow] = useState(Date.now())
+  const [actionError, setActionError] = useState<string | null>(null)
   const [tab, setTab] = useState('signal')
-
-  const load = () => get<Detail>(`/api/tickers/${symbol}`)
-    .then(d => { setDetail(d); setError(null); setNow(Date.now()) })
-    .catch(e => setError(String(e)))
 
   const loadBacktest = () => {
     setBtLoading(true); setBtError(null)
@@ -61,14 +58,20 @@ export default function Analysis() {
 
   /** 이 종목만 갱신 — 전체 갱신은 수 초 걸린다. 백테스트도 새 봉으로 다시 받는다. */
   const refresh = async () => {
-    setBusy(true)
-    try { await post(`/api/refresh?symbol=${encodeURIComponent(symbol!)}`); await load(); await loadBacktest() }
-    catch (e) { setError(String(e)) }
+    setBusy(true); setActionError(null)
+    try { await post(`/api/refresh?symbol=${encodeURIComponent(symbol!)}`); reload(); await loadBacktest() }
+    catch (e) { setActionError(String(e)) }
     finally { setBusy(false) }
   }
-  // 심볼이 바뀔 때만 — load/loadBacktest를 의존성에 넣으면 매 렌더마다 요청이 나간다
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { load(); setBacktest(null); loadBacktest() }, [symbol])
+
+  // `/backtest`는 tickers 행이 없으면 404다. pending 중에 쏘면 수집이 끝나기도 전에
+  // 백테스트 블록이 에러로 굳는다 — ready가 된 뒤에만 부른다.
+  useEffect(() => { setBacktest(null) }, [symbol])
+  useEffect(() => {
+    if (status !== 'ready') return
+    loadBacktest()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, symbol])
 
   // 탭 활성 상태는 스크롤 위치를 따라간다 — 클릭한 탭만 켜두면 스크롤 후 거짓말이 된다
   useEffect(() => {
@@ -83,16 +86,21 @@ export default function Analysis() {
     return () => io.disconnect()
   }, [detail])
 
-  if (error) return (
+  if (status === 'failed') return (
     <div className="card">
-      <div style={{ color: 'var(--sell)' }}>불러오기 실패: {error}</div>
-      <button style={{ marginTop: 10 }} onClick={() => { setError(null); load() }}>다시 시도</button>
+      <div style={{ color: 'var(--sell)' }}>{error ?? '불러오기 실패'}</div>
+      <button style={{ marginTop: 10 }} onClick={reload}>다시 시도</button>
     </div>
   )
   if (!detail) return (
     <div className="grid">
+      {/* pending은 "멈춘 것"이 아니라 "받는 중"이다 — 구분해 주지 않으면
+          사용자가 새로고침을 반복하며 같은 수집을 기다린다 */}
+      {status === 'pending' &&
+        <div className="quote-note">시세를 받아오는 중…</div>}
       <div className="card skeleton" style={{ minHeight: 80 }} />
       <div className="card skeleton" style={{ minHeight: 380 }} />
+      <div className="card skeleton" style={{ minHeight: 240 }} />
     </div>
   )
 
@@ -127,7 +135,7 @@ export default function Analysis() {
     if (!ruleValue) return
     try {
       await post('/api/rules', { symbol, rule_type: ruleType, value: Number(ruleValue) })
-      setRuleValue(''); setRuleMsg(null); load()
+      setRuleValue(''); setRuleMsg(null); reload()
     } catch (e) { setRuleMsg(String(e)) }
   }
   /** 손절가는 이미 계산돼 있다 — 손으로 옮겨 적게 두면 값이 틀리거나 등록을 건너뛴다.
@@ -137,7 +145,7 @@ export default function Analysis() {
     try {
       for (const r of detail.rules.filter(r => r.rule_type === 'STOP')) await del(`/api/rules/${r.id}`)
       await post('/api/rules', { symbol, rule_type: 'STOP', value: risk.atr_stop_price })
-      setRuleMsg(null); load()
+      setRuleMsg(null); reload()
     } catch (e) { setRuleMsg(String(e)) }
   }
 
@@ -179,6 +187,8 @@ export default function Analysis() {
     <div className="quote">
       <QuoteHeader detail={detail} change={change} stale={stale} now={now} busy={busy}
                    onRefresh={refresh} onTrade={() => setTradeOpen(holdingSellSignal ? 'SELL' : 'BUY')} />
+      {actionError &&
+        <div className="quote-note" style={{ color: 'var(--sell)' }}>{actionError}</div>}
 
       {/* 판정을 뒤집는 사실은 판정과 같은 화면에 — 개요의 판정 한 줄이 여기로 넘어온 근거다 */}
       {gradeContradicts && sig && <div className="warn-box critical">
@@ -199,7 +209,7 @@ export default function Analysis() {
         position={risk ? { stopPrice: risk.stop_price, stopSource: risk.stop_source,
                            totalAssetKrw: risk.total_asset_krw, fxRate: risk.fx_rate,
                            maxWeightPct: risk.max_weight_pct } : null}
-        onClose={() => { setTradeOpen(null); setSellQuantity(null) }} onSaved={load} />}
+        onClose={() => { setTradeOpen(null); setSellQuantity(null) }} onSaved={reload} />}
 
       <nav className="quote-tabs" aria-label="섹션">
         <Link className="quote-tab" to={`/ticker/${symbol}`}>← 개요</Link>
@@ -394,7 +404,7 @@ export default function Analysis() {
                       {' '}<button className="ghost" style={{ padding: '2px 8px', fontSize: 11, marginLeft: 6 }} onClick={() => {
                         if (confirm(`${label} ${r.value.toLocaleString('ko-KR')} 룰을 삭제합니다.`
                           + (r.rule_type === 'STOP' ? '\n손절 알림이 더 이상 오지 않습니다.' : '')))
-                          del(`/api/rules/${r.id}`).then(load)
+                          del(`/api/rules/${r.id}`).then(reload)
                       }}>삭제</button></span>
                   </div>)
               })}
