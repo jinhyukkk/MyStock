@@ -1,5 +1,4 @@
 import asyncio
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -7,8 +6,9 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import db, service
+from app import db, env, service
 from app.api import router
+from app.market_api import router as market_router
 
 # ponytail: 1시간 폴링 + 갱신 시 텔레그램 푸시 — 장중 분 단위 실시간성이 필요해지면 별도 알림 루프 분리
 REFRESH_INTERVAL = 60 * 60  # 1시간
@@ -16,19 +16,7 @@ REFRESH_INTERVAL = 60 * 60  # 1시간
 ROOT = Path(__file__).parent.parent.parent
 
 
-def _load_env(path: Path) -> None:
-    """루트 .env 로드 (이미 설정된 환경 변수가 우선). python-dotenv 불필요."""
-    if not path.is_file():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, _, v = line.partition("=")
-        os.environ.setdefault(k.strip(), v.strip().strip("'\""))
-
-
-_load_env(ROOT / ".env")
+env.load(ROOT)
 
 
 def _safe_static_path(dist: Path, path: str) -> Path | None:
@@ -65,6 +53,7 @@ def create_app(db_path: str | None = None, refresh_on_start: bool = True) -> Fas
 
     app = FastAPI(title="MyStock", lifespan=lifespan)
     app.include_router(router)
+    app.include_router(market_router)
 
     dist = ROOT / "frontend" / "dist"
     if dist.exists():

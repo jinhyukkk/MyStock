@@ -6,8 +6,9 @@ const tabs = [
   { to: '/watchlist', label: '워치리스트' },
 ]
 export default function Layout() {
+  // 고정폭(1100px)이면 와이드 모니터에서 양옆이 비어 표가 좁게 눌린다 — 화면 폭을 다 쓴다
   return (
-    <div style={{ maxWidth: 1100, margin: '0 auto', padding: '20px 16px 60px' }}>
+    <div style={{ width: '100%', margin: '0 auto', padding: '20px 24px 60px' }}>
       <header className="topbar">
         <h1 className="logo">MyStock</h1>
         <nav style={{ display: 'flex', gap: 4 }}>
@@ -25,10 +26,6 @@ export default function Layout() {
       </header>
       <CommandPalette />
       <Outlet />
-      <footer style={{ marginTop: 40, color: 'var(--text-dim)', fontSize: 12,
-                       textAlign: 'center' }}>
-        본 시그널은 지표 기반 참고 정보이며 투자 자문이 아닙니다.
-      </footer>
     </div>
   )
 }

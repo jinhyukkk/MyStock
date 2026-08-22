@@ -1,0 +1,180 @@
+/* 메인 페이지 — 화면 구성은 finviz 홈, 디자인은 MyStock 테마(theme.css 토큰)를 따른다.
+   색·폰트·모서리·유리 효과를 여기서 새로 정의하지 않고 --bg-card/--border/--buy/--sell/--accent 를
+   그대로 쓴다 — 다른 화면과 다른 팔레트가 섞이면 앱이 두 개로 보인다. 모두 .fv 아래에 스코프. */
+
+.fv { font-size: 13px; color: var(--text); display: grid; gap: 14px; }
+.fv a.fv-tk { color: var(--accent); }
+.fv a.fv-tk:hover { text-decoration: underline; }
+.fv .up { color: var(--buy); } .fv .down { color: var(--sell); }
+.fv .fv-dim { color: var(--text-dim); }
+.fv .c { text-align: center; }
+
+/* ── 그리드 (finviz 배치) ── */
+.fv-row { display: grid; gap: 14px; align-items: start; }
+.fv-row > * { min-width: 0; }
+.fv-row.charts { grid-template-columns: repeat(3, 1fr); }
+.fv-row.breadth { grid-template-columns: repeat(4, 1fr); }
+/* 꽉 찬 화면: 표 두 개가 남는 폭을 나눠 갖고, 히트맵은 finviz 처럼 440px 안팎으로 고정 */
+.fv-row.signals { grid-template-columns: 1fr 1fr minmax(340px, 460px); }
+.fv-row.patterns { grid-template-columns: 1fr minmax(300px, 460px); }
+.fv-row.two { grid-template-columns: 1fr 1fr; margin-bottom: 14px; }
+.fv-col { display: grid; }
+.fv-row.calendar { grid-template-columns: 1fr minmax(340px, 560px); }
+.fv-row.insider { grid-template-columns: 1fr minmax(340px, 560px); }
+.fv-row.quotes { grid-template-columns: 1fr 1fr; }
+
+/* ── 패널: theme.css 의 .card 와 같은 유리 카드. hover 들림 효과는 표가 많은
+   화면에서 마우스만 움직여도 화면이 출렁여 제외 ── */
+.fv-panel, .fv-chart, .fv-breadth, .fv-summary {
+  position: relative; background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 14px; backdrop-filter: blur(16px); box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25);
+}
+.fv-panel { overflow: hidden; }
+.fv-sample {
+  position: absolute; right: 10px; top: 8px; z-index: 1; font-size: 10px; font-weight: 600;
+  padding: 2px 7px; border-radius: 10px; color: var(--warn); background: var(--warn-bg);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 40%, transparent); letter-spacing: 0.04em;
+}
+.fv-signal { color: var(--text-dim); display: inline-block; max-width: 96px; overflow: hidden;
+             text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.fv-summary .warn { color: var(--warn); }
+.fv-gear { position: absolute; right: 12px; top: 10px; color: var(--text-dim); font-size: 13px; cursor: pointer; }
+.fv-panel-title {
+  font-weight: 600; font-size: 13px; padding: 12px 14px 10px; border-bottom: 1px solid var(--border);
+}
+
+/* ── 표: theme.css 의 table 규칙과 같은 결, 밀도만 finviz 처럼 촘촘하게 ── */
+.fv-table { width: 100%; border-collapse: collapse; }
+.fv-table th {
+  color: var(--text-dim); font-weight: 500; font-size: 12px; text-align: right;
+  padding: 10px 8px 8px; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.fv-table th.l, .fv-table td.l, .fv-table th:first-child, .fv-table td:first-child { text-align: left; }
+.fv-table td {
+  padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap;
+  font-size: 12.5px; text-align: right; line-height: 18px; transition: background 0.15s ease;
+}
+.fv-table tr:last-child td { border-bottom: 0; }
+.fv-table tbody tr:hover td { background: var(--bg-hover); }
+.fv-logo {
+  display: inline-block; width: 14px; height: 14px; border-radius: 3px; margin-right: 5px;
+  background: rgba(148, 163, 200, 0.18); color: var(--text-dim); font-size: 9px; line-height: 14px;
+  text-align: center; vertical-align: -2px; font-weight: 600;
+}
+.fv-patterns td { padding: 5px 10px; }
+.fv-pattern-ico { display: inline-block; width: 14px; color: var(--text-dim); margin-right: 4px; text-align: center; }
+
+/* 인사이더: 매수/매도 행을 시세 색의 옅은 띠로 */
+.fv-row-buy td { background: color-mix(in srgb, var(--buy) 9%, transparent); }
+.fv-row-sale td { background: color-mix(in srgb, var(--sell) 9%, transparent); }
+
+/* 샘플 배지가 표 마지막 헤더(Value($) 등)를 덮지 않도록 그 칸만 오른쪽 여백을 준다 */
+.fv-panel:has(> .fv-sample) th:last-child { padding-right: 52px; }
+
+/* 우측 좁은 열의 Top Insider — 이름·거래종류가 길어 전 셀 줄바꿈 허용, 여백도 좁게 */
+.fv-insider-top td { white-space: normal; line-height: 1.35; padding: 5px 6px; }
+.fv-insider-top th { padding-left: 6px; padding-right: 6px; }
+.fv-insider-top td:nth-child(3) { white-space: nowrap; }  /* 날짜는 두 줄로 쪼개지면 못 읽는다 */
+
+/* ── 마켓 요약줄 ── */
+.fv-summary {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  color: var(--text-dim); font-size: 12.5px;
+}
+.fv-summary-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--grad); flex: none; }
+.fv-summary-time { white-space: nowrap; }
+.fv-summary-text { color: var(--text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fv-more { color: var(--accent); white-space: nowrap; }
+.fv-summary-votes { display: flex; gap: 8px; color: var(--text-dim); font-size: 11px; filter: grayscale(1); opacity: 0.7; }
+
+/* ── 지수 차트 ── */
+.fv-chart { padding: 10px 8px 2px; }
+.fv-chart-head { display: flex; gap: 10px; align-items: baseline; padding: 0 26px 4px 30px; }
+.fv-chart-name { font-weight: 700; font-size: 13px; }
+.fv-chart-date { color: var(--text-dim); font-size: 11px; }
+.fv-chart-chg { margin-left: auto; font-size: 12px; font-weight: 600; }
+.fv-chart svg { display: block; }
+.fv-grid { stroke: var(--border); stroke-width: 0.6; }
+.fv-axis { fill: var(--text-dim); font-size: 8px; font-family: inherit; }
+.fv-candle.up line, .fv-candle.up rect { stroke: var(--buy); fill: var(--buy); }
+.fv-candle.down line, .fv-candle.down rect { stroke: var(--sell); fill: var(--sell); }
+.fv-candle line { stroke-width: 0.8; }
+.fv-vol.up { fill: var(--buy); opacity: 0.4; } .fv-vol.down { fill: var(--sell); opacity: 0.4; }
+.fv-last.up { fill: var(--buy); } .fv-last.down { fill: var(--sell); }
+.fv-last-text { fill: #0a0d14; font-size: 8px; font-weight: 700; font-family: inherit; }
+
+/* ── 시장 폭 바 ── */
+.fv-breadth { font-size: 12px; padding: 12px 14px; }
+/* 샘플 배지가 우측 라벨(Declining 등)을 덮지 않도록 라벨을 배지 아래로 내린다 */
+.fv-breadth .fv-sample { top: 6px; }
+.fv-breadth .fv-breadth-labels { padding-top: 14px; }
+.fv-breadth-labels { display: flex; justify-content: space-between; align-items: flex-start; line-height: 1.3; }
+.fv-breadth-labels p { margin: 0; }
+.fv-breadth-labels p:first-child { font-weight: 600; }
+.fv-breadth-labels .left { color: var(--buy); }
+.fv-breadth-labels .right { color: var(--sell); text-align: right; }
+.fv-breadth-labels .center { color: var(--text-dim); align-self: center; font-size: 11px; }
+.fv-breadth-bar { display: flex; height: 8px; margin-top: 8px; border-radius: 4px; overflow: hidden; background: var(--border); }
+.fv-breadth-bar .l { background: var(--buy); } .fv-breadth-bar .r { background: var(--sell); }
+.fv-breadth-bar .m { background: var(--neutral); opacity: 0.5; }
+
+/* ── 히트맵 ── */
+.fv-heatmap { position: relative; width: 100%; overflow: hidden; }
+.fv-sector { position: absolute; overflow: hidden; box-sizing: border-box; padding: 1px; }
+.fv-sector-label {
+  height: 12px; line-height: 12px; font-size: 8px; font-weight: 600; color: var(--text-dim);
+  padding: 0 4px; overflow: hidden; white-space: nowrap; letter-spacing: 0.04em;
+}
+.fv-sector-body { position: absolute; left: 1px; right: 1px; top: 13px; bottom: 1px; }
+.fv-cell {
+  position: absolute; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  box-sizing: border-box; color: var(--text); overflow: hidden; border-radius: 3px;
+  box-shadow: inset 0 0 0 1px rgba(10, 13, 20, 0.6);
+  font-weight: 700; line-height: 1.05; transition: filter 0.15s ease;
+}
+.fv-cell:hover { filter: brightness(1.25); }
+.fv-cell-c { font-weight: 500; font-size: 0.62em; opacity: 0.9; }
+
+/* ── Major News ── */
+.fv-major { padding: 4px 0; }
+.fv-major-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 14px; transition: background 0.15s ease; }
+.fv-major-row:hover { background: var(--bg-hover); }
+/* theme.css 의 .badge / .sig-tag 와 같은 문법: 옅은 바탕 + 같은 색 1px 링 */
+.fv-badge {
+  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; min-width: 58px; text-align: center;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 35%, transparent);
+}
+.fv-badge.up { color: var(--buy); background: color-mix(in srgb, var(--buy) 12%, transparent); }
+.fv-badge.down { color: var(--sell); background: color-mix(in srgb, var(--sell) 12%, transparent); }
+.fv-badge:not(.up):not(.down) { color: var(--text-dim); background: rgba(148, 163, 200, 0.08); }
+
+/* ── 헤드라인 ── */
+.fv-headlines td { white-space: normal; }
+.fv-src { width: 30px; }
+.fv-src-ico {
+  display: inline-block; min-width: 22px; height: 16px; padding: 0 3px; border-radius: 4px;
+  background: rgba(148, 163, 200, 0.18); color: var(--text-dim); font-size: 8px; font-weight: 700;
+  line-height: 16px; text-align: center;
+}
+.fv-headlines td.fv-time { width: 72px; color: var(--text-dim); white-space: nowrap; }  /* td 줄바꿈 허용보다 우선 */
+
+/* ── 캘린더 ── */
+.fv-table td.wrap { white-space: normal; line-height: 1.35; }
+.fv-chips { display: flex; flex-wrap: wrap; gap: 2px 12px; }
+.fv-earn td:first-child { width: 64px; vertical-align: top; padding-top: 6px; }
+
+/* ── 반응형: theme.css 의 820px 기준과 맞춘다 ── */
+@media (max-width: 1000px) {
+  .fv-row.signals { grid-template-columns: 1fr 1fr; }
+  .fv-row.signals > :last-child { grid-column: 1 / -1; }
+  .fv-row.patterns { grid-template-columns: 1fr; }
+  .fv-row.breadth { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 820px) {
+  .fv-row.charts, .fv-row.signals, .fv-row.patterns, .fv-row.two, .fv-row.calendar, .fv-row.insider,
+  .fv-row.quotes, .fv-row.breadth { grid-template-columns: 1fr; }
+  .fv-row.signals > :last-child { grid-column: auto; }
+  .fv-panel { overflow-x: auto; }
+  .fv-summary { flex-wrap: wrap; }
+  .fv-summary-text { white-space: normal; flex-basis: 100%; order: 9; }
+}
