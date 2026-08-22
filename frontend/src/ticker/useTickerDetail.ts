@@ -57,6 +57,7 @@ export function useTickerDetail(symbol: string | undefined) {
   const reload = useCallback(() => {
     if (timer.current) clearTimeout(timer.current)
     gen.current += 1
+    setDetail(null)
     setStatus('loading')
     setError(null)
     run(gen.current, 0)
@@ -70,7 +71,13 @@ export function useTickerDetail(symbol: string | undefined) {
     setError(null)
     run(mine, 0)
     return () => {
-      // 언마운트·심볼 변경 시 예약된 폴링을 끊지 않으면 떠난 화면이 계속 요청을 쏜다.
+      // 세대를 여기서도 올려야 한다 — in-flight fetch가 언마운트 시점에 타이머를
+      // 아직 예약하지 않은 상태(timer.current가 null)라면 clearTimeout으로는
+      // 지울 게 없다. 이후 fetch가 resolve되면 .then의 유일한 가드는
+      // gen.current !== mine인데, 세대를 안 올리면 그 응답이 가드를 통과해
+      // 언마운트된 훅 위에서 setTimeout으로 폴링을 다시 예약해버린다 —
+      // 떠난 화면이 상한(30회)까지 계속 요청을 쏘는 원인이 된다.
+      gen.current += 1
       if (timer.current) clearTimeout(timer.current)
     }
   }, [symbol, run])
