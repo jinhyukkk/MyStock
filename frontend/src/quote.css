@@ -59,8 +59,6 @@
 .tf-btn.on { border-color: var(--border); background: var(--bg-card); color: var(--text); }
 .chart-legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--text-dim); }
 .chart-legend i { display: inline-block; width: 10px; height: 2px; vertical-align: middle; margin-right: 4px; }
-.chart-sub-label { font-size: 11px; color: var(--text-dim); margin-top: 6px; }
-
 /* 차트 컨테이너 높이는 CSS로 못박는다. lightweight-charts의 autoSize는 컨테이너
    높이를 재서 차트를 그 높이에 맞추는데, 컨테이너가 auto면 그 높이가 다시 차트
    내용에서 나온다 — 앵커 없는 자기참조 루프다. 내부 <table>의 height는 CSS상
@@ -68,7 +66,6 @@
    값은 createChart의 height 옵션과 같게 유지할 것(그 옵션은 ResizeObserver가
    없을 때만 쓰이는 폴백이다). */
 .quote-chart-main { height: 380px; }
-.quote-chart-sub { height: 100px; }
 
 /* 스냅샷 표 — 데스크톱 6쌍/행, 좁은 화면 2쌍/행. 홀수 행을 줄무늬로. */
 .snapshot {
