@@ -68,7 +68,7 @@ def _kr_items(rows: list[dict]) -> list[dict]:
                 "relation": d.get("isu_exctv_ofcps") or "",
                 "date": _dart_date(d.get("rcept_dt")),
                 "transaction": d.get("chnge_rsn") or "변동",
-                "shares": _num(d.get("chnge_qy")),
+                "shares": _num(d.get("sp_stock_lmp_irds_cnt")),
                 # 소유보고에는 체결 단가·금액이 없다. 0 으로 채우면 '무상'으로 읽힌다
                 "value": None, "price": None,
                 "url": f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={d['rcept_no']}"

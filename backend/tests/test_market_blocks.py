@@ -156,7 +156,7 @@ def test_insider_kr_uses_dart_and_has_no_price(monkeypatch):
     monkeypatch.setattr(dart, "available", lambda: True)
     monkeypatch.setattr(dart, "elestock", lambda code: [
         {"rcept_dt": "20260818", "repror": "홍길동", "isu_exctv_ofcps": "대표이사",
-         "chnge_rsn": "장내매수", "chnge_qy": "1,000", "rcept_no": "20260818000123"}])
+         "chnge_rsn": "장내매수", "sp_stock_lmp_irds_cnt": "1,000", "rcept_no": "20260818000123"}])
     out = market_insider.insider("KR", [{"symbol": "005930", "name": "삼성전자", "yf": "005930.KS"}])
     row = out["latest"][0]
     assert (row["date"], row["shares"], row["transaction"]) == ("2026-08-18", 1000.0, "장내매수")

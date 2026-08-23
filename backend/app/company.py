@@ -1196,9 +1196,9 @@ def build_insiders(conn, b: _Bundle) -> tuple[dict, str]:
                 "name": r.get("repror") or r.get("nm") or "",
                 "relation": r.get("isu_exctv_ofcps") or r.get("isu_exctv_rgist_at"),
                 "date": date,
-                "transaction": r.get("chnge_rsn") or r.get("sp_stock_lmp_cnt") or "변동",
+                "transaction": r.get("chnge_rsn") or "변동",
                 "price": None,
-                "shares": _num(str(r.get("chnge_qy") or "").replace(",", "")),
+                "shares": _num(str(r.get("sp_stock_lmp_irds_cnt") or "").replace(",", "")),
                 "value": None,
                 "shares_total": _num(str(r.get("sp_stock_lmp_cnt") or "").replace(",", "")),
                 "url": f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={r.get('rcept_no')}"
