@@ -4,6 +4,7 @@ import { get, post } from '../api'
 import { isStale, relativeTime } from '../time'
 import IndexChart from '../finviz/IndexChart'
 import Heatmap from '../finviz/Heatmap'
+import AdSlot from '../components/AdSlot'
 import { BreadthRow, EarningsCalendar, EconCalendar, Headlines, InsiderLatest, InsiderTop,
          InvestorFlows, MajorNews, MarketSummary, Panel, PatternTable, QuoteTable,
          SignalTable } from '../finviz/Sections'
@@ -171,6 +172,11 @@ export default function Dashboard() {
           <Heatmap sectors={data.heatmap} />
         </Panel>
       </div>
+
+      {/* 광고는 첫 화면(지수·수급·시그널·히트맵) 바로 아래 한 칸 — finviz 와 같은 자리다.
+          더 위에 두면 첫 화면의 시세가 밀려 내려가고, 맨 아래는 스크롤이 닿지 않아 노출이 없다.
+          환경변수가 비어 있으면 AdSlot 이 null 을 돌려줘 이 줄은 높이 0 이다. */}
+      <AdSlot slot={import.meta.env.VITE_ADSENSE_SLOT_DASHBOARD} />
 
       {/* finviz: 좌 2/3 = 차트패턴 표 2개 + 그 아래 헤드라인, 우 1/3 = Major News 가 두 줄에 걸침 */}
       <div className="fv-row patterns">
