@@ -56,8 +56,13 @@ function color(chg: number | null): string {
 // 옆 시그널 표(19행)와 키를 맞추려 세로로 조금 길게
 const W = 440, H = 560
 
+// 시총 그대로 면적을 매기면 삼성전자·SK하이닉스처럼 홀로 떨어진 대형주가 화면 절반을
+// 차지해 나머지 십여 섹터가 안 보이게 눌린다. 제곱근으로 완만하게 눌러 순서(큰 게 크다)는
+// 지키되 1등과 꼴찌의 면적 차이를 줄인다 — 실제 시총 비율은 %  숫자로 그대로 보여준다.
+const sizeOf = (w: number) => Math.sqrt(Math.max(w, 0))
+
 export default function Heatmap({ sectors: input }: { sectors: HeatSector[] }) {
-  const sectors = input.map(s => ({ ...s, w: s.tickers.reduce((t, k) => t + k.weight, 0) }))
+  const sectors = input.map(s => ({ ...s, w: sizeOf(s.tickers.reduce((t, k) => t + k.weight, 0)) }))
   const sectorRects = squarify(sectors.map(s => ({ key: s.name, w: s.w })), { x: 0, y: 0, w: W, h: H })
 
   return (
@@ -66,7 +71,7 @@ export default function Heatmap({ sectors: input }: { sectors: HeatSector[] }) {
         const r = sectorRects.get(s.name)
         if (!r) return null
         const inner = { x: 0, y: 0, w: r.w, h: Math.max(r.h - 11, 0) }
-        const cells = squarify(s.tickers.map(t => ({ key: t.symbol, w: t.weight })), inner)
+        const cells = squarify(s.tickers.map(t => ({ key: t.symbol, w: sizeOf(t.weight) })), inner)
         const pct = (v: number, base: number) => `${v / base * 100}%`
         return (
           <div key={s.name} className="fv-sector"

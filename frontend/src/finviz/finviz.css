@@ -12,6 +12,14 @@
 .fv .fv-dim { color: var(--text-dim); }
 .fv .c { text-align: center; }
 
+/* 영역 타이틀 — finviz 는 칸마다 표 제목만 있고 구획 이름이 없어, 화면을 처음 보면
+   지수·수급·시그널이 어디서 끝나고 다음 구획이 시작하는지 스크롤해봐야 안다.
+   구획 앞에 한 줄만 얹어 이름을 준다(장식이 아니라 위치 안내). */
+.fv-section-title {
+  font-size: 12px; font-weight: 700; color: var(--text-dim); text-transform: uppercase;
+  letter-spacing: 0.05em; margin: 2px 2px -2px; padding-top: 4px;
+}
+
 /* ── 그리드 (finviz 배치) ── */
 .fv-row { display: grid; gap: 14px; align-items: start; }
 .fv-row > * { min-width: 0; }
@@ -37,12 +45,18 @@
   border-radius: 14px; backdrop-filter: blur(16px); box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25);
 }
 .fv-panel { overflow: hidden; }
-/* 유니버스 꼬리표("코스피·코스닥 시총 200 · 08-21"). 경고색이던 "샘플" 배지 자리를
-   그대로 쓰되 흐린 색이다 — 무엇을 센 숫자인지 알리는 주석이지 경고가 아니다. */
-.fv-scope {
-  position: absolute; right: 10px; top: 8px; z-index: 1; font-size: 10px; font-weight: 500;
-  padding: 2px 7px; border-radius: 10px; color: var(--text-dim);
-  background: color-mix(in srgb, var(--text-dim) 12%, transparent); letter-spacing: 0.02em;
+/* 유니버스 꼬리표("코스피·코스닥 시총 200 · 08-21"). 표 위에 겹치는 배지였을 때는 표와
+   경계가 안 보이고 숫자 하나만 둥둥 떠서 무슨 뜻인지 안 읽혔다 — 제목처럼 자기 줄을 갖고
+   "기준" 라벨을 앞에 박아, 그 아래 표가 "이 범위 안에서" 나온 숫자임을 바로 알게 한다. */
+.fv-scope-bar {
+  display: flex; align-items: baseline; gap: 7px; padding: 8px 14px 7px;
+  font-size: 11px; color: var(--text-dim); letter-spacing: 0.01em;
+  background: color-mix(in srgb, var(--text-dim) 5%, transparent);
+  border-bottom: 1px solid var(--border);
+}
+.fv-scope-bar .fv-scope-label {
+  flex: none; font-weight: 700; font-size: 9.5px; letter-spacing: 0.07em;
+  color: var(--accent); text-transform: uppercase; opacity: 0.9;
 }
 .fv-signal { color: var(--text-dim); display: inline-block; max-width: 96px; overflow: hidden;
              text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
@@ -83,10 +97,6 @@
 /* 인사이더: 매수/매도 행을 시세 색의 옅은 띠로 */
 .fv-row-buy td { background: color-mix(in srgb, var(--buy) 9%, transparent); }
 .fv-row-sale td { background: color-mix(in srgb, var(--sell) 9%, transparent); }
-
-/* 꼬리표는 표 위에 겹쳐 뜬다 — 마지막 열(금액 등)을 덮지 않도록 머리글 줄을 통째로
-   한 칸 내린다. 오른쪽 여백만 주면 열이 많은 표(인사이더 8열)가 패널 밖으로 밀린다. */
-.fv-panel:has(> .fv-scope) thead th { padding-top: 22px; }
 
 /* 차트 패턴 표: 종목명 길이가 제각각(미국은 "Thermo Fisher Scientific")이라 고정 폭으로
    나누고 넘치면 말줄임 — 안 그러면 이름 긴 종목 하나가 패턴 열을 화면 밖으로 밀어낸다 */

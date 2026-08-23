@@ -12,14 +12,19 @@ const vol = (v: number | null) =>
   v === null ? '—' : v >= 1e9 ? `${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `${(v / 1e6).toFixed(2)}M`
   : v >= 1e3 ? `${(v / 1e3).toFixed(2)}K` : v.toFixed(0)
 
-/** finviz 패널 공통 껍데기. `scope` 는 우상단 꼬리표(예: "코스피·코스닥 시총 200 · 08-21") —
- *  이 화면의 breadth·패턴은 전 종목이 아니라 유니버스에서 센 값이라, 무엇을 센 숫자인지
- *  패널이 스스로 말하지 않으면 시장 전체 통계로 읽힌다. */
-export function Panel({ children, gear, scope, className = '' }:
-  { children: React.ReactNode; gear?: boolean; scope?: string; className?: string }) {
+/** finviz 패널 공통 껍데기. `scope` 는 이 패널 숫자가 어느 범위에서 나왔는지
+ *  (예: "코스피·코스닥 시총 200 · 08-21") — 이 화면의 breadth·패턴은 전 종목이 아니라
+ *  유니버스에서 센 값이라, 패널이 스스로 말하지 않으면 시장 전체 통계로 읽힌다.
+ *  표 위에 겹치는 배지가 아니라 "기준" 라벨을 단 자기 줄로 둬서, 아래 표 전체가
+ *  이 범위 얘기라는 게 한눈에 들어오게 한다. */
+export function Panel({ children, gear, scope, scopeHidden, className = '' }:
+  { children: React.ReactNode; gear?: boolean; scope?: string; scopeHidden?: boolean; className?: string }) {
   return (
     <div className={`fv-panel ${className}`}>
-      {scope && <span className="fv-scope">{scope}</span>}
+      {/* scopeHidden: 같은 줄의 옆 패널(예: 차트 패턴 좌/우 표)에는 캡션을 안 보이되,
+          자리는 그대로 차지해야 두 표 머리글 높이가 어긋나지 않는다 — visibility 로 숨긴다. */}
+      {scope && <div className="fv-scope-bar" style={scopeHidden ? { visibility: 'hidden' } : undefined}>
+        <span className="fv-scope-label">기준</span><span>{scope}</span></div>}
       {gear && !scope && <span className="fv-gear" aria-hidden>⚙</span>}
       {children}
     </div>
@@ -153,7 +158,7 @@ export function PatternTable({ block, half }: { block: PatternBlock; half: 'left
   const mid = Math.ceil(all.length / 2)
   const rows = half === 'left' ? all.slice(0, mid) : all.slice(mid)
   return (
-    <Panel scope={half === 'left' ? scopeOf(block) : undefined}>
+    <Panel scope={scopeOf(block)} scopeHidden={half === 'right'}>
       <table className="fv-table fv-patterns">
         <thead><tr><th colSpan={4}>{half === 'left' ? '종목' : ''}</th>
           <th className="l">패턴</th></tr></thead>
@@ -177,7 +182,7 @@ export function PatternTable({ block, half }: { block: PatternBlock; half: 'left
 export function MajorNews({ rows }: { rows: MajorNewsRow[] }) {
   return (
     <Panel>
-      <div className="fv-panel-title" title="대형주 중 당일 등락이 큰 순">Major Movers</div>
+      <div className="fv-panel-title" title="대형주 중 당일 등락이 큰 순">주요 등락 종목</div>
       <div className="fv-major">
         {rows.length === 0 && <div className="fv-major-row fv-dim">—</div>}
         {rows.map(r => (

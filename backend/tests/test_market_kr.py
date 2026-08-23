@@ -97,7 +97,8 @@ def test_kr_heatmap_unmapped_goes_to_기타(monkeypatch):
     _ok(monkeypatch)
     m = market.get_market("KR", now=1000.0)
     by_sector = {s["name"]: [t["symbol"] for t in s["tickers"]] for s in m["heatmap"]}
-    assert "005930" in by_sector["반도체·전자부품"]
+    # 삼성전자·SK하이닉스는 시총이 압도적이라 반도체·전자부품과 분리해 자기 이름으로 둔다
+    assert "005930" in by_sector["삼성전자"]
     assert "999999" in by_sector[market_kr.SECTOR_FALLBACK]
     # 칸 크기는 시총(억원)
     tk = next(t for s in m["heatmap"] for t in s["tickers"] if t["symbol"] == "005930")

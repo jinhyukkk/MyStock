@@ -149,20 +149,26 @@ export default function Dashboard() {
                      text={summaryText(data.indices, data.market)}
                      stale={stale} failed={data.failed} error={error} busy={busy} onRefresh={refresh} />
 
+      <div className="fv-section-title">지수</div>
       <div className="fv-row charts">
         {data.indices.map(i => <IndexChart key={i.symbol} data={i} asOf={data.fetched_at} session={data.session} />)}
       </div>
 
       {data.investors.length > 0 && (
-        <div className="fv-row flows"><InvestorFlows rows={data.investors} /></div>
+        <>
+          <div className="fv-section-title">투자자 수급</div>
+          <div className="fv-row flows"><InvestorFlows rows={data.investors} /></div>
+        </>
       )}
 
+      <div className="fv-section-title">시장 내부 지표</div>
       <div className="fv-row breadth">
         <BreadthRow block={data.breadth} />
       </div>
 
       {/* 아래 라벨·소수점 분기는 전부 data.market 을 본다 — market(사용자 선택)이 아니라
           화면에 그려진 값이 실제로 어느 시장 것인지를 설명해야 하기 때문 */}
+      <div className="fv-section-title">시그널 & 히트맵</div>
       <div className="fv-row signals">
         <SignalTable rows={data.signals_up} krw={data.market === 'KR'} />
         <SignalTable rows={data.signals_down} gear krw={data.market === 'KR'} />
@@ -179,6 +185,7 @@ export default function Dashboard() {
       <AdSlot slot={import.meta.env.VITE_ADSENSE_SLOT_DASHBOARD} />
 
       {/* finviz: 좌 2/3 = 차트패턴 표 2개 + 그 아래 헤드라인, 우 1/3 = Major News 가 두 줄에 걸침 */}
+      <div className="fv-section-title">차트 패턴 & 뉴스</div>
       <div className="fv-row patterns">
         <div className="fv-col">
           <div className="fv-row two">
@@ -190,18 +197,21 @@ export default function Dashboard() {
         <MajorNews rows={data.major_news} />
       </div>
 
+      <div className="fv-section-title">경제 지표 & 실적 발표</div>
       <div className="fv-row calendar">
         <EconCalendar block={data.econ} />
         {/* 실적 일정은 유니버스 상위 종목만 본다 — 어디까지 본 목록인지 꼬리표로 남긴다 */}
         <EarningsCalendar block={data.earnings} universe={data.breadth.universe} />
       </div>
 
+      <div className="fv-section-title">내부자 거래</div>
       <div className="fv-row insider">
         <InsiderLatest block={data.insider} krw={data.market === 'KR'}
                        universe={data.breadth.universe} />
         <InsiderTop block={data.insider} />
       </div>
 
+      <div className="fv-section-title">{data.market === 'KR' ? '선물 & 환율/금리' : 'Futures & Forex/Bonds'}</div>
       <div className="fv-row quotes" style={data.futures.length === 0 ? { gridTemplateColumns: '1fr' } : undefined}>
         {data.futures.length > 0 && <QuoteTable title="Futures" rows={data.futures} />}
         <QuoteTable title={data.market === 'KR' ? '환율 & 금리' : 'Forex & Bonds'} rows={data.forex_bonds} />
