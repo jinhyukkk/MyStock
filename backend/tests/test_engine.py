@@ -110,3 +110,120 @@ def test_resolve_exit_prefers_stop_when_stop_precedes_signal():
                                         exit_signal=[False, True, False])
     assert reason == "stop"
     assert i == 1
+
+
+def test_metrics_mdd_measures_peak_to_trough():
+    """MDD는 최고점 대비 최대 낙폭 — 시작점 대비가 아니다."""
+    m = engine.metrics([100.0, 200.0, 150.0, 180.0], trades=[])
+    assert m["mdd"] == pytest.approx(-25.0)  # 200 → 150
+
+
+def test_metrics_win_rate_counts_positive_net_pnl_only():
+    """비용 차감 후 손익이 양(+)인 거래만 승. 0원은 승이 아니다."""
+    trades = [{"pnl_krw": 100.0}, {"pnl_krw": -50.0}, {"pnl_krw": 0.0}]
+    m = engine.metrics([100.0, 110.0], trades=trades)
+    assert m["win_rate"] == pytest.approx(33.3, abs=0.1)
+    assert m["trade_count"] == 3
+
+
+def test_metrics_flat_curve_has_zero_mdd_and_cagr():
+    m = engine.metrics([1_000.0] * 300, trades=[])
+    assert m["mdd"] == 0.0
+    assert m["cagr"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_metrics_no_trades_leaves_win_rate_none():
+    """거래가 0건이면 승률은 0%가 아니라 '없음'이다."""
+    m = engine.metrics([100.0, 100.0], trades=[])
+    assert m["win_rate"] is None
+
+
+def _rising(n: int) -> pd.DataFrame:
+    idx = pd.date_range("2024-01-01", periods=n, freq="D")
+    close = [100.0 + i * 0.5 for i in range(n)]
+    return pd.DataFrame({"open": close, "high": [c + 1 for c in close],
+                         "low": [c - 1 for c in close], "close": close,
+                         "volume": 100_000.0}, index=idx)
+
+
+def test_run_with_no_signals_returns_flat_equity():
+    """신호가 하나도 없으면 자본곡선은 초기자본 평선이고 거래는 0건이다."""
+    idx = pd.date_range("2024-01-01", periods=300, freq="D")
+    flat = pd.DataFrame({"open": 100.0, "high": 100.0, "low": 100.0,
+                         "close": 100.0, "volume": 1000.0}, index=idx)
+    out = engine.run({"AAA": flat},
+                     {"AAA": {"name": "가", "market": "KR", "currency": "KRW",
+                              "is_etf": 0}},
+                     preset="abs_momentum",
+                     params={"lookback": 20, "skip": 2, "trend_ma": 10},
+                     initial_capital_krw=10_000_000.0, fx=1_300.0)
+    assert out["trades"] == []
+    assert out["metrics"]["trade_count"] == 0
+    equities = [p["equity_krw"] for p in out["equity_curve"]]
+    assert all(e == pytest.approx(10_000_000.0) for e in equities)
+
+
+def test_run_deducts_cost_from_trade_pnl():
+    """왕복 비용이 실제로 빠지는지 — 총수익과 순손익이 비용만큼 달라야 한다."""
+    out = engine.run({"AAA": _rising(260)},
+                     {"AAA": {"name": "가", "market": "KR", "currency": "KRW",
+                              "is_etf": 0}},
+                     preset="abs_momentum",
+                     params={"lookback": 60, "skip": 5, "trend_ma": 30},
+                     initial_capital_krw=10_000_000.0, fx=1_300.0)
+    assert out["trades"], "상승 추세에서 진입이 한 건도 없으면 시그널이 잘못됐다"
+    t = out["trades"][0]
+    assert t["cost_krw"] > 0
+    gross = (t["exit_price"] - t["entry_price"]) * t["qty"]
+    assert t["pnl_krw"] == pytest.approx(gross - t["cost_krw"], abs=1.0)
+
+
+def test_run_respects_max_positions():
+    """동시 보유는 MAX_POSITIONS를 넘지 않는다."""
+    df = _rising(260)
+    frames = {f"S{i}": df.copy() for i in range(12)}
+    tickers = {f"S{i}": {"name": f"종목{i}", "market": "KR", "currency": "KRW",
+                         "is_etf": 0} for i in range(12)}
+    out = engine.run(frames, tickers, preset="abs_momentum",
+                     params={"lookback": 60, "skip": 5, "trend_ma": 30},
+                     initial_capital_krw=100_000_000.0, fx=1_300.0)
+    assert out["max_concurrent"] <= engine.MAX_POSITIONS
+
+
+def _volatile_rising(n: int) -> pd.DataFrame:
+    """상승 추세 + 넓은 일중 변동.
+
+    2×ATR이 가격의 5%를 넘어야 1% 룰이 비중 상한(20%)보다 먼저 묶인다
+    (조건: 주당 손실 > 가격/20). 일중 ±5%면 2×ATR ≈ 가격의 20%다.
+    저변동 fixture(_rising)를 쓰면 비중 상한이 먼저 걸려 이 테스트가 무의미해진다.
+    """
+    idx = pd.date_range("2024-01-01", periods=n, freq="D")
+    close = [100.0 + i * 0.5 for i in range(n)]
+    return pd.DataFrame({"open": close,
+                         "high": [c * 1.05 for c in close],
+                         "low": [c * 0.95 for c in close],
+                         "close": close, "volume": 100_000.0}, index=idx)
+
+
+def test_run_caps_total_account_risk():
+    """종목별 1%만 지키면 7종목에서 총 7%가 된다 — 합산 상한 6%가 먼저 막아야 한다.
+
+    각 포지션이 계좌의 정확히 1%를 걸므로 6건째까지만 들어간다.
+    MAX_POSITIONS(7)가 아니라 MAX_ACCOUNT_RISK_PCT(6%)가 막는 것을 확인한다.
+    """
+    df = _volatile_rising(260)
+    frames = {f"S{i}": df.copy() for i in range(12)}
+    tickers = {f"S{i}": {"name": f"종목{i}", "market": "KR", "currency": "KRW",
+                         "is_etf": 0} for i in range(12)}
+    out = engine.run(frames, tickers, preset="abs_momentum",
+                     params={"lookback": 60, "skip": 5, "trend_ma": 30},
+                     initial_capital_krw=1_000_000_000.0, fx=1_300.0)
+    # 자본이 충분해 비중 상한에는 안 걸린다 — 막는 것은 총 리스크 6%다
+    assert out["max_concurrent"] == 6
+
+
+def test_run_rejects_unknown_preset():
+    """알 수 없는 전략은 ValueError — API 계층이 400으로 바꿔 준다."""
+    with pytest.raises(ValueError):
+        engine.run({}, {}, preset="없는전략", params={},
+                   initial_capital_krw=1_000_000.0, fx=1_300.0)
