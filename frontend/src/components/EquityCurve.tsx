@@ -37,7 +37,7 @@ export default function EquityCurve({ series }: { series: Series[] }) {
 
   return (
     <div ref={box}>
-      <svg width={w} height={H} role="img" aria-label="전략 자본곡선">
+      <svg width={w} height={H} style={{ maxWidth: '100%' }} role="img" aria-label="전략 자본곡선">
         {/* 가로 격자 3줄 — 없으면 곡선의 기울기를 눈으로 못 잰다 */}
         {[0, 0.5, 1].map(f => {
           const v = lo + span * f
