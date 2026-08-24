@@ -409,12 +409,22 @@ export interface StrategyTrade {
   qty: number; cost_krw: number; pnl_krw: number;
 }
 export interface StrategyMetrics {
-  cagr: number; mdd: number;
+  /** 유니버스가 비어 자본곡선이 없으면 null — 0%가 아니다 */
+  cagr: number | null;
+  mdd: number | null;
   /** 무위험수익률 0 가정. 변동성이 0이면 null */
   sharpe: number | null;
   /** 비용 차감 후 손익이 양(+)인 거래 비율. 거래가 없으면 null */
   win_rate: number | null;
-  trade_count: number; final_equity_krw: number;
+  trade_count: number;
+  /** 유니버스가 비면 null — 0을 그리면 전액 손실처럼 보인다 */
+  final_equity_krw: number | null;
+  /** 벤치마크(KOSPI) 매수보유 CAGR */
+  bench_cagr: number | null;
+  /** 유니버스 동일가중 매수보유 CAGR */
+  buy_and_hold_cagr: number | null;
+  /** 초과수익 = 전략 CAGR − 벤치마크 CAGR */
+  excess_vs_bench: number | null;
 }
 export interface StrategyResult {
   equity_curve: EquityPoint[];

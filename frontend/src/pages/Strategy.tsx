@@ -4,7 +4,9 @@ import EquityCurve from '../components/EquityCurve'
 import type { StrategyPreset, StrategyResult } from '../types'
 
 const fmt = (n: number) => Math.round(n).toLocaleString()
-const signed = (n: number) => `${n >= 0 ? '+' : ''}${n}%`
+// 유니버스가 비면 지표가 null이다 — 0%로 그리면 전액 손실처럼 보인다
+const signed = (n: number | null) => n === null ? '—' : `${n >= 0 ? '+' : ''}${n}%`
+const pct = (n: number | null) => n === null ? '—' : `${n}%`
 const REASON_LABEL = { stop: '손절', signal: '신호', end: '기간종료' } as const
 
 export default function Strategy() {
@@ -101,11 +103,16 @@ export default function Strategy() {
 
           <div className="card">
             <strong>자본곡선</strong>
+            {/* 세 곡선 모두 CAGR을 라벨에 붙인다 — 선 모양만으로는 누가
+                이겼는지 눈으로 못 잰다 */}
             <EquityCurve series={[
-              { label: '전략', color: 'var(--buy)', points: result.equity_curve },
-              { label: `${result.benchmark_label ?? '벤치마크'} 매수보유`,
+              { label: `전략 ${signed(m?.cagr ?? null)}`, color: 'var(--buy)',
+                points: result.equity_curve },
+              { label: `${result.benchmark_label ?? '벤치마크'} 매수보유 `
+                + signed(m?.bench_cagr ?? null),
                 color: 'var(--text-dim)', points: result.benchmark },
-              { label: `${result.universe_size}종목 동일가중 보유`,
+              { label: `${result.universe_size}종목 동일가중 보유 `
+                + signed(m?.buy_and_hold_cagr ?? null),
                 color: 'var(--sell)', points: result.buy_and_hold },
             ]} />
           </div>
@@ -114,13 +121,17 @@ export default function Strategy() {
             <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
               {m && ([
                 ['CAGR', signed(m.cagr)],
-                ['MDD', `${m.mdd}%`],
+                // 전략 CAGR만 보여주면 "그냥 들고 있었으면 더 벌었다"가 안 보인다
+                [`초과수익 vs ${result.benchmark_label ?? '벤치마크'}`,
+                  signed(m.excess_vs_bench)],
+                ['MDD', pct(m.mdd)],
                 ['샤프', m.sharpe === null ? '—' : String(m.sharpe)],
-                ['승률', m.win_rate === null ? '—' : `${m.win_rate}%`],
+                ['승률', pct(m.win_rate)],
                 ['거래', `${m.trade_count}회`],
                 ['손절종료', m.trade_count
                   ? `${Math.round(stopped / m.trade_count * 100)}%` : '—'],
-                ['최종자본', `₩${fmt(m.final_equity_krw)}`],
+                ['최종자본', m.final_equity_krw === null
+                  ? '—' : `₩${fmt(m.final_equity_krw)}`],
               ] as const).map(([label, value]) => (
                 <div key={label}>
                   <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>{label}</div>
