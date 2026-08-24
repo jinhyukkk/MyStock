@@ -28,6 +28,10 @@ def abs_momentum(df: pd.DataFrame, params: dict) -> pd.DataFrame:
 
     진입: 모멘텀 > 0 AND 종가 > 추세선
     청산: 모멘텀 < 0
+
+    strength는 모멘텀 값 그 자체다 — 같은 날 진입 후보가 자리보다 많을 때
+    엔진이 이 값 내림차순으로 자른다. 연속값이 없으면 심볼 이름순으로
+    잘리게 되어 결과가 종목 이름에 의존한다.
     """
     close = df["close"]
     mom = momentum(close, params["lookback"], params["skip"])
@@ -37,7 +41,8 @@ def abs_momentum(df: pd.DataFrame, params: dict) -> pd.DataFrame:
     # NaN 구간(지표가 아직 안 찬 앞부분)은 신호 없음으로 확정한다 —
     # 결측을 그대로 두면 engine이 NaN을 참으로 읽을 여지가 남는다
     return pd.DataFrame({"enter": enter.fillna(False).astype(bool),
-                         "exit": exit_.fillna(False).astype(bool)},
+                         "exit": exit_.fillna(False).astype(bool),
+                         "strength": mom.fillna(0.0).astype(float)},
                         index=df.index)
 
 
@@ -49,13 +54,18 @@ def donchian(df: pd.DataFrame, params: dict) -> pd.DataFrame:
 
     .shift(1)이 핵심이다. 빼면 오늘 고가가 오늘의 비교 대상에 들어가
     고가를 경신한 날마다 진입 신호가 뜬다.
+
+    strength는 돌파 폭 비율 (종가 - 직전 최고가) / 직전 최고가다. 채널을
+    크게 뚫은 종목이 먼저 자리를 가져간다.
     """
     hh = df["high"].rolling(params["entry_n"]).max().shift(1)
     ll = df["low"].rolling(params["exit_n"]).min().shift(1)
     enter = df["close"] > hh
     exit_ = df["close"] < ll
+    strength = (df["close"] - hh) / hh.where(hh > 0)
     return pd.DataFrame({"enter": enter.fillna(False).astype(bool),
-                         "exit": exit_.fillna(False).astype(bool)},
+                         "exit": exit_.fillna(False).astype(bool),
+                         "strength": strength.fillna(0.0).astype(float)},
                         index=df.index)
 
 

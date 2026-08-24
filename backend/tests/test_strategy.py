@@ -94,3 +94,22 @@ def test_donchian_exits_below_prior_low():
 def test_donchian_registered_in_presets():
     assert "donchian" in strategy.PRESETS
     assert strategy.PRESETS["donchian"]["fn"] is strategy.donchian
+
+
+def test_both_presets_expose_a_continuous_strength():
+    """동시 진입 후보를 자를 때 쓸 연속값. 없으면 엔진이 심볼 이름순으로 자른다.
+
+    - 절대 모멘텀: 모멘텀 값 그 자체
+    - 돈치안: 돌파 폭 비율 (종가 − 직전 최고가) / 직전 최고가
+    """
+    df = _frame([100 + i for i in range(20)])
+    mom = strategy.abs_momentum(df, {"lookback": 5, "skip": 2, "trend_ma": 3})
+    expected = strategy.momentum(df["close"], 5, 2).fillna(0.0)
+    pd.testing.assert_series_equal(mom["strength"], expected, check_names=False)
+
+    rows = [(100, 110, 90, 100)] * 3 + [(100, 116, 95, 115)]
+    don = strategy.donchian(_ohlc(rows), {"entry_n": 3, "exit_n": 2})
+    # 직전 3일 최고가 110 → (115 − 110) / 110
+    assert don["strength"].iloc[3] == pytest.approx(5 / 110)
+    # 지표가 안 찬 앞부분은 0 — NaN을 남기면 정렬에서 튄다
+    assert don["strength"].iloc[0] == 0.0
