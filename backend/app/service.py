@@ -7,8 +7,8 @@ import requests
 
 import pandas as pd
 
-from app import (backtest, company, costs, db, fetchers, indicators,
-                 portfolio, scoring, sentiment)
+from app import (backtest, company, costs, db, engine, fetchers, indicators,
+                 portfolio, scoring, sentiment, strategy)
 
 BACKTEST_DAYS = 1100  # 약 3년 — 한 국면짜리 400일 검증은 상승장 착시를 못 거른다
 
@@ -880,3 +880,58 @@ def _entry_review(conn, symbol: str, sig) -> dict | None:
         # 이미 여러 번 탄 포지션이면 이번이 첫 물타기가 아니다
         "buy_count": len(buys),
     }
+
+
+# ── 전략 연구실 ────────────────────────────────────────────────────────────
+# 등급 검증(backtest.py)과 목적이 다르다. 여기는 "이 매매 규칙이 계좌 단위로
+# 돈을 버는가"에 답한다 — 자본곡선·사이징·동시보유가 전부 들어간다.
+
+STRATEGY_DAYS = 1500  # 약 6년 — price_cache가 가진 만큼 다 쓴다
+UNIVERSE_WARNING = (
+    "유니버스는 등록된 보유·관심 종목입니다. 직접 고른 종목이라 전략의 알파와 "
+    "종목 선택 효과를 분리할 수 없습니다. 이 수치를 실전 기대값으로 쓰지 마세요.")
+
+
+def strategy_presets() -> list[dict]:
+    return [{"key": k, "label": v["label"], "params": v["params"]}
+            for k, v in strategy.PRESETS.items()]
+
+
+def run_strategy_backtest(conn, preset: str, params: dict | None = None,
+                          initial_capital_krw: float = 10_000_000.0) -> dict:
+    """등록 종목 전체를 유니버스로 전략 백테스트를 돌린다."""
+    if preset not in strategy.PRESETS:
+        raise ValueError(f"알 수 없는 전략: {preset}")
+    # 화면이 일부 파라미터만 보내도 나머지는 기본값으로 채운다
+    merged = {k: v["default"] for k, v in strategy.PRESETS[preset]["params"].items()}
+    merged.update(params or {})
+
+    frames, tickers = {}, {}
+    for row in db.list_tickers(conn):
+        t = dict(row)
+        df = db.load_prices(conn, t["symbol"], limit=STRATEGY_DAYS)
+        if df.empty:
+            continue
+        frames[t["symbol"]] = df
+        tickers[t["symbol"]] = t
+    fx = get_sentiment_view(conn).get("usdkrw") or portfolio.DEFAULT_USDKRW
+
+    out = engine.run(frames, tickers, preset, merged,
+                     initial_capital_krw=initial_capital_krw, fx=fx)
+
+    calendar = sorted(set().union(*(set(df.index) for df in frames.values()))) \
+        if frames else []
+    out["buy_and_hold"] = engine.buy_and_hold(
+        frames, tickers, initial_capital_krw, fx, calendar)
+    # 벤치마크는 KOSPI. _refresh_benchmark가 BENCH:KR로 저장해 둔다
+    bdf = db.load_prices(conn, "BENCH:KR", limit=STRATEGY_DAYS)
+    out["benchmark"] = engine.buy_and_hold(
+        {"BENCH:KR": bdf},
+        {"BENCH:KR": {"market": "KR", "currency": "KRW", "is_etf": 0}},
+        initial_capital_krw, fx, calendar) if not bdf.empty else []
+    out["benchmark_label"] = fetchers.BENCHMARKS["KR"][1] if not bdf.empty else None
+
+    out["universe_warning"] = UNIVERSE_WARNING
+    out["fx_note"] = f"USD 종목은 현재 환율 {fx:,.0f}원 고정 근사입니다."
+    out["initial_capital_krw"] = initial_capital_krw
+    return out

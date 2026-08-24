@@ -350,3 +350,26 @@ def add_rule(r: RuleIn, request: Request):
 def remove_rule(rule_id: int, request: Request):
     db.delete_rule(_conn(request), rule_id)
     return {"ok": True}
+
+
+# ── 전략 연구실 ────────────────────────────────────────────────────────────
+
+class StrategyBacktestIn(BaseModel):
+    preset: str = Field(min_length=1)
+    params: dict[str, int] | None = None
+    initial_capital_krw: float = Field(default=10_000_000.0, gt=0)
+
+
+@router.get("/strategy/presets")
+def strategy_presets():
+    return service.strategy_presets()
+
+
+@router.post("/strategy/backtest")
+def strategy_backtest(body: StrategyBacktestIn, request: Request):
+    try:
+        return service.run_strategy_backtest(
+            _conn(request), body.preset, body.params, body.initial_capital_krw)
+    except ValueError as e:
+        # 알 수 없는 전략이 500이 되면 화면에 원인이 안 남는다
+        raise HTTPException(400, str(e))

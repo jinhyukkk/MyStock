@@ -528,3 +528,45 @@ def test_detail_never_calls_network(client):
     _add_and_refresh(client)
     assert client.get("/api/tickers/005930").status_code == 200
     assert client.get("/api/tickers/005930/company").status_code == 200
+
+
+def test_strategy_presets_lists_both_strategies(client):
+    """화면이 파라미터 입력칸을 그리려면 각 전략의 파라미터 메타가 필요하다."""
+    r = client.get("/api/strategy/presets")
+    assert r.status_code == 200
+    body = r.json()
+    assert {p["key"] for p in body} == {"abs_momentum", "donchian"}
+    mom = next(p for p in body if p["key"] == "abs_momentum")
+    assert mom["label"] == "절대 모멘텀"
+    assert mom["params"]["lookback"]["default"] == 252
+
+
+def test_strategy_backtest_returns_curve_and_metrics(client):
+    r = client.post("/api/strategy/backtest",
+                    json={"preset": "abs_momentum",
+                          "initial_capital_krw": 10_000_000})
+    assert r.status_code == 200
+    body = r.json()
+    assert "equity_curve" in body
+    assert "trades" in body
+    assert set(body["metrics"]) >= {"cagr", "mdd", "sharpe", "win_rate",
+                                    "trade_count", "final_equity_krw"}
+    assert "buy_and_hold" in body
+    assert "benchmark" in body
+    # 유니버스 편향 경고는 화면이 문구를 지어내지 않도록 서버가 내려준다
+    assert body["universe_warning"]
+    assert body["fx_note"]
+
+
+def test_strategy_backtest_rejects_unknown_preset(client):
+    """알 수 없는 전략은 500이 아니라 400이어야 화면에 원인이 남는다."""
+    r = client.post("/api/strategy/backtest", json={"preset": "없는전략"})
+    assert r.status_code == 400
+
+
+def test_strategy_backtest_fills_missing_params_with_defaults(client):
+    """화면이 일부 파라미터만 보내도 나머지는 기본값으로 채운다."""
+    r = client.post("/api/strategy/backtest",
+                    json={"preset": "donchian", "params": {"entry_n": 20}})
+    assert r.status_code == 200
+    assert r.json()["params"] == {"entry_n": 20, "exit_n": 20}
