@@ -931,6 +931,18 @@ def run_strategy_backtest(conn, preset: str, params: dict | None = None,
         initial_capital_krw, fx, calendar) if not bdf.empty else []
     out["benchmark_label"] = fetchers.BENCHMARKS["KR"][1] if not bdf.empty else None
 
+    # 초과수익 = 전략 CAGR − 벤치마크 CAGR(스펙 지표 정의). 세 곡선을 그려만
+    # 놓고 숫자로 비교하지 않으면 "그냥 들고 있었으면 더 벌었다"가 화면에 안 남는다.
+    def _cagr(curve: list[dict]) -> float | None:
+        return engine.metrics([p["equity_krw"] for p in curve], [])["cagr"]
+
+    m = out["metrics"]
+    m["bench_cagr"] = _cagr(out["benchmark"])
+    m["buy_and_hold_cagr"] = _cagr(out["buy_and_hold"])
+    m["excess_vs_bench"] = (round(m["cagr"] - m["bench_cagr"], 2)
+                            if m["cagr"] is not None and m["bench_cagr"] is not None
+                            else None)
+
     out["universe_warning"] = UNIVERSE_WARNING
     out["fx_note"] = f"USD 종목은 현재 환율 {fx:,.0f}원 고정 근사입니다."
     out["initial_capital_krw"] = initial_capital_krw
