@@ -49,7 +49,12 @@ def test_breadth_empty_frame():
 
 
 def _classify(vals: list[float]) -> list[str]:
-    return mb._classify(pd.Series(vals, dtype=float))
+    """_classify 는 (패턴키, 선명도 점수)를 주지만 여기서 검증하는 건 '무엇으로 판정되는가'다."""
+    return [k for k, _ in mb._classify(pd.Series(vals, dtype=float))]
+
+
+def _scores(vals: list[float]) -> dict[str, float]:
+    return dict(mb._classify(pd.Series(vals, dtype=float)))
 
 
 def test_golden_and_dead_cross():
@@ -96,6 +101,26 @@ def test_patterns_groups_by_signal_and_caps_per_row():
     assert len(high["tickers"]) == mb.PER_PATTERN     # 한 줄에 4개까지
     assert high["tickers"][0] == {"symbol": "S0", "name": "가나다"}
     assert high["icon"] == "▲"
+
+
+def test_patterns_orders_by_clarity_not_universe_order():
+    rise = _series(259, lambda i: 100 + i)
+    weak = rise + [rise[-1] * 1.01]     # 전고점을 1% 넘긴 신고가 (컷은 넘지만 흐릿하다)
+    breakout = rise + [rise[-1] * 1.1]  # 확실히 뚫은 신고가
+    rows = mb.patterns(_frame({"WEAK": weak, "BREAK": breakout}))
+    high = next(r for r in rows if r["signal"] == "52주 신고가")
+    # 열 순서(시총 순)로는 WEAK 가 먼저지만, 선명한 쪽이 앞에 와야 한다
+    assert [t["symbol"] for t in high["tickers"]] == ["BREAK", "WEAK"]
+
+
+def test_patterns_drops_below_clarity_cut():
+    """전고점과 동률(여유폭 0%)인 '겨우 닿은' 신고가는 표에서 아예 뺀다 —
+    후보가 적은 날에는 정렬만으로 걸러지지 않는다."""
+    rise = _series(259, lambda i: 100 + i)
+    tie = rise + [rise[-1]]
+    assert _scores(tie)["high52"] == 0.0
+    rows = mb.patterns(_frame({"TIE": tie}))
+    assert not any(r["signal"] == "52주 신고가" for r in rows)
 
 
 def test_patterns_skips_short_history():
