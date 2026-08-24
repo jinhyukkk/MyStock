@@ -319,16 +319,21 @@ def test_buy_and_hold_equal_weights_the_universe():
 def test_buy_and_hold_floors_quantity_and_keeps_the_remainder_as_cash():
     """수량은 내림, 남은 잔돈은 현금 — 첫날 자본은 정확히 초기자본이다."""
     idx = pd.date_range("2024-01-01", periods=3, freq="D")
-    # 97원은 100만을 나누어떨어지지 않는다 — 내림이 실제로 걸린다
-    odd = pd.DataFrame({"open": 97.0, "high": 97.0, "low": 97.0,
-                        "close": 97.0, "volume": 1000.0}, index=idx)
+    # 97원은 100만을 나누어떨어지지 않는다 — 내림이 실제로 걸린다.
+    # 가격이 움직여야 소수 주수와 내림 주수의 최종 자본이 갈린다 — 평선이면
+    # 잔돈과 포지션 가치가 서로 상쇄돼 내림을 빼도 테스트가 통과한다.
+    odd = pd.DataFrame({"open": 97.0, "high": 194.0, "low": 97.0,
+                        "close": [97.0, 145.5, 194.0], "volume": 1000.0},
+                       index=idx)
     tickers = {"A": {"market": "KR", "currency": "KRW", "is_etf": 0}}
     curve = engine.buy_and_hold({"A": odd}, tickers,
                                 initial_capital_krw=1_000_000.0,
                                 fx=1_300.0, calendar=list(idx))
     # floor(1_000_000/97) = 10309주 × 97 = 999_973원, 잔돈 27원
     assert curve[0]["equity_krw"] == pytest.approx(1_000_000.0)
-    assert curve[-1]["equity_krw"] == pytest.approx(1_000_000.0)
+    # 종가 2배 → 10309 × 194 + 27 = 1_999_973원.
+    # 내림을 안 하면 10309.278주 × 194 = 2_000_000원이 나온다
+    assert curve[-1]["equity_krw"] == pytest.approx(1_999_973.0, abs=1.0)
 
 
 def test_buy_and_hold_empty_universe_returns_empty():
