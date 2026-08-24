@@ -41,3 +41,26 @@ def position_size(equity_krw: float, entry: float, stop: float, fx: float,
     cap_qty = equity_krw * max_weight / (entry * fx)
     # 내림 — 올리면 계산해 둔 리스크 한도를 넘는다
     return costs.round_to_lot(min(risk_qty, cap_qty), market)
+
+
+def resolve_exit(bars: pd.DataFrame, entry_i: int, stop: float | None,
+                 exit_signal) -> tuple[int, float, str]:
+    """진입봉(entry_i) 이후 언제·얼마에 나가는지. (인덱스, 가격, 사유)를 돌려준다.
+
+    사유는 stop|signal|end. 손절로 끝난 비율이 안 보이면 전략이 규칙대로
+    굴러간 것인지 알 수 없어서 사유를 함께 남긴다.
+
+    우선순위는 시간순이다 — 손절이 먼저 닿았으면 뒤의 청산 신호는 무의미하다.
+    """
+    o = bars["open"].to_numpy(dtype=float)
+    low = bars["low"].to_numpy(dtype=float)
+    close = bars["close"].to_numpy(dtype=float)
+    n = len(bars)
+    for d in range(entry_i, n):
+        # 손절 먼저 — 갭 하락이면 시가가 이미 손절선 아래다
+        if stop is not None and low[d] <= stop:
+            return d, min(o[d], stop), "stop"
+        # 청산 신호는 그날 종가에 낼 수 없다 — 익일 시가
+        if exit_signal[d] and d + 1 < n:
+            return d + 1, o[d + 1], "signal"
+    return n - 1, close[n - 1], "end"

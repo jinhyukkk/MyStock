@@ -58,3 +58,55 @@ def test_position_size_zero_when_stop_above_entry():
     qty = engine.position_size(10_000_000, entry=100, stop=110,
                                fx=1.0, market="KR", max_weight=1.0)
     assert qty == 0
+
+
+def _bars(rows: list[tuple[float, float, float, float]]) -> pd.DataFrame:
+    idx = pd.date_range("2024-01-01", periods=len(rows), freq="D")
+    return pd.DataFrame(
+        {"open": [r[0] for r in rows], "high": [r[1] for r in rows],
+         "low": [r[2] for r in rows], "close": [r[3] for r in rows]}, index=idx)
+
+
+def test_resolve_exit_stops_out_when_low_touches_stop():
+    """저가가 손절선을 건드리면 그 자리에서 청산."""
+    bars = _bars([(100, 105, 98, 102), (102, 106, 88, 95), (95, 99, 94, 97)])
+    i, px, reason = engine.resolve_exit(bars, entry_i=0, stop=90.0,
+                                        exit_signal=[False, False, False])
+    assert (i, px, reason) == (1, 90.0, "stop")
+
+
+def test_resolve_exit_uses_open_when_gap_below_stop():
+    """갭 하락으로 시가가 이미 손절선 아래면 시가 체결.
+
+    손절선 체결을 가정하면 갭 리스크만큼 성과가 낙관적으로 부풀려진다.
+    """
+    bars = _bars([(100, 105, 98, 102), (85, 88, 84, 86)])
+    i, px, reason = engine.resolve_exit(bars, entry_i=0, stop=90.0,
+                                        exit_signal=[False, False])
+    assert (i, px, reason) == (1, 85.0, "stop")
+
+
+def test_resolve_exit_on_signal_uses_next_open():
+    """청산 신호는 그날 종가에 체결할 수 없다 — 익일 시가다."""
+    bars = _bars([(100, 105, 98, 102), (103, 106, 101, 104), (99, 100, 97, 98)])
+    i, px, reason = engine.resolve_exit(bars, entry_i=0, stop=50.0,
+                                        exit_signal=[False, True, False])
+    # 인덱스 1에서 청산 신호 → 인덱스 2 시가 99에 청산
+    assert (i, px, reason) == (2, 99.0, "signal")
+
+
+def test_resolve_exit_falls_back_to_last_close():
+    """신호도 손절도 없이 데이터가 끝나면 마지막 종가로 평가 청산."""
+    bars = _bars([(100, 105, 98, 102), (102, 106, 101, 104)])
+    i, px, reason = engine.resolve_exit(bars, entry_i=0, stop=50.0,
+                                        exit_signal=[False, False])
+    assert (i, px, reason) == (1, 104.0, "end")
+
+
+def test_resolve_exit_prefers_stop_when_stop_precedes_signal():
+    """손절이 먼저 닿았으면 뒤에 오는 청산 신호는 의미가 없다."""
+    bars = _bars([(100, 105, 98, 102), (100, 101, 85, 88), (88, 90, 87, 89)])
+    i, px, reason = engine.resolve_exit(bars, entry_i=0, stop=90.0,
+                                        exit_signal=[False, True, False])
+    assert reason == "stop"
+    assert i == 1
