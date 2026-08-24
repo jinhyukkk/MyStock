@@ -179,12 +179,23 @@ def test_run_deducts_cost_from_trade_pnl():
 
 
 def test_run_caps_concurrent_notional_at_cash():
-    """동시 보유 노셔널 합은 현금(equity)을 넘지 않는다 — MAX_POSITIONS 게이트가 아니다.
+    """동시 보유 노셔널 합 + 진입 비용은 현금(equity)을 넘지 않는다.
 
     이 픽스처(저변동 _rising)는 MAX_POSITIONS(7)가 아니라 현금 제약이 먼저
     막는다: 비중 상한 20%가 1% 룰보다 먼저 걸려(저변동 → 손절폭이 좁다)
-    포지션당 노셔널이 equity의 약 20%다. 현금 계좌라 동시 보유 노셔널 합이
-    equity를 넘을 수 없으므로 100% / 20% = 5건에서 막힌다.
+    포지션당 노셔널이 equity의 약 20%다.
+
+    손계산 (초기자본 1억, 진입일 2024-03-07 시가 133원, 왕복비용 0.78%):
+      cap_qty  = 1억 × 0.20 / 133 = 150,375.94 → 내림 150,375주
+      노셔널   = 150,375 × 133 = 19,999,875원 (자본의 19.999875%)
+      진입비용 = 19,999,875 × 0.78% / 2 = 77,999.5원 (편도 = 왕복의 절반)
+      1건이 묶는 현금 = 20,077,874.5원
+    4건이면 80,311,498원을 써 잔여 현금이 19,688,502원인데 5건째는
+    20,077,874.5원이 필요하다 → 막힌다 (5건 × 20,077,874.5 = 100,389,372.5원
+    > 1억). 왕복비용 전액을 청산일에 몰아 빼던 옛 코드는 진입 시점에 비용이
+    현금을 안 건드려서 5건이 들어갔다 — 다음 날 현금이 마이너스가 되는 조합이다.
+    이후 날짜에는 미실현이익이 늘어도 현금 게이트는 실현자본 기준이라 잔여
+    현금이 그대로이고, 5건째 수량은 평가자본에 비례해 오히려 더 커진다.
     """
     df = _rising(260)
     frames = {f"S{i}": df.copy() for i in range(12)}
@@ -193,7 +204,41 @@ def test_run_caps_concurrent_notional_at_cash():
     out = engine.run(frames, tickers, preset="abs_momentum",
                      params={"lookback": 60, "skip": 5, "trend_ma": 30},
                      initial_capital_krw=100_000_000.0, fx=1_300.0)
-    assert out["max_concurrent"] == 5
+    assert out["max_concurrent"] == 4
+
+
+def _rising_at(slope: float, n: int = 260) -> pd.DataFrame:
+    """기울기만 다른 상승 시리즈 — 모멘텀 강도가 slope에 비례한다.
+
+    abs_momentum(lookback=60, skip=5)의 65번째 봉 모멘텀은
+    (100 + 60×slope)/100 − 1 = 0.6 × slope다. 시작가가 같아 진입일도 같다.
+    """
+    idx = pd.date_range("2024-01-01", periods=n, freq="D")
+    close = [100.0 + i * slope for i in range(n)]
+    return pd.DataFrame({"open": close, "high": [c + 1 for c in close],
+                         "low": [c - 1 for c in close], "close": close,
+                         "volume": 100_000.0}, index=idx)
+
+
+def test_run_picks_strongest_candidates_when_slots_run_out():
+    """같은 날 후보가 자리보다 많으면 **모멘텀 강도 내림차순**으로 자른다.
+
+    딕셔너리 삽입 순서(= db.list_tickers의 ORDER BY market, name)로 자르면
+    결과가 종목 이름에 의존한다 — 종목 하나를 개명해도 CAGR이 바뀐다.
+
+    S0~S4는 기울기가 0.2 → 1.0으로 커지므로 강도도 S0 < … < S4다. 삽입
+    순서는 일부러 약한 것부터다. 현금이 4자리분뿐이라(위 테스트의 손계산)
+    한 종목이 탈락하는데, 탈락해야 하는 것은 가장 약한 S0다.
+    """
+    frames = {f"S{i}": _rising_at(0.2 * (i + 1)) for i in range(5)}
+    tickers = {f"S{i}": {"name": f"종목{i}", "market": "KR", "currency": "KRW",
+                         "is_etf": 0} for i in range(5)}
+    out = engine.run(frames, tickers, preset="abs_momentum",
+                     params={"lookback": 60, "skip": 5, "trend_ma": 30},
+                     initial_capital_krw=100_000_000.0, fx=1_300.0)
+    entered = {t["symbol"] for t in out["trades"]}
+    assert entered == {"S1", "S2", "S3", "S4"}, \
+        "가장 약한 S0이 아니라 이름 뒤쪽 종목이 탈락했다면 정렬이 안 걸린 것이다"
 
 
 def _volatile_rising(n: int) -> pd.DataFrame:
@@ -214,8 +259,15 @@ def _volatile_rising(n: int) -> pd.DataFrame:
 def test_run_caps_total_account_risk():
     """종목별 1%만 지키면 7종목에서 총 7%가 된다 — 합산 상한 6%가 먼저 막아야 한다.
 
-    각 포지션이 계좌의 정확히 1%를 걸므로 6건째까지만 들어간다.
-    MAX_POSITIONS(7)가 아니라 MAX_ACCOUNT_RISK_PCT(6%)가 막는 것을 확인한다.
+    후보 12종목이 같은 날(2024-03-07) 전부 신호를 내는데, 각 포지션이 계좌의
+    정확히 1%를 걸므로 그날 6건째까지만 들어간다. 7건째는 6.99% > 6%로 막힌다.
+    자본이 충분해 비중 상한(20%)에는 안 걸린다 — 포지션당 노셔널은 5.27%다.
+
+    max_concurrent가 아니라 **같은 날 진입 건수**를 본다. 사이징 기준 자본이
+    평가자본(mark-to-market)으로 바뀌면서, 뒤로 갈수록 계좌가 불어나
+    기존 리스크 6,000만원의 비중이 6% 아래로 내려간다(평가자본 12억이면 5%).
+    그때 7건째가 들어가는 것은 규칙대로다 — 그 시점엔 6% 상한을 안 넘는다.
+    max_concurrent를 보면 MAX_POSITIONS(7)를 재게 되어 테스트 이름이 거짓이 된다.
     """
     df = _volatile_rising(260)
     frames = {f"S{i}": df.copy() for i in range(12)}
@@ -224,8 +276,75 @@ def test_run_caps_total_account_risk():
     out = engine.run(frames, tickers, preset="abs_momentum",
                      params={"lookback": 60, "skip": 5, "trend_ma": 30},
                      initial_capital_krw=1_000_000_000.0, fx=1_300.0)
-    # 자본이 충분해 비중 상한에는 안 걸린다 — 막는 것은 총 리스크 6%다
-    assert out["max_concurrent"] == 6
+    first_day = min(t["entry_date"] for t in out["trades"])
+    same_day = [t for t in out["trades"] if t["entry_date"] == first_day]
+    assert len(same_day) == 6
+    assert out["max_concurrent"] <= engine.MAX_POSITIONS
+    # 사이징 기준이 평가자본이라는 증거 — 나중에 들어간 건은 그 시점 평가자본의
+    # 1%를 걸므로, 실현자본(초기 10억)의 1%보다 큰 리스크를 진다. 실현자본으로
+    # 계산했다면 리스크가 정확히 10,000,000원(1%) 이하여야 한다.
+    late = [t for t in out["trades"] if t["entry_date"] != first_day]
+    assert late, "후반부 추가 진입이 없으면 이 단언이 아무것도 확인하지 않는다"
+    assert late[0]["qty"] * (late[0]["entry_price"] * 0.20) > 10_000_000
+
+
+def test_run_deducts_entry_cost_before_the_position_is_closed():
+    """비용은 진입·청산 각각 차감한다 — 청산일에 왕복 전액을 몰아 빼지 않는다.
+
+    옛 코드는 보유 기간 내내 자본곡선이 왕복 비용만큼 과대 표시되다가 청산일에
+    계단으로 떨어졌고, MDD·샤프가 그 왜곡된 시리즈 위에서 계산됐다.
+
+    진입 직전 날의 자본은 초기자본 그대로여야 하고(아직 아무 일도 없다),
+    진입일 자본은 편도 비용(= 왕복의 절반)만큼 낮아야 한다.
+    """
+    out = engine.run({"AAA": _rising(260)},
+                     {"AAA": {"name": "가", "market": "KR", "currency": "KRW",
+                              "is_etf": 0}},
+                     preset="abs_momentum",
+                     params={"lookback": 60, "skip": 5, "trend_ma": 30},
+                     initial_capital_krw=10_000_000.0, fx=1_300.0)
+    t = out["trades"][0]
+    by_date = {c["date"]: c["equity_krw"] for c in out["equity_curve"]}
+    dates = [c["date"] for c in out["equity_curve"]]
+    entry_i = dates.index(t["entry_date"])
+    # 진입일 자본 = 초기자본 − 편도비용 + 당일 평가손익.
+    # 진입가 = 그날 시가이고 _rising은 시가 = 종가라 평가손익이 0이다.
+    assert by_date[dates[entry_i - 1]] == pytest.approx(10_000_000.0)
+    assert by_date[t["entry_date"]] == pytest.approx(
+        10_000_000.0 - t["cost_krw"] / 2, abs=1.0)
+
+
+def test_run_calendar_uses_only_frames_it_actually_ran():
+    """30봉 미만으로 걸러진 종목의 날짜가 자본곡선에 패딩되면 안 된다.
+
+    패딩되면 그 날들이 CAGR 분모(거래일수)에 들어가 연율화가 틀어진다.
+    """
+    long_df = _rising(60)
+    # 앞쪽으로 20봉만 있는 종목 — len < 30이라 run이 제외한다
+    short_idx = pd.date_range("2023-01-01", periods=20, freq="D")
+    short_df = pd.DataFrame({"open": 100.0, "high": 100.0, "low": 100.0,
+                             "close": 100.0, "volume": 1000.0}, index=short_idx)
+    out = engine.run({"AAA": long_df, "BBB": short_df},
+                     {s: {"name": s, "market": "KR", "currency": "KRW", "is_etf": 0}
+                      for s in ("AAA", "BBB")},
+                     preset="donchian", params={"entry_n": 10, "exit_n": 5},
+                     initial_capital_krw=10_000_000.0, fx=1_300.0)
+    assert out["universe_size"] == 1
+    assert len(out["equity_curve"]) == len(long_df)
+    assert out["_used"]["symbols"] == ["AAA"]
+    assert out["_used"]["calendar"] == list(long_df.index)
+
+
+def test_metrics_empty_curve_reports_no_final_equity():
+    """유니버스가 비면 '최종자본 0원'이 아니라 '계산할 게 없음'이다.
+
+    0을 내려보내면 화면이 초기자본을 전액 잃은 것처럼 표시한다.
+    """
+    m = engine.metrics([], [])
+    assert m["final_equity_krw"] is None
+    assert m["cagr"] is None
+    assert m["mdd"] is None
+    assert m["trade_count"] == 0
 
 
 def _rising_then_crash(n_rise: int = 260, n_crash: int = 10) -> pd.DataFrame:

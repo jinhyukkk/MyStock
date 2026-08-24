@@ -18,10 +18,10 @@ RISK_PCT = 0.01  # 거래 1건이 계좌에서 잃을 수 있는 비율 — serv
 # 한쪽을 바꾸면 다른 쪽도 함께 바꿔야 한다.
 MAX_WEIGHT = 0.20
 MAX_POSITIONS = 7  # portfolio.DEFAULT_TARGET_POSITIONS[1]과 동일
-# 주의: 실제로는 이 상한에 거의 안 닿는다 — 비중+현금 제약(코드 내
-# held_notional 체크)과 계좌리스크 상한(MAX_ACCOUNT_RISK_PCT)이 먼저 막는다.
-# 도달하려면 포지션별 리스크가 6%/7 ≈ 0.857% 미만이면서 노셔널 평균이
-# 14.3%(=100%/7) 미만인 저리스크·저비중 혼합 상황이어야 한다.
+# 주의: 초기에는 이 상한에 잘 안 닿는다 — 현금 제약(코드 내 committed 체크)과
+# 계좌리스크 상한(MAX_ACCOUNT_RISK_PCT)이 먼저 막는다. 다만 사이징 기준이
+# 평가자본이라 계좌가 불어나면 기존 미결 리스크의 비중이 내려가 자리가 열리고,
+# 그때부터는 이 상한이 실제로 작동한다.
 # 모든 보유가 동시에 손절에 닿았을 때의 손실 합 상한 — portfolio.MAX_ACCOUNT_RISK_PCT와 동일.
 # 종목별 1%만 지키면 7종목에서 총 7%가 되는데, 합산을 안 보면 그 사실이 어디에도 안 남는다.
 MAX_ACCOUNT_RISK_PCT = 6.0
@@ -77,7 +77,14 @@ def metrics(equity: list[float], trades: list[dict]) -> dict:
     승률은 비용 차감 후 손익 기준이다(0원은 승이 아니다).
     """
     n = len(equity)
-    start, end = (equity[0], equity[-1]) if n else (0.0, 0.0)
+    if not n:
+        # 자본곡선이 비면 "최종자본 0원"이 아니라 "계산할 게 없음"이다 —
+        # 0을 내려보내면 화면이 초기자본을 전액 잃은 것처럼 표시한다
+        return {"cagr": None, "mdd": None, "sharpe": None,
+                "win_rate": round(sum(1 for t in trades if t["pnl_krw"] > 0)
+                                  / len(trades) * 100, 1) if trades else None,
+                "trade_count": len(trades), "final_equity_krw": None}
+    start, end = equity[0], equity[-1]
     cagr = 0.0
     if n > 1 and start > 0:
         cagr = ((end / start) ** (TRADING_DAYS / (n - 1)) - 1) * 100
@@ -107,12 +114,13 @@ def metrics(equity: list[float], trades: list[dict]) -> dict:
 
 
 def _cost_pct(t: dict, df: pd.DataFrame, fx: float) -> float:
-    """이 종목의 왕복 비용(비율). 실제로는 진입 노셔널(entry * qty * rate)에만
+    """이 종목의 **왕복** 비용(비율). 진입 노셔널(entry * qty * rate)에 곱해
+    총 비용을 내고, 엔진이 그것을 진입분/청산분 절반씩으로 갈라 각 시점에
+    차감한다(스펙 "진입·청산 각각 차감").
 
-    곱해 cost_krw를 낸다 — 청산 시점 노셔널로 다시 계산하지 않는다. 진입가와
-    청산가가 크게 벌어지면(추세추종이 노리는 상황) 비용이 과소·과대평가될 수
-    있는 근사다. 왕복 비율을 한 번만 곱하는 것이지, 진입·청산 양쪽에 각각
-    곱하는 게 아니다.
+    청산 시점 노셔널로 다시 계산하지 않는 것은 근사다 — 진입가와 청산가가
+    크게 벌어지면(추세추종이 노리는 상황) 청산분이 과소·과대평가된다.
+    편도 요율 분해가 costs에 없어 총액은 진입 노셔널 기준으로 둔다.
     """
     recent = df.tail(60)
     turnover = float((recent["close"] * recent["volume"]).median()) if len(recent) else 0.0
@@ -133,11 +141,6 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
         raise ValueError(f"알 수 없는 전략: {preset}")
     fn = strategy.PRESETS[preset]["fn"]
 
-    # 모든 종목의 거래일을 합집합으로 모아 하나의 달력을 만든다 —
-    # 종목마다 다른 인덱스로 자본을 합산하면 어느 날의 자본인지 알 수 없다
-    calendar = sorted(set().union(*(set(df.index) for df in price_frames.values()))) \
-        if price_frames else []
-
     prepared = {}
     for sym, df in price_frames.items():
         if len(df) < 30:
@@ -157,6 +160,13 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
             "cost": _cost_pct(tickers.get(sym, {}), clean, fx),
         }
 
+    # 실제로 돌린 종목(prepared)의 거래일만 합집합으로 모아 달력을 만든다 —
+    # price_frames 기준으로 만들면 30봉 미만으로 걸러진 종목의 날짜까지
+    # 곡선에 패딩되어 CAGR 분모(거래일수)가 부풀려진다. 이 달력과 유니버스는
+    # 반환값에 담아 service가 비교선에 그대로 넘긴다(단일 진실 원천).
+    calendar = sorted(set().union(*(set(pr["df"].index) for pr in prepared.values()))) \
+        if prepared else []
+
     equity = initial_capital_krw
     open_pos: dict[str, dict] = {}
     trades: list[dict] = []
@@ -164,13 +174,23 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
     max_concurrent = 0
 
     for day in calendar:
+        # ⓪ 오늘 체결되는 진입의 편도 비용을 먼저 뺀다. 신호일에 빼면 아직
+        # 존재하지 않는 포지션의 비용이 하루 먼저 자본곡선에 찍힌다.
+        # entry_date는 그 종목 인덱스의 다음 봉이고 달력의 각 날은 한 번만
+        # 지나므로, 이 조건은 포지션당 정확히 한 번 참이 된다(플래그 불필요).
+        # ①보다 앞에 둬야 진입 당일 손절로 나가는 포지션도 비용을 낸다.
+        for p in open_pos.values():
+            if p["entry_date"] == day:
+                equity -= p["entry_cost_krw"]
+
         # ① 청산 먼저 — 같은 날 나가고 들어오는 자리를 비워 준다
         for sym in list(open_pos):
             p = open_pos[sym]
             if day < p["exit_date"]:
                 continue
             gross = (p["exit_price"] - p["entry_price"]) * p["qty"] * p["rate"]
-            equity += gross - p["cost_krw"]
+            # 진입분은 진입 시점에 이미 뺐다 — 여기서는 청산분만 뺀다
+            equity += gross - (p["cost_krw"] - p["entry_cost_krw"])
             trades.append({
                 "symbol": sym, "name": tickers.get(sym, {}).get("name", sym),
                 "entry_date": p["entry_date"].strftime("%Y-%m-%d"),
@@ -183,26 +203,46 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
             })
             del open_pos[sym]
 
+        # ①-b 사이징 기준 자본 = 확정 자본 + 전일 종가 기준 평가손익.
+        # equity는 실현 자본(현금 + 보유분 취득원가)이라 보유가 30% 하락 중이어도
+        # 그대로다 — 그 값으로 1%를 계산하면 드로다운 중에 계속 크게 산다.
+        # 앱의 _risk_block도 총자산(평가액 + 예수금)을 분모로 쓴다.
+        # last_mark는 항상 그날 이전 종가라 룩어헤드가 아니다.
+        mark_equity = equity + sum(
+            (p["last_mark"] - p["entry_price"]) * p["qty"] * p["rate"]
+            for p in open_pos.values() if p["entry_date"] <= day)
+
         # ② 진입 — 자리가 남아 있고 계좌 총 리스크·현금이 한도 안일 때만.
         # 미결 리스크 = 모든 보유가 동시에 손절에 닿았을 때의 손실 합
         open_risk = sum((p["entry_price"] - p["stop"]) * p["qty"] * p["rate"]
                         for p in open_pos.values())
-        # 보유 노셔널 합 — 현금 계좌는 마진이 없어 신규 진입 노셔널이 잔여 현금을
-        # 넘을 수 없다. position_size가 진입마다 같은 전체 equity로 수량을 정해서,
-        # 이 제약이 없으면 동시 진입 시 MAX_WEIGHT×MAX_POSITIONS(140%)까지도
-        # 매수된다 — 원 계획서에는 없던 규칙을 여기서 추가한다.
-        held_notional = sum(p["notional"] for p in open_pos.values())
-        # 현금·리스크 한도로 자리가 모자라면 prepared(=price_frames)의 딕셔너리
-        # 삽입 순서가 그대로 우선순위가 된다 — 모멘텀 강도 등 랭킹을 적용하지
-        # 않는다. 순서가 결정적이긴 하지만 경제적 근거는 없다(발견 5). 랭킹이
-        # 필요하면 이 루프 전에 prepared를 신호 강도로 정렬해야 한다.
+        # 이미 현금에서 나갔거나 나갈 것이 확정된 금액 = 취득원가 합 + 아직 안 낸
+        # 진입 비용(오늘 이후 체결되는 건). 현금 계좌는 마진이 없어 신규 진입이
+        # 잔여 현금을 넘을 수 없다 — 이 제약이 없으면 position_size가 진입마다
+        # 같은 자본으로 수량을 정하는 탓에 동시 진입 시
+        # MAX_WEIGHT×MAX_POSITIONS(140%)까지 매수된다(원 계획서에 없던 규칙).
+        # 진입 비용을 빼먹으면 노셔널 합이 딱 100%인 조합이 통과해 다음 날
+        # 현금이 마이너스가 된다.
+        committed = sum(p["notional"] for p in open_pos.values()) \
+            + sum(p["entry_cost_krw"] for p in open_pos.values()
+                  if p["entry_date"] > day)
+        # 그날의 진입 후보를 모아 **신호 강도 내림차순**으로 자른다. 딕셔너리
+        # 삽입 순서(= db.list_tickers의 ORDER BY market, name)를 우선순위로 쓰면
+        # 결과가 종목 이름에 의존한다 — 종목 하나를 개명하기만 해도 CAGR이 바뀐다.
+        # 동점이면 sorted가 안정 정렬이라 삽입 순서가 유지된다.
+        cands = []
         for sym, pr in prepared.items():
-            if len(open_pos) >= MAX_POSITIONS:
-                break
             if sym in open_pos or day not in pr["sig"].index:
                 continue
             if not bool(pr["sig"].at[day, "enter"]):
                 continue
+            s = pr["sig"].at[day, "strength"]
+            cands.append((sym, pr, -math.inf if pd.isna(s) else float(s)))
+        cands.sort(key=lambda c: c[2], reverse=True)
+
+        for sym, pr, _strength in cands:
+            if len(open_pos) >= MAX_POSITIONS:
+                break
             df = pr["df"]
             i = df.index.get_loc(day)
             if i + 1 >= len(df):
@@ -216,18 +256,30 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
                 continue
             stop = entry - STOP_ATR_MULT * float(atr)
             market = tickers.get(sym, {}).get("market", "")
-            qty = position_size(equity, entry, stop, pr["rate"], market)
+            qty = position_size(mark_equity, entry, stop, pr["rate"], market)
             if qty <= 0:
                 continue
             notional = entry * qty * pr["rate"]
-            if notional > equity - held_notional:
+            # 비용은 진입분/청산분으로 갈라 각 시점에 차감한다(스펙 "진입·청산
+            # 각각 차감"). 청산일에 왕복 전액을 빼면 보유 기간 내내 자본곡선이
+            # 그만큼 과대 표시되다가 청산일에 계단으로 떨어지고, MDD·샤프가
+            # 그 왜곡된 시리즈 위에서 계산된다. 편도 요율 분해가 없어 절반씩
+            # 근사하지만 타이밍은 옳아진다.
+            cost_krw = notional * pr["cost"]
+            entry_cost = cost_krw / 2  # 실제 차감은 진입일(⓪)에 일어난다
+            # 현금 게이트만 mark_equity가 아니라 equity를 쓴다. 현금 계좌의
+            # 가용 현금은 (평가자산 - 보유 평가액)인데, 평가손익이 양쪽에서
+            # 상쇄돼 정확히 (equity - 취득원가 합)과 같다. 미실현이익은
+            # 팔기 전엔 매수 여력이 아니다.
+            if notional + entry_cost > equity - committed:
                 continue  # 잔여 현금 초과 — 이 진입은 건너뛴다
             # 이 포지션을 더했을 때 계좌 총 리스크가 한도를 넘으면 진입하지 않는다
             add_risk = (entry - stop) * qty * pr["rate"]
-            if equity > 0 and (open_risk + add_risk) / equity * 100 > MAX_ACCOUNT_RISK_PCT:
+            if mark_equity > 0 and \
+                    (open_risk + add_risk) / mark_equity * 100 > MAX_ACCOUNT_RISK_PCT:
                 continue
             open_risk += add_risk
-            held_notional += notional
+            committed += notional + entry_cost
             bars = df.iloc[i + 1:]
             exit_i, exit_px, reason = resolve_exit(
                 bars, 0, stop, pr["sig"]["exit"].iloc[i + 1:].tolist())
@@ -237,7 +289,7 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
                 "exit_reason": reason, "qty": qty, "rate": pr["rate"],
                 "stop": stop,  # 계좌 총 리스크 합산에 필요하다
                 "notional": notional,  # 보유 노셔널 합산에 필요하다
-                "cost_krw": notional * pr["cost"],
+                "cost_krw": cost_krw, "entry_cost_krw": entry_cost,
                 "last_mark": entry,  # 직전 유효 종가 — 휴장일엔 이 값을 이어받는다
             }
 
@@ -270,6 +322,10 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
         "universe_size": len(prepared),
         "preset": preset,
         "params": params,
+        # 비교선이 전략과 같은 달력·같은 종목 집합 위에 서게 하려고 내보낸다.
+        # 호출부가 이걸 다시 계산하면 우연히 같을 뿐 계약이 아니고, 길이가
+        # 갈라져도 차트는 조용히 날짜를 어긋나게 그린다. service가 pop한다.
+        "_used": {"calendar": calendar, "symbols": list(prepared)},
     }
 
 
