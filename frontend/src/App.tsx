@@ -14,6 +14,7 @@ const TickerDetail = lazy(() => import('./pages/TickerDetail'))
 const TickerAnalysis = lazy(() => import('./pages/ticker/Analysis'))
 const PortfolioLayout = lazy(() => import('./pages/portfolio/PortfolioLayout'))
 const Watchlist = lazy(() => import('./pages/Watchlist'))
+const Strategy = lazy(() => import('./pages/Strategy'))
 
 const fallback = <div className="card skeleton" style={{ minHeight: 200 }} />
 
@@ -39,6 +40,8 @@ export default function App() {
           </Route>
           <Route path="/watchlist" element={
             <Suspense fallback={fallback}><Watchlist /></Suspense>} />
+          <Route path="/strategy" element={
+            <Suspense fallback={fallback}><Strategy /></Suspense>} />
         </Route>
       </Routes>
     </BrowserRouter>
