@@ -3,7 +3,7 @@ from typing import Literal
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
 
-from app import codef, db, fetchers, preview, service
+from app import db, fetchers, preview, service
 
 router = APIRouter(prefix="/api")
 
@@ -350,102 +350,3 @@ def add_rule(r: RuleIn, request: Request):
 def remove_rule(rule_id: int, request: Request):
     db.delete_rule(_conn(request), rule_id)
     return {"ok": True}
-
-
-# ── 증권사 연동 (CODEF) ────────────────────────────────────────────────────
-
-class BrokerConnectIn(BaseModel):
-    organization: str = Field(pattern=r"^\d{4}$")  # CODEF 기관코드 (예: 키움 0264)
-    login_type: Literal["0", "1"] = "0"  # 0: 인증서, 1: 아이디/패스워드
-    # 인증서 방식이면 인증서 암호, 아이디 방식이면 로그인 비밀번호.
-    # 여기서 CODEF로 한 번 보내고 끝이며 서버에는 저장하지 않는다.
-    password: str = Field(min_length=1)
-    user_id: str | None = None
-    der_file: str | None = None  # base64
-    key_file: str | None = None  # base64
-
-    @model_validator(mode="after")
-    def _cert_files(self):
-        if self.login_type == "0" and not (self.der_file and self.key_file):
-            raise ValueError("인증서 로그인은 der/key 파일이 필요합니다")
-        if self.login_type == "1" and not self.user_id:
-            raise ValueError("아이디 로그인은 아이디가 필요합니다")
-        return self
-
-
-class BrokerAccountIn(BaseModel):
-    organization: str = Field(pattern=r"^\d{4}$")
-    account: str = Field(min_length=1)
-    display: str | None = None
-    name: str | None = None
-    # 계좌비밀번호를 요구하는 증권사만. 즉시 RSA 암호화해 암호문만 저장한다.
-    account_password: str | None = None
-
-
-class BrokerFlowsIn(BaseModel):
-    # YYYYMMDD. 증권사마다 조회 가능 기간이 달라 CODEF가 한도를 넘으면 알아서 줄인다.
-    start_date: str | None = Field(default=None, pattern=r"^\d{8}$")
-    end_date: str | None = Field(default=None, pattern=r"^\d{8}$")
-
-
-class BrokerAccountsIn(BaseModel):
-    accounts: list[BrokerAccountIn] = Field(min_length=1)
-
-
-def _codef_guard(fn):
-    """CODEF 오류는 그대로 500이 되면 화면에 원인이 안 남는다 — 메시지를 그대로 올린다."""
-    try:
-        return fn()
-    except codef.CodefError as e:
-        raise HTTPException(400, str(e))
-
-
-@router.get("/broker/status")
-def broker_status(request: Request):
-    return service.broker_status(_conn(request))
-
-
-@router.post("/broker/connect")
-def broker_connect(body: BrokerConnectIn, request: Request):
-    conn = _conn(request)
-    return _codef_guard(lambda: service.broker_connect(
-        conn, body.organization, body.login_type, body.password,
-        user_id=body.user_id, der_file=body.der_file, key_file=body.key_file))
-
-
-@router.put("/broker/accounts")
-def broker_accounts(body: BrokerAccountsIn, request: Request):
-    conn = _conn(request)
-    return _codef_guard(lambda: service.broker_select_accounts(
-        conn, [a.model_dump() for a in body.accounts]))
-
-
-@router.delete("/broker/accounts/{account}")
-def broker_remove_account(account: str, request: Request):
-    return _codef_guard(lambda: service.broker_remove_account(_conn(request), account))
-
-
-@router.post("/broker/sync")
-def broker_sync(request: Request):
-    conn = _conn(request)
-    out = _codef_guard(lambda: service.sync_broker(conn))
-    # 새로 편입된 종목은 시세가 없어 화면에서 평가액이 비어 보인다 — 바로 채운다
-    for row in db.list_broker_holdings(conn):
-        if db.load_prices(conn, row["symbol"], limit=1).empty:
-            try:
-                service.refresh_all(conn, row["symbol"])
-            except Exception:
-                pass
-    return out
-
-
-@router.post("/broker/flows")
-def broker_flows(body: BrokerFlowsIn, request: Request):
-    conn = _conn(request)
-    return _codef_guard(lambda: service.sync_broker_flows(
-        conn, start_date=body.start_date, end_date=body.end_date))
-
-
-@router.delete("/broker")
-def broker_disconnect(request: Request):
-    return service.broker_disconnect(_conn(request))

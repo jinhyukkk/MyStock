@@ -43,17 +43,12 @@ export interface Dashboard {
   portfolio_summary: { total_value_krw: number; total_pnl_krw: number;
     total_pnl_pct: number; total_pnl_pct_of_asset: number; holdings_count: number;
     cash_krw: number; cash_usd: number; cash_usd_krw: number;
-    /** 발행어음·펀드 등 보유종목·예수금 어디에도 안 잡히는 증권사 자산 */
-    other_assets_krw: number;
     total_asset_krw: number; cash_pct: number };
   position_rule: PositionRule;
   /** 보유 중인데 STOP 룰이 없는 종목 — 알림이 울리지 않는 자리다 */
   unstopped: { symbol: string; name: string; atr_stop_price: number }[];
   score_scale: { swing: ScoreCuts; longterm: ScoreCuts };
   signals: SignalRow[]; rule_alerts: RuleAlert[];
-  /** 증권사 연동 실패 — 잔고가 낡았다는 뜻이라 보유·비중·리스크 전부에 걸린다 */
-  broker_failed: string | null;
-  broker_synced_at: string | null;
   last_refresh: string | null; failed_sources: string[];
 }
 export interface Candle {
@@ -166,10 +161,6 @@ export interface Holding {
   quantity: number; avg_price: number; close: number | null;
   // 원가에 평단 맞춤 보정 로트가 섞였는지 — 이 행의 숫자 전체의 전제가 달라진다
   basis_adjusted: boolean;
-  // 증권사가 평균매입가를 안 줘서 현재가로 채운 행 — 손익 0은 '본전'이 아니라 '평단 모름'
-  basis_missing: boolean;
-  /** 이 수량·평단의 출처 */
-  source: 'ledger' | 'broker';
   value: number | null; pnl: number | null; pnl_pct: number | null;
   // 통화가 섞이면 종목 통화 표시만으로는 포지션 크기를 나란히 볼 수 없다
   value_krw: number | null; weight_pct: number | null;
@@ -224,8 +215,6 @@ export interface Portfolio {
   totals: { total_value_krw: number; total_cost_krw: number;
     total_pnl_krw: number; total_pnl_pct: number; total_pnl_pct_of_asset: number;
     cash_krw: number; cash_usd: number; cash_usd_krw: number;
-    /** 발행어음·펀드 등 보유종목·예수금 어디에도 안 잡히는 증권사 자산 */
-    other_assets_krw: number;
     total_asset_krw: number; cash_pct: number;
     // 원화 환산에 실제로 쓴 환율 — estimated면 수집 실패로 기본값을 쓴 것이다
     usdkrw: number; usdkrw_estimated: boolean;
@@ -238,59 +227,10 @@ export interface Portfolio {
   risk: AccountRisk | null;
   open_risk: OpenRisk | null;
   last_refresh: string | null;
-  broker: BrokerStatus;
-}
-export interface BrokerAccount {
-  organization: string; account: string; display: string; name: string | null;
-  /** 계좌비밀번호를 저장해 둔 계좌인지 — 재선택 때 다시 넣을 필요가 없다 */
-  has_password?: boolean;
-  /** 이 계좌가 실제로 물어오는 것 — 없으면 목록만 늘고 무엇이 오는지 모른다 */
-  holdings_count?: number;
-  other_assets_krw?: number;
-  cash_krw?: number;
-  /** 보유 평가액 + 기타자산 + 예수금. 0종목이어도 발행어음이 수천만 원인 계좌가 있다 */
-  value_krw?: number;
-  /** 시세가 없는 종목이 섞여 평가액이 실제보다 작은 상태 */
-  value_partial?: boolean;
 }
 /** 알림(텔레그램). 봇 토큰은 저장 여부만 돌려받는다 — 화면에 평문을 다시 그리지 않는다 */
 export interface NotifyStatus {
   enabled: boolean; token_set: boolean; chat_id: string; source: 'env' | '설정';
-}
-export interface BrokerStatus {
-  /** .env에 CODEF 키가 설정되어 있는지 — 없으면 연결 자체가 불가능하다 */
-  configured: boolean;
-  env: string;
-  connected: boolean;
-  accounts: BrokerAccount[];
-  synced_at: string | null;
-  flow_synced_at: string | null;
-  holdings_count: number;
-  /** 마지막 동기화 실패 사유 — 성공하면 지워진다 */
-  last_error: string | null;
-  /** CODEF 일 100회 한도 안에서 자동 동기화를 몇 번 돌릴지 — 잔고가 시간마다
-   *  안 바뀌는 이유를 화면에 두지 않으면 '연동 고장'으로 읽힌다 */
-  auto_sync: {
-    times_per_day: number; interval_hours: number;
-    calls_per_sync: number; daily_limit: number; next_at: string | null;
-  };
-}
-export interface BrokerFlowResult {
-  start: string; end: string; synced_at: string;
-  added: { DEPOSIT: number; WITHDRAW: number; DIVIDEND: number; INTEREST: number };
-  total_added: number;
-  /** 이미 가져온 거래 — 같은 기간을 다시 눌러도 중복으로 쌓이지 않는다 */
-  duplicates: number;
-  /** 매매 대금 줄 — 원장(trades)이 진실이라 가져오지 않는다 */
-  skipped_trades: number;
-  /** 종목을 못 붙인 배당 적요 — 합계엔 들어가지만 종목별 배당수익률엔 안 잡힌다 */
-  no_symbol: string[];
-}
-export interface BrokerSyncResult {
-  synced_at: string; holdings: number; cash_krw: number; cash_usd: number;
-  /** 앱 심볼로 확정하지 못한 종목 — 조용히 빼면 총자산이 실제보다 작아진다 */
-  unmapped: { name: string; raw_code: string; quantity: number }[];
-  basis_missing: string[];
 }
 /** 등급이 방향을 가르는가 — 매수 등급 성적 − 매도 등급 성적 (%p, 비용 차감 후) */
 export interface Discrimination {

@@ -7,7 +7,7 @@ import requests
 
 import pandas as pd
 
-from app import (backtest, broker, codef, company, costs, db, fetchers, indicators,
+from app import (backtest, company, costs, db, fetchers, indicators,
                  portfolio, scoring, sentiment)
 
 BACKTEST_DAYS = 1100  # 약 3년 — 한 국면짜리 400일 검증은 상승장 착시를 못 거른다
@@ -31,23 +31,9 @@ def refresh_all(conn, symbol: str | None = None, force_company: bool = False) ->
     새로 편입된 종목마다 이 함수를 부르기 때문이다 — 거기서 강제 갱신이 걸리면
     잔고 한 번 맞추는 데 종목 수 × 6콜이 동기로 붙는다.
     """
-    broker_failed = None
     if symbol is None:
         senti = sentiment.fetch_sentiment()
         db.set_meta(conn, "sentiment", json.dumps(senti))
-        # 증권사 잔고를 먼저 받아야 새로 편입된 종목까지 이번 갱신에 시세가 붙는다.
-        # 다만 시세와 달리 잔고는 CODEF 일 100회 한도를 쓴다 — 시간마다 부르면
-        # 오전에 한도를 태우고 나머지 시간의 갱신이 전부 실패한다.
-        if broker_connected(conn) and should_auto_sync(conn):
-            db.set_meta(conn, BROKER_LAST_ATTEMPT,
-                        datetime.now().isoformat(timespec="seconds"))
-            try:
-                sync_broker(conn)
-            except Exception as e:
-                broker_failed = str(e)  # 연동 실패로 전체 갱신까지 멈추지는 않는다
-                # 자동 갱신은 화면 밖에서 돌아 실패해도 아무도 모른다 — 낡은 잔고를
-                # 최신으로 믿고 포지션을 정하지 않게 대시보드까지 끌고 간다
-                db.set_meta(conn, BROKER_LAST_ERROR, broker_failed)
         targets = _active_tickers(conn)
     else:
         senti = get_sentiment_view(conn)  # 심리지표는 저장분 재사용
@@ -88,7 +74,7 @@ def refresh_all(conn, symbol: str | None = None, force_company: bool = False) ->
     except Exception as e:
         failed_company = [f"ALL:{type(e).__name__}"]
     return {"refreshed": True, "failed_sources": senti.get("failed", []),
-            "failed_tickers": failed_tickers, "broker_failed": broker_failed,
+            "failed_tickers": failed_tickers,
             # 시세 실패(failed_tickers)와 섞지 않는다 — 회사 자료가 비는 것과
             # 시그널이 낡는 것은 사용자가 해야 할 일이 다르다
             "failed_company": failed_company}
@@ -154,13 +140,12 @@ def _tickers_map(conn):
 def _holdings_map(conn):
     """평단은 수수료 포함 비용 기준 — tickers를 넘겨야 시장별 요율 추정이 붙는다.
 
-    증권사(CODEF) 스냅샷이 있으면 그쪽이 현재 보유의 진실이다. 화면·비중·리스크·
-    포지션 사이징이 모두 이 함수 하나에서 나오므로 대체는 여기서만 한다.
+    원장(trades)이 보유의 유일한 근거다. 화면·비중·리스크·포지션 사이징이
+    모두 이 함수 하나에서 나온다.
     """
     trades = [dict(r) for r in db.list_trades(conn)]
     fx = get_sentiment_view(conn).get("usdkrw")
-    holdings = portfolio.compute_holdings(trades, _tickers_map(conn), fx)
-    return _apply_broker_holdings(conn, holdings)
+    return portfolio.compute_holdings(trades, _tickers_map(conn), fx)
 
 
 def get_cash_krw(conn) -> float:
@@ -480,10 +465,7 @@ def get_dashboard(conn) -> dict:
     signals.sort(key=_signal_sort_key)
     tickers_map = {t["symbol"]: dict(t) for t in active}
     pf = portfolio.build_portfolio(holdings, prices, tickers_map, senti.get("usdkrw"),
-                                   cash_krw=get_cash_krw(conn), cash_usd=get_cash_usd(conn),
-                                   # 대시보드도 같은 분모를 써야 한다 — 여기만 빼면
-                                   # 같은 종목의 비중이 화면마다 다르게 나온다
-                                   other_assets=broker_other_assets(conn))
+                                   cash_krw=get_cash_krw(conn), cash_usd=get_cash_usd(conn))
     avg_prices = {s: h["avg_price"] for s, h in holdings.items()}
     # 종목 수 룰은 비중·리스크 한도를 모두 통과하는 계좌에서도 깨진다 —
     # 추적할 수 있는 개수를 넘기면 손절 규율이 비중과 무관하게 무너진다.
@@ -510,9 +492,6 @@ def get_dashboard(conn) -> dict:
         "rule_alerts": check_rules(conn, bars, avg_prices),
         "last_refresh": db.get_meta(conn, "last_refresh"),
         "failed_sources": senti.get("failed", []),
-        # 증권사 잔고가 낡았다는 사실은 보유·비중·리스크 전부에 걸린다
-        "broker_failed": db.get_meta(conn, BROKER_LAST_ERROR) or None,
-        "broker_synced_at": db.get_meta(conn, BROKER_SYNCED_AT) or None,
     }
 
 
@@ -554,13 +533,10 @@ def get_portfolio_view(conn) -> dict:
         cost_krw=_cost_basis_krw(holdings, tickers_map, fx),
         traded_this_year={t["symbol"] for t in trades
                           if str(t.get("trade_date", "")).startswith(str(year))})
-    other_assets = broker_other_assets(conn)
     pf = portfolio.build_portfolio(holdings, prices, tickers_map, fx,
                                    cash_krw=get_cash_krw(conn), cash_usd=get_cash_usd(conn),
                                    dividends={r["symbol"]: r["net_krw"]
-                                              for r in div["by_symbol"]},
-                                   other_assets=other_assets)
-    pf["other_assets"] = other_assets
+                                              for r in div["by_symbol"]})
     pf["dividends"] = div
     realized = portfolio.realized_pnl(trades, tickers_map, fx)
     # 해외 양도세는 5월에 따로 낸다 — 실현손익만 보고 그 돈까지 쓸 수 있다고 믿게 된다
@@ -570,13 +546,11 @@ def get_portfolio_view(conn) -> dict:
                           realized, tickers_map, year=year)}
     price_frames = {s: db.load_prices(conn, s, limit=250) for s in holdings}
     closes = {s: f["close"] for s, f in price_frames.items()}
-    # 계좌 리스크는 환율 고정 근사 — 달러 예수금도 현재 환율로 환산해 고정 현금으로 합산.
-    # 발행어음·펀드도 비중의 분모에 들어가야 한다(주식이 아니지만 계좌의 자산이다).
+    # 계좌 리스크는 환율 고정 근사 — 달러 예수금도 현재 환율로 환산해 고정 현금으로 합산
     fx_now = fx or portfolio.DEFAULT_USDKRW
     pf["risk"] = portfolio.account_risk(
         holdings, closes, tickers_map, fx,
-        cash_krw=(get_cash_krw(conn) + get_cash_usd(conn) * fx_now
-                  + pf["totals"]["other_assets_krw"]))
+        cash_krw=get_cash_krw(conn) + get_cash_usd(conn) * fx_now)
     # 종목별 1% 룰은 합산해서 봐야 의미가 있다 — 5종목이면 총 몇 %인지 화면에 띄운다
     pf["open_risk"] = portfolio.open_risk(
         holdings, _atr_map(price_frames), tickers_map, fx,
@@ -584,9 +558,6 @@ def get_portfolio_view(conn) -> dict:
         stops={s: v for s in holdings if (v := _stop_rule(conn, s)) is not None})
     # 이 숫자들이 언제 기준인지 화면이 알 수 있어야 한다
     pf["last_refresh"] = db.get_meta(conn, "last_refresh")
-    # 보유·예수금이 증권사 실데이터인지 손으로 적은 원장인지 — 근거가 다르면
-    # 같은 숫자라도 신뢰도가 다르다
-    pf["broker"] = broker_status(conn)
     return pf
 
 
@@ -909,399 +880,3 @@ def _entry_review(conn, symbol: str, sig) -> dict | None:
         # 이미 여러 번 탄 포지션이면 이번이 첫 물타기가 아니다
         "buy_count": len(buys),
     }
-
-
-# ── 증권사 연동 (CODEF) ────────────────────────────────────────────────────
-# 원장(trades)은 매매일지·실현손익·승률의 근거로 그대로 두고, "지금 무엇을 얼마에
-# 들고 있나"만 증권사 값으로 대체한다. 원장은 손으로 적는 것이라 누락·오타가 쌓이고,
-# 그 어긋난 수량이 비중·리스크·포지션 사이징의 입력이라 계좌 전체 판단이 틀어진다.
-
-BROKER_CID = "codef_connected_id"
-BROKER_ACCOUNTS = "codef_accounts"
-BROKER_SYNCED_AT = "last_broker_sync"
-BROKER_FLOW_SYNCED_AT = "last_broker_flow_sync"
-BROKER_OTHER_ASSETS = "broker_other_assets"
-BROKER_ACCOUNT_CASH = "broker_account_cash"
-BROKER_LAST_ATTEMPT = "broker_last_sync_attempt"
-BROKER_LAST_ERROR = "broker_last_error"
-
-
-def broker_other_assets(conn) -> list[dict]:
-    raw = db.get_meta(conn, BROKER_OTHER_ASSETS)
-    return json.loads(raw) if raw else []
-
-
-# CODEF 무료 한도는 하루 100회다. 자동 갱신이 시간마다 계좌 수×2회를 쓰면
-# 5계좌 기준 하루 240회 — 오전에 한도를 태우고 나머지 시간은 전부 실패한다.
-CODEF_DAILY_LIMIT = 100
-# 자동 갱신에 내주는 몫. 나머지는 수동 동기화·입출금 가져오기·계좌 연결처럼
-# 사용자가 직접 누르는 호출을 위해 남긴다 — 자동이 다 먹으면 버튼이 안 듣는다.
-CODEF_AUTO_BUDGET = 60
-CODEF_CALLS_PER_SYNC = 2  # 계좌당 주식잔고조회 + 종합자산조회
-
-
-def auto_sync_plan(conn) -> dict:
-    """자동 잔고 동기화를 하루 몇 번, 몇 시간 간격으로 돌릴지.
-
-    ponytail: 실제 호출 수를 세지 않고 계좌 수에서 역산한다 — 수동 호출까지
-    정확히 세려면 codef 계층에 카운터를 심어야 하는데, 예비분(40회)을 남기는
-    쪽이 훨씬 짧고 재시작에도 안전하다. 한도를 실제로 넘기면 CF-00012가
-    broker_failed로 화면에 올라오므로 조용히 틀리지는 않는다.
-    """
-    per_sync = max(1, len(broker_accounts(conn))) * CODEF_CALLS_PER_SYNC
-    times = max(1, CODEF_AUTO_BUDGET // per_sync)
-    return {"times_per_day": times, "interval_hours": round(24 / times, 1),
-            "calls_per_sync": per_sync, "daily_limit": CODEF_DAILY_LIMIT}
-
-
-def next_auto_sync_at(conn) -> str | None:
-    """다음 자동 동기화 예정 시각. 성공·실패와 무관하게 '시도'를 기준으로 센다 —
-    실패를 기준으로 삼으면 인증서가 만료된 계좌가 매시간 재시도하며 한도를 태운다."""
-    # 시도 기록이 없어도 마지막 성공 시각이 있으면 그걸 기준으로 센다 —
-    # 안 그러면 서버를 재시작할 때마다 한 번씩 더 부르게 되고, 개발 중 재시작이
-    # 잦은 날엔 그것만으로 하루 한도가 사라진다.
-    last = db.get_meta(conn, BROKER_LAST_ATTEMPT) or db.get_meta(conn, BROKER_SYNCED_AT)
-    if not last:
-        return None
-    return (datetime.fromisoformat(last) +
-            timedelta(hours=auto_sync_plan(conn)["interval_hours"])).isoformat(
-                timespec="seconds")
-
-
-def should_auto_sync(conn) -> bool:
-    nxt = next_auto_sync_at(conn)
-    return nxt is None or datetime.now() >= datetime.fromisoformat(nxt)
-
-
-def broker_accounts(conn) -> list[dict]:
-    raw = db.get_meta(conn, BROKER_ACCOUNTS)
-    return json.loads(raw) if raw else []
-
-
-def broker_connected(conn) -> bool:
-    return bool(db.get_meta(conn, BROKER_CID) and broker_accounts(conn))
-
-
-def _account_key(a: dict) -> str:
-    return a.get("display") or a["account"]
-
-
-def _account_value(conn, a: dict, rows: list, assets: list, cash: dict,
-                   fx: float, tickers: dict) -> dict:
-    """계좌 하나가 실제로 얼마짜리인지 — 보유 평가액 + 기타자산 + 예수금.
-
-    종목 수만 세우면 0종목이지만 발행어음이 수천만 원인 계좌를 '빈 계좌'로 읽는다.
-    시세가 없는 종목이 섞이면 그만큼 작게 나오므로 partial로 알린다.
-    """
-    key = _account_key(a)
-    mine = [r for r in rows if r.get("account") == key]
-    value, partial = 0.0, False
-    for r in mine:
-        close = _latest_close_and_change(conn, r["symbol"])[0]
-        if close is None:
-            partial = True
-            continue
-        rate = fx if tickers.get(r["symbol"], {}).get("currency") == "USD" else 1.0
-        value += close * r["quantity"] * rate
-    other = sum(x["value_krw"] for x in assets if x.get("account") == key)
-    c = cash.get(key) or {}
-    cash_krw = float(c.get("cash_krw") or 0.0) + float(c.get("cash_usd") or 0.0) * fx
-    return {"holdings_count": len(mine), "other_assets_krw": other,
-            "cash_krw": round(cash_krw, 2),
-            "value_krw": round(value + other + cash_krw, 2),
-            "value_partial": partial}
-
-
-def broker_status(conn) -> dict:
-    rows = [dict(r) for r in db.list_broker_holdings(conn)]
-    assets = broker_other_assets(conn)
-    cash = json.loads(db.get_meta(conn, BROKER_ACCOUNT_CASH) or "{}")
-    fx = get_sentiment_view(conn).get("usdkrw") or portfolio.DEFAULT_USDKRW
-    tickers = _tickers_map(conn)
-    return {
-        "configured": codef.is_configured(),  # .env에 CODEF 키가 있는지
-        "env": os.environ.get("CODEF_ENV", "demo"),
-        "connected": bool(db.get_meta(conn, BROKER_CID)),
-        # 계좌비밀번호는 CODEF 공개키로 암호화된 값만 저장한다 — 평문은 남기지 않는다
-        # 계좌별 보유 수·기타자산을 함께 준다 — 여러 계좌를 걸어두면 어느 계좌가
-        # 실제로 무엇을 물어오는지 모른 채 목록만 늘어난다.
-        "accounts": [{**_account_value(conn, a, rows, assets, cash, fx, tickers),
-                      "organization": a["organization"], "account": a["account"],
-                      "display": _account_key(a),
-                      "name": a.get("name"),
-                      "has_password": bool(a.get("password_enc"))}
-                     for a in broker_accounts(conn)],
-        # 자동 갱신 중의 연동 실패는 어디에도 안 남았다 — 낡은 잔고를 최신으로 믿게 된다
-        "last_error": db.get_meta(conn, BROKER_LAST_ERROR) or None,
-        # 잔고가 왜 시간마다 안 바뀌는지 화면에 없으면 '연동이 고장났다'로 읽힌다
-        "auto_sync": {**auto_sync_plan(conn), "next_at": next_auto_sync_at(conn)},
-        "synced_at": db.get_meta(conn, BROKER_SYNCED_AT),
-        "flow_synced_at": db.get_meta(conn, BROKER_FLOW_SYNCED_AT),
-        "holdings_count": len(rows),
-    }
-
-
-def broker_connect(conn, organization: str, login_type: str, password: str,
-                   user_id: str | None = None, der_file: str | None = None,
-                   key_file: str | None = None) -> dict:
-    """계정 등록 → connectedId 저장 후 그 기관의 계좌 목록을 돌려준다.
-
-    인증서·비밀번호는 CODEF로 한 번 보내고 끝이며 이쪽 DB에는 저장하지 않는다.
-    """
-    cid = codef.create_account(organization, login_type, password,
-                               user_id=user_id, der_file=der_file, key_file=key_file)
-    db.set_meta(conn, BROKER_CID, cid)
-    return {"connected_id": cid,
-            "accounts": [{"account": a.get("resAccount"),
-                          "display": a.get("resAccountDisplay") or a.get("resAccount"),
-                          "name": a.get("resAccountName"),
-                          "organization": organization}
-                         for a in codef.account_list(cid, organization)]}
-
-
-def broker_select_accounts(conn, accounts: list[dict]) -> dict:
-    """동기화 대상 계좌를 저장한다. account_password는 즉시 RSA 암호화해서 넣는다."""
-    cid = db.get_meta(conn, BROKER_CID)
-    if not cid:
-        raise codef.CodefError("CF-LOCAL", "증권사 계정이 연결되지 않았습니다")
-    # 기존 목록에 병합한다 — 덮어쓰면 다른 증권사 계좌를 추가하는 순간 앞의 것이 사라진다
-    saved = {(a["organization"], a["account"]): a for a in broker_accounts(conn)}
-    for a in accounts:
-        entry = {"organization": a["organization"], "account": a["account"],
-                 "display": a.get("display") or a["account"], "name": a.get("name")}
-        pw = a.get("account_password")
-        if pw:
-            entry["password_enc"] = codef.encrypt(pw)
-        else:
-            # 비밀번호를 다시 입력하지 않은 재선택에서 저장분을 날리면 조회가 막힌다
-            prev = saved.get((a["organization"], a["account"]), {})
-            if prev.get("password_enc"):
-                entry["password_enc"] = prev["password_enc"]
-        saved[(a["organization"], a["account"])] = entry
-    db.set_meta(conn, BROKER_ACCOUNTS,
-                json.dumps(list(saved.values()), ensure_ascii=False))
-    return broker_status(conn)
-
-
-def _drop_account_snapshot(conn, key: str) -> None:
-    """스냅샷에서 그 계좌 몫만 덜어낸다 — 남겨두면 뺀 계좌의 보유가 유령으로 뜬다.
-
-    ponytail: 스냅샷은 종목당 한 행이라(broker.merge) 두 계좌가 같은 종목을 들고
-    있으면 행 하나에 합산돼 있다 — 계좌 라벨로 지우면 그 종목은 근사치가 된다.
-    재동기화가 실패했을 때만 타는 경로라 resynced=false로 알리고 끝낸다.
-    계좌별 정확도가 필요해지면 스냅샷 키를 (symbol, account)로 올린다.
-    """
-    rows = [dict(r) for r in db.list_broker_holdings(conn) if r["account"] != key]
-    db.replace_broker_holdings(conn, rows,
-                               db.get_meta(conn, BROKER_SYNCED_AT) or "")
-    db.set_meta(conn, BROKER_OTHER_ASSETS, json.dumps(
-        [a for a in broker_other_assets(conn) if a.get("account") != key],
-        ensure_ascii=False))
-    cash = json.loads(db.get_meta(conn, BROKER_ACCOUNT_CASH) or "{}")
-    cash.pop(key, None)
-    db.set_meta(conn, BROKER_ACCOUNT_CASH, json.dumps(cash, ensure_ascii=False))
-
-
-def broker_remove_account(conn, account: str) -> dict:
-    """동기화 대상에서 계좌 하나를 뺀다. 마지막 하나면 연동 해제와 같다."""
-    current = broker_accounts(conn)
-    rest = [a for a in current if a["account"] != account]
-    if len(rest) == len(current):
-        raise codef.CodefError("CF-LOCAL", "목록에 없는 계좌입니다")
-    if not rest:
-        return {**broker_disconnect(conn), "resynced": False}
-    key = next(_account_key(a) for a in current if a["account"] == account)
-    db.set_meta(conn, BROKER_ACCOUNTS, json.dumps(rest, ensure_ascii=False))
-    # 예수금은 계좌 합산이라 뺀 뒤 다시 받아야 맞는다. 조회에 실패해도 그 계좌
-    # 몫의 보유·기타자산만은 즉시 덜어낸다 — 예수금이 실제보다 커 보이는 건
-    # resynced=false로 알린다.
-    try:
-        sync_broker(conn)
-        return {**broker_status(conn), "resynced": True}
-    except Exception:
-        _drop_account_snapshot(conn, key)
-        return {**broker_status(conn), "resynced": False}
-
-
-def broker_disconnect(conn) -> dict:
-    """연동 해제 — 스냅샷도 함께 비워 보유가 다시 원장 기준으로 돌아가게 한다."""
-    db.clear_broker_holdings(conn)
-    for key in (BROKER_CID, BROKER_ACCOUNTS, BROKER_SYNCED_AT, BROKER_FLOW_SYNCED_AT,
-                BROKER_ACCOUNT_CASH, BROKER_LAST_ERROR, BROKER_LAST_ATTEMPT):
-        db.set_meta(conn, key, "")
-    return broker_status(conn)
-
-
-def _resolve_symbol(conn, item: dict) -> str | None:
-    """증권사 종목코드를 tickers에 등록된 심볼로. 없으면 새로 등록한다."""
-    code = item["code"]
-    if db.get_ticker(conn, code) is not None:
-        return code
-    # 이름·yf 심볼·ETF 여부는 기존 검색기에 이미 있다 — 증권사 응답에는 없는 정보다
-    try:
-        hit = next((r for r in fetchers.search_symbols(code)
-                    if r["symbol"] == code and r["market"] == item["market"]), None)
-    except Exception:
-        hit = None
-    if hit is None:
-        # 조회에 실패해도 보유는 사실이다. 시세 심볼은 시장 규칙으로 채우고
-        # 이름은 증권사가 준 것을 쓴다 (갱신에 실패하면 failed_tickers로 드러난다).
-        hit = {"symbol": code, "name": item["name"], "market": item["market"],
-               "is_etf": 0, "currency": item["currency"],
-               "yf_symbol": code + ".KS" if item["market"] == "KR" else code}
-    db.upsert_ticker(conn, hit["symbol"], hit["market"], hit["name"],
-                     is_etf=hit.get("is_etf", 0), in_watchlist=0,
-                     yf_symbol=hit.get("yf_symbol"), currency=hit.get("currency", "KRW"))
-    return hit["symbol"]
-
-
-def sync_broker(conn) -> dict:
-    """증권사 잔고를 받아 예수금과 보유 스냅샷을 갈아끼운다."""
-    cid = db.get_meta(conn, BROKER_CID)
-    accounts = broker_accounts(conn)
-    if not cid or not accounts:
-        raise codef.CodefError("CF-LOCAL", "동기화할 증권사 계좌가 없습니다")
-    parsed = [broker.parse_balance(
-        codef.balance(cid, a["organization"], a["account"], a.get("password_enc")),
-        account=a.get("display") or a["account"]) for a in accounts]
-    merged = broker.merge(parsed)
-
-    rows = []
-    for h in merged["holdings"]:
-        symbol = _resolve_symbol(conn, h)
-        if symbol:
-            rows.append({**h, "symbol": symbol})
-    # 발행어음·펀드는 주식잔고조회에 아예 안 나온다 — 종합자산으로 따로 받는다.
-    # 이 API를 지원하지 않는 증권사도 있으므로 실패해도 동기화 전체를 멈추지 않고,
-    # 직전 스냅샷을 그대로 둔 채 실패 사실만 올린다(조용히 0으로 만들지 않는다).
-    other_assets, other_skipped, assets_failed = [], [], None
-    try:
-        for a in accounts:
-            for d in codef.financial_assets(cid, a["organization"], a["account"],
-                                            a.get("password_enc")):
-                keep, skipped = broker.parse_assets(
-                    d, account=a.get("display") or a["account"])
-                other_assets += keep
-                other_skipped += skipped
-    except codef.CodefError as e:
-        assets_failed = str(e)
-
-    synced_at = datetime.now().isoformat(timespec="seconds")
-    # 예수금은 계좌별로 오는데 합산만 저장하면 어느 계좌에 현금이 있는지 사라진다
-    db.set_meta(conn, BROKER_ACCOUNT_CASH, json.dumps(
-        {a.get("display") or a["account"]: {"cash_krw": p["cash_krw"],
-                                            "cash_usd": p["cash_usd"]}
-         for a, p in zip(accounts, parsed)}, ensure_ascii=False))
-    db.set_meta(conn, BROKER_LAST_ERROR, "")  # 성공했으니 지난 실패는 지운다
-    # 수동 동기화도 같은 한도를 쓴다 — 시계를 안 밀면 방금 부른 잔고를 자동이 또 부른다
-    db.set_meta(conn, BROKER_LAST_ATTEMPT, synced_at)
-    db.replace_broker_holdings(conn, rows, synced_at)
-    if assets_failed is None:
-        db.set_meta(conn, BROKER_OTHER_ASSETS,
-                    json.dumps(other_assets, ensure_ascii=False))
-    # 예수금도 증권사 값이 진실이다. 매매 입력이 예수금을 증감시키던 흐름은 그대로
-    # 두되, 동기화 때마다 실제 잔고로 덮어써 오차가 누적되지 않게 한다.
-    db.set_meta(conn, "cash_krw", str(merged["cash_krw"]))
-    db.set_meta(conn, "cash_usd", str(merged["cash_usd"]))
-    db.set_meta(conn, BROKER_SYNCED_AT, synced_at)
-    return {"synced_at": synced_at, "holdings": len(rows),
-            "cash_krw": merged["cash_krw"], "cash_usd": merged["cash_usd"],
-            # 앱 심볼로 확정하지 못한 종목 — 조용히 빼면 총자산이 실제보다 작아진다
-            "unmapped": merged["unmapped"],
-            "basis_missing": [r["symbol"] for r in rows if r["basis_missing"]],
-            "other_assets": other_assets,
-            "other_assets_krw": sum(a["value_krw"] for a in other_assets),
-            "other_skipped": other_skipped,
-            "assets_failed": assets_failed}
-
-
-def _name_index(conn) -> list[tuple[str, str]]:
-    """종목명 → 심볼. 긴 이름부터 봐야 '삼성전자'가 '삼성전자우'를 가로채지 않는다."""
-    rows = [(t["name"], t["symbol"]) for t in db.list_tickers(conn) if t["name"]]
-    return sorted(rows, key=lambda r: -len(r[0]))
-
-
-def sync_broker_flows(conn, start_date: str | None = None,
-                      end_date: str | None = None) -> dict:
-    """증권사 입출금내역을 cash_flows에 가져온다 (YYYYMMDD, 기본 최근 90일).
-
-    예수금에는 반영하지 않는다 — 예수금은 잔고조회가 덮어쓰는 값이라 여기서
-    또 더하면 같은 입금이 두 번 반영됐다가 다음 동기화에 조용히 사라진다.
-    """
-    cid = db.get_meta(conn, BROKER_CID)
-    accounts = broker_accounts(conn)
-    if not cid or not accounts:
-        raise codef.CodefError("CF-LOCAL", "동기화할 증권사 계좌가 없습니다")
-    now = datetime.now()
-    end = end_date or now.strftime("%Y%m%d")
-    # 90일 — 키움 등 3개월 단위 제한에 걸리지 않는 가장 넓은 기본값
-    start = start_date or (now - timedelta(days=90)).strftime("%Y%m%d")
-
-    rows = []
-    for a in accounts:
-        label = a.get("display") or a["account"]
-        for data in codef.transactions(cid, a["organization"], a["account"],
-                                       start, end, a.get("password_enc")):
-            rows += broker.parse_transactions(data, account=label)
-
-    existing = db.cash_flow_ext_keys(conn)
-    names = _name_index(conn)
-    added = {"DEPOSIT": 0, "WITHDRAW": 0, "DIVIDEND": 0, "INTEREST": 0}
-    duplicates = skipped = 0
-    no_symbol = []
-    for r in rows:
-        ftype = broker.classify_flow(r)
-        if ftype is None:
-            skipped += 1  # 매매 대금 등 — 원장이 진실이다
-            continue
-        if r["ext_key"] in existing:
-            duplicates += 1
-            continue
-        symbol = None
-        if ftype in ("DIVIDEND", "INTEREST"):
-            symbol = next((s for n, s in names if n in r["desc"]), None)
-            if symbol is None:
-                # 종목을 못 붙인 배당은 배당 화면에서 '미지정'으로 뜬다 — 합계는
-                # 맞지만 종목별 배당수익률에는 안 잡히므로 사용자에게 알린다
-                no_symbol.append(r["desc"][:40] or r["date"])
-        db.insert_cash_flow(conn, ftype, r["amount_in"] or r["amount_out"], r["date"],
-                            symbol=symbol,
-                            # 증권 입출금내역은 원화 계좌 기준이다. 외화 계좌 거래는
-                            # 이 API로 오지 않으므로 KRW로 고정한다.
-                            currency="KRW", fx_rate=1.0,
-                            note=(r["desc"] or None), ext_key=r["ext_key"])
-        existing.add(r["ext_key"])
-        added[ftype] += 1
-    synced_at = now.isoformat(timespec="seconds")
-    db.set_meta(conn, BROKER_FLOW_SYNCED_AT, synced_at)
-    return {"start": start, "end": end, "synced_at": synced_at,
-            "added": added, "total_added": sum(added.values()),
-            "duplicates": duplicates, "skipped_trades": skipped,
-            "no_symbol": no_symbol[:10]}
-
-
-def _apply_broker_holdings(conn, holdings: dict) -> dict:
-    """원장에서 만든 보유를 증권사 스냅샷으로 대체한다.
-
-    수량·평단만 덮고 환율 이력(avg_fx)·진입 등급 같은 원장 고유 정보는 남긴다 —
-    증권사는 매수 시점 환율을 주지 않으므로 그걸 버리면 환 기여가 통째로 사라진다.
-    스냅샷에 없는 종목은 이미 판 것이므로 화면에서도 빠져야 한다.
-    """
-    rows = db.list_broker_holdings(conn)
-    if not rows:
-        return holdings
-    out = {}
-    for r in rows:
-        prev = holdings.get(r["symbol"], {})
-        out[r["symbol"]] = {
-            **prev,
-            "quantity": r["quantity"],
-            "avg_price": r["avg_price"],
-            "source": "broker",
-            # 평단을 증권사가 안 줘서 현재가로 채운 종목은 손익이 0으로 보인다
-            "basis_missing": bool(r["basis_missing"]),
-            # 원장에 없던 종목은 매수 환율을 알 수 없다 — 0으로 쓰면 '환 영향 없음'이 된다
-            "avg_fx": prev.get("avg_fx", 1.0),
-            "fx_known": prev.get("fx_known", False) if prev else False,
-        }
-    return out

@@ -79,14 +79,6 @@ export default function PortfolioLayout() {
             ₩{fmt(t.cash_krw + (t.cash_usd_krw ?? 0))}
             <span style={{ fontSize: 12, color: 'var(--text-dim)' }}> ({t.cash_pct}%)</span></div>
         </div>
-        {/* 발행어음·펀드는 보유종목에도 예수금에도 없다 — 항목을 안 두면 총자산에서
-            설명되지 않는 금액으로 남는다 */}
-        {t.other_assets_krw > 0 && (
-          <div>
-            <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>기타자산</div>
-            <div style={{ fontSize: 18, fontWeight: 700 }}>₩{fmt(t.other_assets_krw)}</div>
-          </div>
-        )}
         <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
           {/* 이 계좌 숫자가 언제 가격 기준인지 — 낡은 값으로 사이즈를 정하면 안 된다 */}
           <div className={stale ? 'warn' : ''} style={{ fontSize: 11,

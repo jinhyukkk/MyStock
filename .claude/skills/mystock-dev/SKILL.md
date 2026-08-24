@@ -11,7 +11,7 @@ description: MyStock 코드베이스에서 구현 작업을 시작하기 전에 
 
 | 층 | 기술 | 위치 |
 |---|---|---|
-| 백엔드 | Python 3.11+, FastAPI, SQLite(thread-local), pandas, FinanceDataReader/yfinance, CODEF(증권사 연동) | `backend/app/` |
+| 백엔드 | Python 3.11+, FastAPI, SQLite(thread-local), pandas, FinanceDataReader/yfinance | `backend/app/` |
 | 프론트 | React 19, TypeScript 6, Vite 8, react-router 7, recharts, lightweight-charts, oxlint | `frontend/src/` |
 | 테스트 | pytest(+httpx TestClient) — 프론트 단위 테스트는 없음(tsc + lint + 브라우저 계측으로 대체) | `backend/tests/` |
 
@@ -50,7 +50,7 @@ curl -s http://127.0.0.1:8722/api/dashboard | head -c 600
 ```
 
 Windows venv는 `backend/.venv/Scripts/`. `.env`는 루트에 있고 `backend/app/env.py`가 로드한다
-(CODEF 키 등 — 절대 출력·커밋하지 않는다).
+(API 키 등 — 절대 출력·커밋하지 않는다).
 
 ## 화면 지도
 
@@ -64,7 +64,7 @@ Windows venv는 `backend/.venv/Scripts/`. `.env`는 루트에 있고 `backend/ap
 | Realized | `/portfolio/realized` | `pages/portfolio/Realized.tsx` | context만 (자체 호출 없음) |
 | Income | `/portfolio/income` | `pages/portfolio/Income.tsx` | context + `POST/PATCH/DELETE /api/cash-flows` |
 | Journal | `/portfolio/journal` | `pages/portfolio/Journal.tsx` | context + `DELETE /api/trades` |
-| Settings | `/portfolio/settings` | `pages/portfolio/Settings.tsx`, `BrokerPanel.tsx` | `PUT /api/cash`, `/api/notify*`, `PUT /api/position-rule`, `/api/broker/*` |
+| Settings | `/portfolio/settings` | `pages/portfolio/Settings.tsx` | `PUT /api/cash`, `/api/notify*`, `PUT /api/position-rule` |
 
 포트폴리오 하위 화면은 `PortfolioLayout.tsx`가 **4개 API**(`GET /api/portfolio`, `/api/trades`,
 `/api/cash-flows`, `/api/position-rule`)를 한 번에 받아 `context.ts`(`usePortfolio()`)로 내려준다.
@@ -86,7 +86,6 @@ Windows venv는 `backend/.venv/Scripts/`. `.env`는 루트에 있고 `backend/ap
 | `costs.py` | 수수료·세금 요율. **새 상수 금지, 여기 것을 쓴다** |
 | `db.py` / `schema.sql` | 스키마 + 마이그레이션. 둘 다 고친다 |
 | `fetchers.py` / `sentiment.py` | 외부 시세·심리 데이터 (테스트는 `smoke`) |
-| `broker.py` / `codef.py` | 증권사 연동 |
 
 ## 반드시 지키는 규칙
 

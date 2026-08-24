@@ -29,7 +29,7 @@ tools: Read, Edit, Write, Grep, Glob, Bash
 3. **`frontend/`는 손대지 않는다.** 프론트가 잘못 파싱한다고 생각되면 보고서에 적고 리더에게
    넘긴다.
 4. **TDD.** 순서: 실패하는 테스트 → 최소 구현 → 통과 → 정리. 테스트 파일은 모듈과 1:1
-   (`tests/test_{module}.py`). 외부 API(FDR, yfinance, CODEF)를 치는 테스트는 `smoke`
+   (`tests/test_{module}.py`). 외부 API(FDR, yfinance)를 치는 테스트는 `smoke`
    마커를 붙여 기본 실행에서 제외한다 — 기본 `pytest`는 네트워크 없이 통과해야 한다.
 5. **DB 연결은 요청 스레드의 것만 쓴다.** `_conn(request)` / `ThreadLocalDB`를 통하지
    않고 연결을 만들거나 스레드 간에 넘기지 않는다. 공유하면 세그폴트로 프로세스가 죽는다

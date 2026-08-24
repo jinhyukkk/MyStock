@@ -83,17 +83,10 @@ export default function Holdings() {
 
       <div className="card">
         <strong>보유 종목</strong>
-        {/* 이 수량·평단이 증권사 실데이터인지 손으로 적은 원장인지 — 근거가 다르면
-            같은 숫자라도 신뢰도가 다르다 */}
-        {pf.broker.synced_at && <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>
-          {' '}증권사 잔고 기준 · {pf.broker.synced_at.replace('T', ' ')}</span>}
         {pf.holdings.length === 0 && <div className="empty">
           보유 종목이 없습니다.<br />
-          {pf.broker.synced_at
-            ? <>증권사 잔고에도 보유 종목이 없습니다. 계좌를 잘못 골랐다면{' '}
-                <Link to="/portfolio/settings"><strong>설정</strong></Link> 탭에서 다시 선택하세요.</>
-            : <><Link to="/portfolio/journal"><strong>매매 기록</strong></Link> 탭에 체결 내역을
-                기록하면 평단·수익률·실현손익이 계산됩니다.</>}
+          <Link to="/portfolio/journal"><strong>매매 기록</strong></Link> 탭에 체결 내역을
+          기록하면 평단·수익률·실현손익이 계산됩니다.
         </div>}
         {pf.holdings.length > 0 && <div className="filter-chips">
           {([
@@ -145,10 +138,7 @@ export default function Holdings() {
                   {h.basis_adjusted && <span className="warn" style={{ fontSize: 11 }}
                     title="원가에 평단 맞춤용 보정 로트가 섞여 있습니다. 평단·손익·수익률은 실제 체결가만으로 만든 값이 아닙니다.">
                     {' '}보정 평단</span>}
-                  {/* 평단을 모르는 채 현재가로 채운 행은 손익 0이 '본전'으로 읽힌다 */}
-                  {h.basis_missing && <span className="warn" style={{ fontSize: 11 }}
-                    title="증권사가 평균매입가를 제공하지 않아 현재가로 채웠습니다. 이 행의 손익·수익률은 본전이 아니라 '평단 모름'입니다.">
-                    {' '}평단 미제공</span>}</td>
+                  </td>
                 {/* sec: 좁은 화면 카드 모드에서 숨기는 보조 필드 — 종목당 10칸을 다
                     세로로 쌓으면 17종목이 끝없는 스크롤이 된다. 상세는 종목 페이지에. */}
                 <td data-label="수량" className="sec">{fmt(h.quantity)}</td>

@@ -264,29 +264,3 @@ def set_meta(conn, key, value):
 def get_meta(conn, key):
     row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
     return row["value"] if row else None
-
-
-def replace_broker_holdings(conn, rows: list[dict], synced_at: str):
-    """증권사 스냅샷을 통째로 갈아끼운다.
-
-    부분 갱신(upsert)만 하면 증권사에서 이미 전량 매도된 종목이 표에 남아
-    화면에 유령 보유로 계속 뜬다 — 스냅샷은 전체가 한 시점의 사실이어야 한다.
-    """
-    conn.execute("DELETE FROM broker_holdings")
-    conn.executemany(
-        """INSERT INTO broker_holdings (symbol, name, quantity, avg_price, currency,
-                                        account, basis_missing, synced_at)
-           VALUES (?,?,?,?,?,?,?,?)""",
-        [(r["symbol"], r.get("name"), r["quantity"], r["avg_price"],
-          r.get("currency", "KRW"), r.get("account"),
-          int(bool(r.get("basis_missing"))), synced_at) for r in rows])
-    conn.commit()
-
-
-def list_broker_holdings(conn):
-    return conn.execute("SELECT * FROM broker_holdings ORDER BY symbol").fetchall()
-
-
-def clear_broker_holdings(conn):
-    conn.execute("DELETE FROM broker_holdings")
-    conn.commit()

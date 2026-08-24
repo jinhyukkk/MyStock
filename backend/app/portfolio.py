@@ -430,14 +430,9 @@ def realized_stats(realized: list, tickers: dict, usdkrw) -> dict:
 
 def build_portfolio(holdings: dict, prices: dict, tickers: dict, usdkrw,
                     cash_krw: float = 0.0, cash_usd: float = 0.0,
-                    dividends: dict | None = None,
-                    other_assets: list | None = None) -> dict:
+                    dividends: dict | None = None) -> dict:
     fx = usdkrw or DEFAULT_USDKRW
     dividends = dividends or {}
-    # 발행어음·펀드처럼 보유종목에도 예수금에도 안 잡히는 자산. 빼놓으면 총자산이
-    # 작아져 비중·현금비중·계좌 리스크%가 전부 실제보다 크게 나온다.
-    other_assets = other_assets or []
-    other_total_krw = sum(float(a.get("value_krw") or 0.0) for a in other_assets)
     total_div = total_return_basis = 0.0
     cash_usd_krw = cash_usd * fx
     cash_total_krw = cash_krw + cash_usd_krw
@@ -511,7 +506,7 @@ def build_portfolio(holdings: dict, prices: dict, tickers: dict, usdkrw,
                      # 통화가 섞이면 종목 통화 표시만으로는 크기를 나란히 못 본다
                      "value_krw": round(value * rate, 0) if value is not None else None,
                      "weight_pct": None})
-    total_asset = total_value + cash_total_krw + other_total_krw
+    total_asset = total_value + cash_total_krw
     for r in rows:  # 비중 분모는 현금 포함 총자산 — 평가액만 쓰면 현금 비중만큼 부풀려진다
         if r["value_krw"] is not None and total_asset:
             r["weight_pct"] = round(r["value_krw"] / total_asset * 100, 1)
@@ -526,9 +521,6 @@ def build_portfolio(holdings: dict, prices: dict, tickers: dict, usdkrw,
               "cash_krw": round(cash_krw, 0),
               "cash_usd": round(cash_usd, 2),
               "cash_usd_krw": round(cash_usd_krw, 0),
-              # 증권사 종합자산에서만 보이는 자산 — 어디서 온 숫자인지 화면이 말할 수
-              # 있어야 총자산이 갑자기 늘어난 것으로 읽히지 않는다
-              "other_assets_krw": round(other_total_krw, 0),
               "total_asset_krw": round(total_asset, 0),
               "cash_pct": round(cash_total_krw / total_asset * 100, 1) if total_asset else 0.0,
               # 원화 환산에 실제로 쓴 환율. 화면에 없으면 사용자가 KRW 숫자에서
@@ -543,9 +535,6 @@ def build_portfolio(holdings: dict, prices: dict, tickers: dict, usdkrw,
               "total_return_pct": round((total_value - total_cost + total_div)
                                         / total_return_basis * 100, 2)
               if total_div and total_return_basis else None}
-    for a in other_assets:  # 발행어음·펀드도 배분에 보여야 계좌 구성이 실제와 맞는다
-        label = a.get("type") or "기타 자산"
-        alloc[label] = alloc.get(label, 0.0) + float(a.get("value_krw") or 0.0)
     allocation = [{"label": k, "value_krw": round(v, 0)} for k, v in
                   sorted(alloc.items(), key=lambda x: -x[1])]
     if cash_total_krw > 0:

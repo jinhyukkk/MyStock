@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { get, post, put } from '../../api'
-import BrokerPanel from './BrokerPanel'
 import { fmt } from '../../format'
 import type { NotifyStatus } from '../../types'
 import { usePortfolio } from './context'
@@ -103,8 +102,7 @@ export default function Settings() {
                  style={{ flex: '1 1 140px', minWidth: 0 }} />
           <button onClick={saveCash}>저장</button>
           <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>
-            비우면 변경 없음{pf.broker.accounts.length > 0 &&
-              ' — 증권사 동기화 시 실제 잔고로 덮어씁니다'}</span>
+            비우면 변경 없음</span>
         </div>
       </div>
 
@@ -159,10 +157,6 @@ export default function Settings() {
           {notifyMsg.error && '⚠ '}{notifyMsg.text}</div>}
       </div>
 
-      <div className="card">
-        <BrokerPanel status={pf.broker} reload={reload}
-                     totalAssetKrw={pf.totals.total_asset_krw} />
-      </div>
     </>
   )
 }
