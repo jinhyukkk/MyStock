@@ -281,18 +281,35 @@ def buy_and_hold(price_frames: dict, tickers: dict, initial_capital_krw: float,
     비교선이 없으면 그 사실이 화면 어디에도 안 나온다. 비용은 첫 진입 1회뿐이라
     생략한다 — 전략 쪽에 불리한 쪽(보수적)이다.
     """
-    usable = {s: df for s, df in price_frames.items() if len(df)}
+    # run()과 같은 이유로 OHLC NaN 행(거래정지 등)을 드랍한다 — 안 그러면
+    # 마킹 루프에서 그날 last[s]가 NaN이 되어 total(비교선 전체)이 NaN으로
+    # 오염된다. len<30 필터는 넣지 않는다 — run()의 30일 하한은 지표
+    # 롤링 윈도가 차야 신호가 나오기 때문인데, 비교선은 신호를 계산하지
+    # 않고 그냥 들고 있을 뿐이라 그 제약이 없다.
+    usable = {}
+    for s, df in price_frames.items():
+        clean = df.dropna(subset=["open", "high", "low", "close"])
+        if len(clean):
+            usable[s] = clean
     if not usable or not calendar:
         return []
     slot = initial_capital_krw / len(usable)
-    units = {}
+    units, cash = {}, initial_capital_krw
     for s, df in usable.items():
         rate = fx if tickers.get(s, {}).get("currency") == "USD" else 1.0
         first = float(df["close"].iloc[0])
-        units[s] = (slot / (first * rate) if first > 0 else 0.0, rate)
+        market = tickers.get(s, {}).get("market", "")
+        raw_qty = slot / (first * rate) if first > 0 else 0.0
+        # run()의 position_size와 동일하게 내림 — 소수점 주식 비교선은
+        # 실제로 살 수 없는 수량이라 비교 자체가 무의미해진다
+        qty = costs.round_to_lot(raw_qty, market)
+        units[s] = (qty, rate)
+        cash -= qty * first * rate
     out, last = [], {}
     for day in calendar:
-        total = 0.0
+        # 내림으로 남은 잔돈은 현금으로 들고 간다 — 버리면 비교선만 초기자본
+        # 미만에서 출발해 전략 쪽이 공짜로 유리해진다
+        total = cash
         for s, df in usable.items():
             if day in df.index:
                 last[s] = float(df["close"].at[day])

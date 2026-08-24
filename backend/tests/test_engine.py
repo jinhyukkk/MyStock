@@ -316,6 +316,51 @@ def test_buy_and_hold_equal_weights_the_universe():
     assert curve[-1]["equity_krw"] == pytest.approx(1_200_000.0)
 
 
+def test_buy_and_hold_floors_quantity_and_keeps_the_remainder_as_cash():
+    """수량은 내림, 남은 잔돈은 현금 — 첫날 자본은 정확히 초기자본이다."""
+    idx = pd.date_range("2024-01-01", periods=3, freq="D")
+    # 97원은 100만을 나누어떨어지지 않는다 — 내림이 실제로 걸린다
+    odd = pd.DataFrame({"open": 97.0, "high": 97.0, "low": 97.0,
+                        "close": 97.0, "volume": 1000.0}, index=idx)
+    tickers = {"A": {"market": "KR", "currency": "KRW", "is_etf": 0}}
+    curve = engine.buy_and_hold({"A": odd}, tickers,
+                                initial_capital_krw=1_000_000.0,
+                                fx=1_300.0, calendar=list(idx))
+    # floor(1_000_000/97) = 10309주 × 97 = 999_973원, 잔돈 27원
+    assert curve[0]["equity_krw"] == pytest.approx(1_000_000.0)
+    assert curve[-1]["equity_krw"] == pytest.approx(1_000_000.0)
+
+
 def test_buy_and_hold_empty_universe_returns_empty():
     """종목이 없으면 빈 곡선. 화면이 빈 배열을 그대로 처리한다."""
     assert engine.buy_and_hold({}, {}, 1_000_000.0, 1_300.0, []) == []
+
+
+def test_buy_and_hold_carries_last_close_through_individual_holiday():
+    """한 종목만 휴장인 날에도 비교선이 톱니를 만들지 않는다(발견 3 회귀).
+
+    run()의 test_run_marks_holiday_position_without_sawtooth와 같은 구도 —
+    BBB는 AAA와 동일한 가격이되 중간 하루가 빠져 있다. calendar는 AAA 덕분에
+    그 날짜를 포함하므로, 이월 없이 직전 종가를 안 쓰면 그 날 BBB 몫이 0으로
+    빠졌다가 다음 날 되돌아와 스파이크가 생긴다.
+    """
+    idx = pd.date_range("2024-01-01", periods=10, freq="D")
+    close = [100.0 + i for i in range(10)]
+    aaa = pd.DataFrame({"open": close, "high": close, "low": close,
+                        "close": close, "volume": 1000.0}, index=idx)
+    gap_date = idx[5]
+    bbb = aaa.drop(index=gap_date)
+    tickers = {s: {"market": "KR", "currency": "KRW", "is_etf": 0}
+               for s in ("AAA", "BBB")}
+    curve = engine.buy_and_hold({"AAA": aaa, "BBB": bbb}, tickers,
+                                initial_capital_krw=1_000_000.0,
+                                fx=1_300.0, calendar=list(idx))
+    dates = [c["date"] for c in curve]
+    values = [c["equity_krw"] for c in curve]
+    gap_str = gap_date.strftime("%Y-%m-%d")
+    assert gap_str in dates, "AAA 덕분에 휴장일도 캘린더에는 있어야 한다"
+    gi = dates.index(gap_str)
+    diffs = [abs(values[i] - values[i - 1]) for i in range(1, len(values))]
+    normal = sorted(diffs)[len(diffs) // 2]
+    assert abs(values[gi] - values[gi - 1]) < normal * 5 + 1.0
+    assert abs(values[gi + 1] - values[gi]) < normal * 5 + 1.0
