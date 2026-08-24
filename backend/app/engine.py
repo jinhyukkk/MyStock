@@ -102,14 +102,14 @@ def metrics(equity: list[float], trades: list[dict]) -> dict:
     }
 
 
-def _one_way_cost(t: dict, df: pd.DataFrame, fx: float) -> float:
-    """이 종목의 편도 비용(비율). 왕복값을 절반으로 나눠 진입·청산에 각각 건다."""
+def _cost_pct(t: dict, df: pd.DataFrame, fx: float) -> float:
+    """이 종목의 왕복 비용(비율). 진입·청산 노셔널에 한 번만 곱해 쓴다."""
     recent = df.tail(60)
     turnover = float((recent["close"] * recent["volume"]).median()) if len(recent) else 0.0
     if t.get("currency") == "USD":
         turnover *= fx
     return costs.backtest_cost_pct(t.get("market", ""), t.get("is_etf", 0),
-                                   turnover) / 2 / 100
+                                   turnover) / 100
 
 
 def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
@@ -136,7 +136,7 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
         prepared[sym] = {
             "df": enriched, "sig": fn(enriched, params),
             "rate": fx if tickers.get(sym, {}).get("currency") == "USD" else 1.0,
-            "cost": _one_way_cost(tickers.get(sym, {}), df, fx),
+            "cost": _cost_pct(tickers.get(sym, {}), df, fx),
         }
 
     equity = initial_capital_krw
@@ -165,10 +165,15 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
             })
             del open_pos[sym]
 
-        # ② 진입 — 자리가 남아 있고 계좌 총 리스크가 한도 안일 때만.
+        # ② 진입 — 자리가 남아 있고 계좌 총 리스크·현금이 한도 안일 때만.
         # 미결 리스크 = 모든 보유가 동시에 손절에 닿았을 때의 손실 합
         open_risk = sum((p["entry_price"] - p["stop"]) * p["qty"] * p["rate"]
                         for p in open_pos.values())
+        # 보유 노셔널 합 — 현금 계좌는 마진이 없어 신규 진입 노셔널이 잔여 현금을
+        # 넘을 수 없다. position_size가 진입마다 같은 전체 equity로 수량을 정해서,
+        # 이 제약이 없으면 동시 진입 시 MAX_WEIGHT×MAX_POSITIONS(140%)까지도
+        # 매수된다 — 원 계획서에는 없던 규칙을 여기서 추가한다.
+        held_notional = sum(p["notional"] for p in open_pos.values())
         for sym, pr in prepared.items():
             if len(open_pos) >= MAX_POSITIONS:
                 break
@@ -182,40 +187,50 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
                 continue  # 마지막 봉에서는 낼 수 있는 주문이 없다
             entry = float(df["open"].iloc[i + 1])
             atr = df["atr14"].iloc[i]
-            if not entry or pd.isna(atr) or not atr:
+            # NaN 시가(거래정지 등)를 그대로 흘리면 손절가도 NaN이 되고,
+            # NaN 비교는 항상 False라 뒤의 <= 0 가드를 다 통과해 버려
+            # round_to_lot의 int(NaN) 변환에서 죽는다 — 여기서 먼저 막는다
+            if pd.isna(entry) or entry <= 0 or pd.isna(atr) or atr <= 0:
                 continue
             stop = entry - STOP_ATR_MULT * float(atr)
             market = tickers.get(sym, {}).get("market", "")
             qty = position_size(equity, entry, stop, pr["rate"], market)
             if qty <= 0:
                 continue
+            notional = entry * qty * pr["rate"]
+            if notional > equity - held_notional:
+                continue  # 잔여 현금 초과 — 이 진입은 건너뛴다
             # 이 포지션을 더했을 때 계좌 총 리스크가 한도를 넘으면 진입하지 않는다
             add_risk = (entry - stop) * qty * pr["rate"]
             if equity > 0 and (open_risk + add_risk) / equity * 100 > MAX_ACCOUNT_RISK_PCT:
                 continue
             open_risk += add_risk
+            held_notional += notional
             bars = df.iloc[i + 1:]
             exit_i, exit_px, reason = resolve_exit(
                 bars, 0, stop, pr["sig"]["exit"].iloc[i + 1:].tolist())
-            notional = entry * qty * pr["rate"]
             open_pos[sym] = {
                 "entry_date": df.index[i + 1], "entry_price": entry,
                 "exit_date": bars.index[exit_i], "exit_price": exit_px,
                 "exit_reason": reason, "qty": qty, "rate": pr["rate"],
                 "stop": stop,  # 계좌 총 리스크 합산에 필요하다
-                # 진입·청산 각각 편도 비용. 청산 노셔널로 재계산하지 않는 것은
-                # 근사지만, 왕복을 통째로 빼먹는 것보다 훨씬 정확하다
-                "cost_krw": notional * pr["cost"] * 2,
+                "notional": notional,  # 보유 노셔널 합산에 필요하다
+                "cost_krw": notional * pr["cost"],
             }
-        max_concurrent = max(max_concurrent, len(open_pos))
 
-        # ③ 그날의 자본 — 확정 자본 + 미결 포지션 평가손익
+        # 실제로 보유 중인 포지션만 — 오늘 막 진입한 포지션은 entry_date가
+        # 내일이라 아직 보유가 아니다(룩어헤드 방지, 발견 1)
+        held = {sym: p for sym, p in open_pos.items() if p["entry_date"] <= day}
+        max_concurrent = max(max_concurrent, len(held))
+
+        # ③ 그날의 자본 — 확정 자본 + 보유 중인 포지션의 평가손익
         unrealized = 0.0
-        for sym, p in open_pos.items():
+        for sym, p in held.items():
             df = prepared[sym]["df"]
             if day in df.index:
-                unrealized += (float(df["close"].at[day]) - p["entry_price"]) \
-                    * p["qty"] * p["rate"]
+                c = float(df["close"].at[day])
+                if not pd.isna(c):
+                    unrealized += (c - p["entry_price"]) * p["qty"] * p["rate"]
         curve.append({"date": day.strftime("%Y-%m-%d"),
                       "equity_krw": round(equity + unrealized, 0)})
 
@@ -224,7 +239,7 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
         "trades": trades,
         "metrics": metrics([c["equity_krw"] for c in curve], trades),
         "max_concurrent": max_concurrent,
-        "universe_size": len(price_frames),
+        "universe_size": len(prepared),
         "preset": preset,
         "params": params,
     }
