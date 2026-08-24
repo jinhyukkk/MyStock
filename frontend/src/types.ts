@@ -319,7 +319,7 @@ export interface BacktestGrade {
 }
 export interface Backtest {
   version: number; samples: number; start: string; end: string;
-  bench_label: string | null; cost_pct: number; stop_atr_mult: number;
+  bench_label: string | null; cost_pct: number; excess_net?: boolean; stop_atr_mult: number;
   // 비용 가정이 무엇을 포함하는지, 그 가정이 2배 틀렸을 때 어떻게 되는지
   cost_breakdown: { total_pct: number; stress_pct: number; note: string };
   min_episodes: number; horizons: number[]; long_horizons: number[];

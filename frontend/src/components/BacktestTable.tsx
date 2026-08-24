@@ -66,7 +66,9 @@ export default function BacktestTable({ bt, grades, horizons, missing, caption,
             {horizons.map(h => <th key={h}>{h}일 평균 (±1σ)</th>)}
             {horizons.map(h => <th key={h}>{h}일 승률</th>)}
             {horizons.map(h => <th key={h}>{h}일 손절률</th>)}
-            {bt.bench_label && horizons.map(h => <th key={h}>{h}일 초과</th>)}
+            {bt.bench_label && horizons.map(h => (
+              <th key={h} title="벤치마크는 지수 보유라 비용이 없다 — 종목 쪽 왕복 비용을 뺀 값">
+                {h}일 초과(순)</th>))}
           </tr></thead>
           <tbody>
             {focused.map(g => {

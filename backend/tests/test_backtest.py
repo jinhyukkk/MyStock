@@ -22,15 +22,20 @@ def test_backtest_insufficient_data(ohlcv_up):
     assert backtest.backtest_ticker(ohlcv_up.head(100)) is None
 
 
-def test_backtest_excess_vs_benchmark(ohlcv_up):
-    # 벤치마크 = 종목 자기 자신 → 초과수익률은 0
+def test_backtest_excess_is_net_of_cost(ohlcv_up):
+    """벤치마크 = 종목 자기 자신 → 총초과수익은 0이지만, 지수는 매매비용이 없으므로
+    표시되는 초과수익은 종목 왕복 비용만큼 음(-)이어야 한다."""
     out = backtest.backtest_ticker(ohlcv_up, bench=ohlcv_up[["open", "close"]],
-                                   bench_label="자기자신")
+                                   bench_label="자기자신", cost_pct=0.42)
     assert out["bench_label"] == "자기자신"
+    assert out["excess_net"] is True
+    checked = 0
     for g in out["grades"]:
-        # 손절이 걸린 표본은 종목만 조기 청산되므로 초과수익이 음(-)으로 남는다
+        # 손절이 걸린 표본은 종목만 조기 청산되므로 초과수익이 더 음(-)으로 밀린다
         if g["avg_excess5"] is not None and g["stop_rate5"] == 0.0:
-            assert abs(g["avg_excess5"]) < 0.01
+            assert abs(g["avg_excess5"] + 0.42) < 0.01
+            checked += 1
+    assert checked, "비교 가능한 등급이 없어 검증이 비었다"
 
 
 def test_backtest_accepts_close_only_benchmark(ohlcv_up):

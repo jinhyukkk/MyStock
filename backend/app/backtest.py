@@ -26,7 +26,7 @@ GRADE_ORDER = ["강력매수", "매수", "중립", "매도", "강력매도"]
 COST_PCT = 0.3  # 시장·유동성을 모를 때의 폴백 (%p). 실제로는 costs.backtest_cost_pct 사용
 STOP_ATR_MULT = 2.0  # service._risk_block의 손절 폭과 동일하게 유지할 것
 MIN_EPISODES = 20  # 비중첩 에피소드가 이보다 적으면 수치를 신뢰 구간째로 숨긴다
-VERSION = 7  # 결과 스키마 버전 — 올리면 저장된 백테스트 캐시가 무효화된다
+VERSION = 8  # 결과 스키마 버전 — 올리면 저장된 백테스트 캐시가 무효화된다
 
 
 def _exit_price(o, h_, l_, c_, entry_i: int, exit_i: int, stop: float | None):
@@ -184,7 +184,9 @@ def backtest_ticker(df: pd.DataFrame, bench: pd.DataFrame | pd.Series | None = N
             if b_close is not None and pd.notna(b_open[entry_i]) and pd.notna(b_close[exit_i]) \
                     and b_open[entry_i]:
                 bench_ret = (b_close[exit_i] / b_open[entry_i] - 1) * 100
-                rec[f"ex{h}"] = round(rec[f"fwd{h}"] - bench_ret, 2)
+                # 벤치마크는 지수 보유라 매매비용이 없다 — 종목 쪽 왕복 비용을 빼지
+                # 않고 뺄셈하면 초과수익이 cost_pct만큼 낙관적으로 부풀려진다.
+                rec[f"ex{h}"] = round(rec[f"fwd{h}"] - cost_pct - bench_ret, 2)
         records.append(rec)
     if not records:
         return None
@@ -216,6 +218,7 @@ def backtest_ticker(df: pd.DataFrame, bench: pd.DataFrame | pd.Series | None = N
         "horizons": list(HORIZONS),
         "long_horizons": list(LONG_HORIZONS),
         "entry_rule": "신호 다음 거래일 시가 체결",
+        "excess_net": True,  # 초과수익도 왕복 비용 차감 후 (벤치마크는 비용 0)
         "exit_rule": f"{STOP_ATR_MULT:g}×ATR 손절 터치 시 청산, 아니면 보유 기간 종가",
         "grades": grades,
         # 등급이 방향을 가르는지 한 숫자로 — 상승장에서는 전 등급이 플러스로 나온다
