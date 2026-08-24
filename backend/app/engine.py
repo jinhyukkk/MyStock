@@ -271,3 +271,32 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
         "preset": preset,
         "params": params,
     }
+
+
+def buy_and_hold(price_frames: dict, tickers: dict, initial_capital_krw: float,
+                 fx: float, calendar: list) -> list[dict]:
+    """동일가중 매수보유 비교선.
+
+    전략 CAGR이 12%라도 그냥 들고 있었으면 18%였다면 그 전략은 실패다.
+    비교선이 없으면 그 사실이 화면 어디에도 안 나온다. 비용은 첫 진입 1회뿐이라
+    생략한다 — 전략 쪽에 불리한 쪽(보수적)이다.
+    """
+    usable = {s: df for s, df in price_frames.items() if len(df)}
+    if not usable or not calendar:
+        return []
+    slot = initial_capital_krw / len(usable)
+    units = {}
+    for s, df in usable.items():
+        rate = fx if tickers.get(s, {}).get("currency") == "USD" else 1.0
+        first = float(df["close"].iloc[0])
+        units[s] = (slot / (first * rate) if first > 0 else 0.0, rate)
+    out, last = [], {}
+    for day in calendar:
+        total = 0.0
+        for s, df in usable.items():
+            if day in df.index:
+                last[s] = float(df["close"].at[day])
+            qty, rate = units[s]
+            total += qty * last.get(s, float(df["close"].iloc[0])) * rate
+        out.append({"date": day.strftime("%Y-%m-%d"), "equity_krw": round(total, 0)})
+    return out

@@ -296,3 +296,26 @@ def test_run_rejects_unknown_preset():
     with pytest.raises(ValueError):
         engine.run({}, {}, preset="없는전략", params={},
                    initial_capital_krw=1_000_000.0, fx=1_300.0)
+
+
+def test_buy_and_hold_equal_weights_the_universe():
+    """동일가중 매수보유 — 초기자본을 종목 수로 나눠 첫날 사서 끝까지 든다."""
+    idx = pd.date_range("2024-01-01", periods=5, freq="D")
+    up = pd.DataFrame({"open": 100.0, "high": 100.0, "low": 100.0,
+                       "close": [100.0, 110.0, 120.0, 130.0, 140.0],
+                       "volume": 1000.0}, index=idx)
+    flat = pd.DataFrame({"open": 100.0, "high": 100.0, "low": 100.0,
+                         "close": 100.0, "volume": 1000.0}, index=idx)
+    tickers = {s: {"market": "KR", "currency": "KRW", "is_etf": 0}
+               for s in ("A", "B")}
+    curve = engine.buy_and_hold({"A": up, "B": flat}, tickers,
+                                initial_capital_krw=1_000_000.0,
+                                fx=1_300.0, calendar=list(idx))
+    # A에 50만(+40%), B에 50만(0%) → 마지막 120만
+    assert curve[0]["equity_krw"] == pytest.approx(1_000_000.0)
+    assert curve[-1]["equity_krw"] == pytest.approx(1_200_000.0)
+
+
+def test_buy_and_hold_empty_universe_returns_empty():
+    """종목이 없으면 빈 곡선. 화면이 빈 배열을 그대로 처리한다."""
+    assert engine.buy_and_hold({}, {}, 1_000_000.0, 1_300.0, []) == []
