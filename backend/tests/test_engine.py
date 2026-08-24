@@ -178,8 +178,8 @@ def test_run_deducts_cost_from_trade_pnl():
     assert t["pnl_krw"] == pytest.approx(gross - t["cost_krw"], abs=1.0)
 
 
-def test_run_respects_max_positions():
-    """동시 보유는 MAX_POSITIONS를 넘지 않는다.
+def test_run_caps_concurrent_notional_at_cash():
+    """동시 보유 노셔널 합은 현금(equity)을 넘지 않는다 — MAX_POSITIONS 게이트가 아니다.
 
     이 픽스처(저변동 _rising)는 MAX_POSITIONS(7)가 아니라 현금 제약이 먼저
     막는다: 비중 상한 20%가 1% 룰보다 먼저 걸려(저변동 → 손절폭이 좁다)
@@ -256,6 +256,39 @@ def test_run_stops_out_with_negative_pnl_on_crash():
     t = out["trades"][0]
     assert t["exit_reason"] == "stop"
     assert t["pnl_krw"] < 0
+
+
+def test_run_marks_holiday_position_without_sawtooth():
+    """일부 종목만 휴장인 날에도 자본곡선이 톱니를 만들지 않는다(발견 1 회귀).
+
+    BBB는 AAA와 동일한 가격이되 중간 하루가 빠져 있다(개별 휴장). calendar는
+    AAA 덕분에 그 날짜를 포함하므로, 옛 버그(day not in df.index → 평가손익
+    0)라면 그 날 BBB의 누적 미실현손익이 통째로 사라졌다가 다음 날 되돌아와
+    큰 스파이크가 생긴다. 고친 코드는 직전 종가(last_mark)를 이어받아 그 날
+    변화가 다른 날들과 비슷한 크기여야 한다.
+    """
+    aaa = _rising(260)
+    gap_date = aaa.index[150]
+    bbb = aaa.drop(index=gap_date)
+    tickers = {"AAA": {"name": "가", "market": "KR", "currency": "KRW", "is_etf": 0},
+               "BBB": {"name": "나", "market": "KR", "currency": "KRW", "is_etf": 0}}
+    out = engine.run({"AAA": aaa, "BBB": bbb}, tickers, preset="abs_momentum",
+                     params={"lookback": 20, "skip": 2, "trend_ma": 10},
+                     initial_capital_krw=10_000_000.0, fx=1_300.0)
+    dates = [c["date"] for c in out["equity_curve"]]
+    values = [c["equity_krw"] for c in out["equity_curve"]]
+    gap_str = gap_date.strftime("%Y-%m-%d")
+    assert gap_str in dates, "AAA 덕분에 휴장일도 캘린더에는 있어야 한다"
+    gi = dates.index(gap_str)
+    assert 0 < gi < len(values) - 1
+    diffs = [abs(values[i] - values[i - 1]) for i in range(1, len(values))]
+    normal = sorted(diffs)[len(diffs) // 2]  # 중앙값 — 평상시 하루 변화 크기
+    diff_in = abs(values[gi] - values[gi - 1])
+    diff_out = abs(values[gi + 1] - values[gi])
+    # 옛 버그는 BBB의 누적 미실현손익 전체가 스파이크로 나타난다 —
+    # 평상시 하루 변화의 수십 배 규모. 고친 코드는 평상시와 비슷해야 한다.
+    assert diff_in < normal * 5 + 1.0
+    assert diff_out < normal * 5 + 1.0
 
 
 def test_run_rejects_unknown_preset():

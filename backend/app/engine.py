@@ -18,6 +18,10 @@ RISK_PCT = 0.01  # 거래 1건이 계좌에서 잃을 수 있는 비율 — serv
 # 한쪽을 바꾸면 다른 쪽도 함께 바꿔야 한다.
 MAX_WEIGHT = 0.20
 MAX_POSITIONS = 7  # portfolio.DEFAULT_TARGET_POSITIONS[1]과 동일
+# 주의: 실제로는 이 상한에 거의 안 닿는다 — 비중+현금 제약(코드 내
+# held_notional 체크)과 계좌리스크 상한(MAX_ACCOUNT_RISK_PCT)이 먼저 막는다.
+# 도달하려면 포지션별 리스크가 6%/7 ≈ 0.857% 미만이면서 노셔널 평균이
+# 14.3%(=100%/7) 미만인 저리스크·저비중 혼합 상황이어야 한다.
 # 모든 보유가 동시에 손절에 닿았을 때의 손실 합 상한 — portfolio.MAX_ACCOUNT_RISK_PCT와 동일.
 # 종목별 1%만 지키면 7종목에서 총 7%가 되는데, 합산을 안 보면 그 사실이 어디에도 안 남는다.
 MAX_ACCOUNT_RISK_PCT = 6.0
@@ -103,7 +107,13 @@ def metrics(equity: list[float], trades: list[dict]) -> dict:
 
 
 def _cost_pct(t: dict, df: pd.DataFrame, fx: float) -> float:
-    """이 종목의 왕복 비용(비율). 진입·청산 노셔널에 한 번만 곱해 쓴다."""
+    """이 종목의 왕복 비용(비율). 실제로는 진입 노셔널(entry * qty * rate)에만
+
+    곱해 cost_krw를 낸다 — 청산 시점 노셔널로 다시 계산하지 않는다. 진입가와
+    청산가가 크게 벌어지면(추세추종이 노리는 상황) 비용이 과소·과대평가될 수
+    있는 근사다. 왕복 비율을 한 번만 곱하는 것이지, 진입·청산 양쪽에 각각
+    곱하는 게 아니다.
+    """
     recent = df.tail(60)
     turnover = float((recent["close"] * recent["volume"]).median()) if len(recent) else 0.0
     if t.get("currency") == "USD":
@@ -132,7 +142,15 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
     for sym, df in price_frames.items():
         if len(df) < 30:
             continue  # 지표가 안 차는 종목은 신호를 만들 수 없다
-        enriched = indicators.compute_indicators(df)
+        # OHLC에 NaN이 있는 행(거래정지 등)을 드랍한다 — 안 그러면 마지막 봉이
+        # NaN일 때 resolve_exit이 NaN 청산가를 돌려주고 equity += NaN으로
+        # 이후 전 구간·모든 지표가 오염된다(발견 2). 드랍된 날은 그 종목의
+        # 캘린더 밖이 되어 ③ 마킹 루프의 last_mark 이월 로직(발견 1)이
+        # 자연스럽게 직전 유효 종가를 이어받는다.
+        clean = df.dropna(subset=["open", "high", "low", "close"])
+        if len(clean) < 30:
+            continue
+        enriched = indicators.compute_indicators(clean)
         prepared[sym] = {
             "df": enriched, "sig": fn(enriched, params),
             "rate": fx if tickers.get(sym, {}).get("currency") == "USD" else 1.0,
@@ -174,6 +192,10 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
         # 이 제약이 없으면 동시 진입 시 MAX_WEIGHT×MAX_POSITIONS(140%)까지도
         # 매수된다 — 원 계획서에는 없던 규칙을 여기서 추가한다.
         held_notional = sum(p["notional"] for p in open_pos.values())
+        # 현금·리스크 한도로 자리가 모자라면 prepared(=price_frames)의 딕셔너리
+        # 삽입 순서가 그대로 우선순위가 된다 — 모멘텀 강도 등 랭킹을 적용하지
+        # 않는다. 순서가 결정적이긴 하지만 경제적 근거는 없다(발견 5). 랭킹이
+        # 필요하면 이 루프 전에 prepared를 신호 강도로 정렬해야 한다.
         for sym, pr in prepared.items():
             if len(open_pos) >= MAX_POSITIONS:
                 break
@@ -216,6 +238,7 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
                 "stop": stop,  # 계좌 총 리스크 합산에 필요하다
                 "notional": notional,  # 보유 노셔널 합산에 필요하다
                 "cost_krw": notional * pr["cost"],
+                "last_mark": entry,  # 직전 유효 종가 — 휴장일엔 이 값을 이어받는다
             }
 
         # 실제로 보유 중인 포지션만 — 오늘 막 진입한 포지션은 entry_date가
@@ -223,14 +246,19 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
         held = {sym: p for sym, p in open_pos.items() if p["entry_date"] <= day}
         max_concurrent = max(max_concurrent, len(held))
 
-        # ③ 그날의 자본 — 확정 자본 + 보유 중인 포지션의 평가손익
+        # ③ 그날의 자본 — 확정 자본 + 보유 중인 포지션의 평가손익.
+        # calendar는 전 종목 거래일의 합집합이라 어떤 종목이 그날 휴장이면
+        # day가 그 종목 df.index에 없다. 평가손익을 0으로 놓으면 자본이
+        # 미실현손익만큼 튀었다가 다음 날 되돌아오는 가짜 갭이 생긴다
+        # (발견 1) — 대신 직전 유효 종가(last_mark)를 이어받는다. last_mark는
+        # 항상 그날 이전 종가만 담으므로 룩어헤드가 아니다.
         unrealized = 0.0
         for sym, p in held.items():
             df = prepared[sym]["df"]
-            if day in df.index:
-                c = float(df["close"].at[day])
-                if not pd.isna(c):
-                    unrealized += (c - p["entry_price"]) * p["qty"] * p["rate"]
+            c = df["close"].at[day] if day in df.index else float("nan")
+            if not pd.isna(c):
+                p["last_mark"] = float(c)
+            unrealized += (p["last_mark"] - p["entry_price"]) * p["qty"] * p["rate"]
         curve.append({"date": day.strftime("%Y-%m-%d"),
                       "equity_krw": round(equity + unrealized, 0)})
 
