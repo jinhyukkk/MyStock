@@ -397,3 +397,42 @@ export interface Company {
   symbol: string;
   financials: Financials; news: News; ratings: Ratings; insiders: Insiders;
 }
+
+/** 전략 연구실 — 계좌 단위 백테스트 (등급 검증용 Backtest와 다른 것) */
+export interface EquityPoint { date: string; equity_krw: number }
+export interface StrategyTrade {
+  symbol: string; name: string;
+  entry_date: string; entry_price: number;
+  exit_date: string; exit_price: number;
+  /** stop=손절 터치, signal=청산 신호, end=데이터 끝 평가청산 */
+  exit_reason: 'stop' | 'signal' | 'end';
+  qty: number; cost_krw: number; pnl_krw: number;
+}
+export interface StrategyMetrics {
+  cagr: number; mdd: number;
+  /** 무위험수익률 0 가정. 변동성이 0이면 null */
+  sharpe: number | null;
+  /** 비용 차감 후 손익이 양(+)인 거래 비율. 거래가 없으면 null */
+  win_rate: number | null;
+  trade_count: number; final_equity_krw: number;
+}
+export interface StrategyResult {
+  equity_curve: EquityPoint[];
+  buy_and_hold: EquityPoint[];
+  benchmark: EquityPoint[];
+  benchmark_label: string | null;
+  trades: StrategyTrade[];
+  metrics: StrategyMetrics;
+  max_concurrent: number; universe_size: number;
+  preset: string; params: Record<string, number>;
+  /** 서버가 내려주는 유니버스 편향 경고 — 화면이 문구를 지어내지 않는다 */
+  universe_warning: string;
+  fx_note: string;
+  initial_capital_krw: number;
+}
+export interface StrategyParamMeta {
+  default: number; min: number; max: number; label: string;
+}
+export interface StrategyPreset {
+  key: string; label: string; params: Record<string, StrategyParamMeta>;
+}
