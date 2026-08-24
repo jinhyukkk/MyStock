@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { BreadthBlock, EarningsBlock, EconBlock, Headline, InsiderBlock, InvestorRow,
               MajorNewsRow, MarketName, PatternBlock, PatternTicker, QuoteRow,
@@ -12,27 +13,44 @@ const vol = (v: number | null) =>
   v === null ? '—' : v >= 1e9 ? `${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `${(v / 1e6).toFixed(2)}M`
   : v >= 1e3 ? `${(v / 1e3).toFixed(2)}K` : v.toFixed(0)
 
-/** finviz 패널 공통 껍데기. `scope` 는 이 패널 숫자가 어느 범위에서 나왔는지
- *  (예: "코스피·코스닥 시총 200 · 08-21") — 이 화면의 breadth·패턴은 전 종목이 아니라
- *  유니버스에서 센 값이라, 패널이 스스로 말하지 않으면 시장 전체 통계로 읽힌다.
- *  표 위에 겹치는 배지가 아니라 "기준" 라벨을 단 자기 줄로 둬서, 아래 표 전체가
- *  이 범위 얘기라는 게 한눈에 들어오게 한다. */
-export function Panel({ children, gear, scope, scopeHidden, className = '' }:
-  { children: React.ReactNode; gear?: boolean; scope?: string; scopeHidden?: boolean; className?: string }) {
+/** 기준 범위 물음표 토글. 구획 제목 오른쪽에 붙여 누르면 말풍선으로 모집단을 펼친다.
+ *
+ *  네이티브 `title` 툴팁을 안 쓰는 이유: 뜨는 데 1초 넘게 걸리고, 터치 기기에서는
+ *  아예 안 뜬다 — 이 화면 숫자가 "전 종목"이 아니라는 건 그렇게 숨겨둘 정보가 아니다.
+ *  `label` 은 한 구획에 표가 둘 이상일 때 어느 표 얘기인지 밝히는 머리말이다. */
+export function ScopeBadge({ scope, label = '기준 범위' }: { scope: string; label?: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <span className="fv-scope">
+      {/* onBlur 로 닫는다 — 바깥 클릭 감지용 전역 리스너가 필요 없다 */}
+      <button type="button" className="fv-scope-btn" aria-expanded={open}
+              aria-label={`${label} 보기`} onClick={() => setOpen(v => !v)}
+              onBlur={() => setOpen(false)}
+              onKeyDown={e => e.key === 'Escape' && setOpen(false)}>?</button>
+      {open && <span className="fv-scope-pop" role="tooltip">
+        <span className="fv-scope-pop-t">{label}</span>{scope}</span>}
+    </span>
+  )
+}
+
+/** finviz 패널 공통 껍데기.
+ *
+ *  기준 범위(어느 모집단에서 센 숫자인지)는 예전엔 패널 오른쪽 위에 절대배치했는데,
+ *  표 마지막 열이 우측정렬 숫자(금액)라 겹쳐 읽혔다. 지금은 구획 제목 옆
+ *  `ScopeBadge` 한 자리로 모았다 — 같은 구획의 표들이 같은 모집단을 공유하므로
+ *  패널마다 반복할 이유도 없다. */
+export function Panel({ children, gear, className = '' }:
+  { children: React.ReactNode; gear?: boolean; className?: string }) {
   return (
     <div className={`fv-panel ${className}`}>
-      {/* scopeHidden: 같은 줄의 옆 패널(예: 차트 패턴 좌/우 표)에는 캡션을 안 보이되,
-          자리는 그대로 차지해야 두 표 머리글 높이가 어긋나지 않는다 — visibility 로 숨긴다. */}
-      {scope && <div className="fv-scope-bar" style={scopeHidden ? { visibility: 'hidden' } : undefined}>
-        <span className="fv-scope-label">기준</span><span>{scope}</span></div>}
-      {gear && !scope && <span className="fv-gear" aria-hidden>⚙</span>}
+      {gear && <span className="fv-gear" aria-hidden>⚙</span>}
       {children}
     </div>
   )
 }
 
 /** 유니버스 꼬리표. 기준일이 있으면 "…시총 200 · 08-21". */
-function scopeOf(b: { universe?: string; as_of?: string | null }): string | undefined {
+export function scopeOf(b: { universe?: string; as_of?: string | null }): string | undefined {
   if (!b.universe) return undefined
   return b.as_of ? `${b.universe} · ${b.as_of.slice(5)}` : b.universe
 }
@@ -158,7 +176,7 @@ export function PatternTable({ block, half }: { block: PatternBlock; half: 'left
   const mid = Math.ceil(all.length / 2)
   const rows = half === 'left' ? all.slice(0, mid) : all.slice(mid)
   return (
-    <Panel scope={scopeOf(block)} scopeHidden={half === 'right'}>
+    <Panel>
       <table className="fv-table fv-patterns">
         <thead><tr><th colSpan={4}>{half === 'left' ? '종목' : ''}</th>
           <th className="l">패턴</th></tr></thead>
@@ -268,13 +286,11 @@ export function EconCalendar({ block }: { block: EconBlock }) {
 
 /** 실적 발표 예정. 유니버스 상위 종목만 본다(종목당 야후 1회 호출) — 그래서
  *  "이 목록이 전부"가 아니라는 걸 꼬리표로 남긴다. */
-export function EarningsCalendar({ block, universe }: { block: EarningsBlock; universe?: string }) {
+export function EarningsCalendar({ block }: { block: EarningsBlock }) {
   const rows = block.rows ?? []
-  // "코스피·코스닥 시총 200 상위 40종목" — 어느 목록의 어디까지를 훑었는지 한 줄로
-  const scope = [universe, block.scope].filter(Boolean).join(' ') || undefined
   // finviz는 8칸 고정 열이지만 이 화면의 우측 열(~350px)에는 안 들어간다 — 줄바꿈되는 칩으로
   return (
-    <Panel scope={scope}>
+    <Panel>
       <table className="fv-table fv-earn">
         <thead><tr><th className="l">발표일</th><th className="l">실적 발표 예정</th></tr></thead>
         <tbody>
@@ -309,12 +325,16 @@ const rowClass = (t: string) => {
 }
 const qty = (v: number | null) => v === null ? '—' : v.toLocaleString('en-US')
 
-export function InsiderLatest({ block, krw, universe }:
-  { block: InsiderBlock; krw?: boolean; universe?: string }) {
+/** 블록 기준 범위: 화면 공통 유니버스 + 블록이 스스로 한정한 범위
+ *  ("코스피·코스닥 시총 200" + "상위 40종목"). 문자열은 여기 한 곳에서만 만든다. */
+export function blockScope(block: { scope?: string | null }, universe?: string): string | undefined {
+  return [universe, block.scope].filter(Boolean).join(' ') || undefined
+}
+
+export function InsiderLatest({ block, krw }: { block: InsiderBlock; krw?: boolean }) {
   const rows = block.latest ?? []
-  const scope = [universe, block.scope].filter(Boolean).join(' ') || undefined
   return (
-    <Panel scope={scope}>
+    <Panel>
       <table className="fv-table">
         <thead><tr>
           <th className="l">종목</th><th className="l">최근 내부자 거래</th><th className="l">직위</th>

@@ -5,9 +5,9 @@ import { isStale, relativeTime } from '../time'
 import IndexChart from '../finviz/IndexChart'
 import Heatmap from '../finviz/Heatmap'
 import AdSlot from '../components/AdSlot'
-import { BreadthRow, EarningsCalendar, EconCalendar, Headlines, InsiderLatest, InsiderTop,
-         InvestorFlows, MajorNews, MarketSummary, Panel, PatternTable, QuoteTable,
-         SignalTable } from '../finviz/Sections'
+import { blockScope, BreadthRow, EarningsCalendar, EconCalendar, Headlines, InsiderLatest,
+         InsiderTop, InvestorFlows, MajorNews, MarketSummary, Panel, PatternTable, QuoteTable,
+         ScopeBadge, scopeOf, SignalTable } from '../finviz/Sections'
 import type { IndexRow, MarketData, MarketName } from '../finviz/types'
 
 const MARKET_KEY = 'dashboard.market'
@@ -138,6 +138,10 @@ export default function Dashboard() {
   )
 
   const stale = isStale(data.fetched_at, now)
+  // 구획 제목 옆 물음표에 들어갈 모집단 문자열 — 표가 아니라 구획 단위로 한 번씩만 만든다
+  const insiderScope = blockScope(data.insider, data.breadth.universe)
+  const earningsScope = blockScope(data.earnings, data.breadth.universe)
+  const patternScope = scopeOf(data.patterns)
   return (
     <div className="fv">
       {/* MarketSummary 의 market prop 은 토글 표시 전용 — 사용자가 방금 누른 선택을 즉시
@@ -185,7 +189,9 @@ export default function Dashboard() {
       <AdSlot slot={import.meta.env.VITE_ADSENSE_SLOT_DASHBOARD} />
 
       {/* finviz: 좌 2/3 = 차트패턴 표 2개 + 그 아래 헤드라인, 우 1/3 = Major News 가 두 줄에 걸침 */}
-      <div className="fv-section-title">차트 패턴 & 뉴스</div>
+      {/* 이 구획엔 표가 넷(패턴 좌·우, 헤드라인, 주요 뉴스)이라 무엇의 기준인지 라벨로 밝힌다 */}
+      <div className="fv-section-title">차트 패턴 &amp; 뉴스
+        {patternScope && <ScopeBadge scope={patternScope} label="차트 패턴 기준" />}</div>
       <div className="fv-row patterns">
         <div className="fv-col">
           <div className="fv-row two">
@@ -197,22 +203,26 @@ export default function Dashboard() {
         <MajorNews rows={data.major_news} />
       </div>
 
-      <div className="fv-section-title">경제 지표 & 실적 발표</div>
+      <div className="fv-section-title">경제 지표 &amp; 실적 발표
+        {earningsScope && <ScopeBadge scope={earningsScope} label="실적 일정 기준" />}</div>
       <div className="fv-row calendar">
         <EconCalendar block={data.econ} />
-        {/* 실적 일정은 유니버스 상위 종목만 본다 — 어디까지 본 목록인지 꼬리표로 남긴다 */}
-        <EarningsCalendar block={data.earnings} universe={data.breadth.universe} />
+        {/* 실적 일정은 유니버스 상위 종목만 본다 — 어디까지 본 목록인지는 구획 제목의 물음표 */}
+        <EarningsCalendar block={data.earnings} />
       </div>
 
-      <div className="fv-section-title">내부자 거래</div>
+      {/* 기준 범위 물음표는 표 오른쪽 끝(금액 칸)과 겹쳐 읽히므로 제목 옆에 둔다 */}
+      <div className="fv-section-title">내부자 거래
+        {insiderScope && <ScopeBadge scope={insiderScope} label="내부자 거래 기준" />}</div>
       <div className="fv-row insider">
-        <InsiderLatest block={data.insider} krw={data.market === 'KR'}
-                       universe={data.breadth.universe} />
+        <InsiderLatest block={data.insider} krw={data.market === 'KR'} />
         <InsiderTop block={data.insider} />
       </div>
 
       <div className="fv-section-title">{data.market === 'KR' ? '선물 & 환율/금리' : 'Futures & Forex/Bonds'}</div>
-      <div className="fv-row quotes" style={data.futures.length === 0 ? { gridTemplateColumns: '1fr' } : undefined}>
+      {/* 선물이 없는 시장(표 1개)이라도 가운데로 몰지 않는다 — 위 줄들과 왼쪽 모서리가
+          어긋나 화면에서 떨어져 나온 조각처럼 보인다. 열 정의는 CSS 한 곳에서만 한다. */}
+      <div className="fv-row quotes">
         {data.futures.length > 0 && <QuoteTable title="Futures" rows={data.futures} />}
         <QuoteTable title={data.market === 'KR' ? '환율 & 금리' : 'Forex & Bonds'} rows={data.forex_bonds} />
       </div>

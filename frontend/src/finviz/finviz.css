@@ -32,6 +32,8 @@
 .fv-col { display: grid; }
 .fv-row.calendar { grid-template-columns: 1fr minmax(340px, 560px); }
 .fv-row.insider { grid-template-columns: 1fr minmax(340px, 560px); }
+/* 선물 없는 시장은 표가 하나뿐 — 그래도 열 정의를 그대로 둬서 왼쪽 칸에 놓는다.
+   가운데로 몰면 위 줄들과 왼쪽 모서리가 어긋나 화면에서 떨어져 나온 조각처럼 보인다. */
 .fv-row.quotes { grid-template-columns: 1fr 1fr; }
 .fv-row.flows { grid-template-columns: repeat(2, 1fr); }
 /* 애드센스 칸 — 카드 테두리 없이 전체 폭. 반응형 광고가 높이를 스스로 정하므로
@@ -45,18 +47,48 @@
   border-radius: 14px; backdrop-filter: blur(16px); box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25);
 }
 .fv-panel { overflow: hidden; }
-/* 유니버스 꼬리표("코스피·코스닥 시총 200 · 08-21"). 표 위에 겹치는 배지였을 때는 표와
-   경계가 안 보이고 숫자 하나만 둥둥 떠서 무슨 뜻인지 안 읽혔다 — 제목처럼 자기 줄을 갖고
-   "기준" 라벨을 앞에 박아, 그 아래 표가 "이 범위 안에서" 나온 숫자임을 바로 알게 한다. */
-.fv-scope-bar {
-  display: flex; align-items: baseline; gap: 7px; padding: 8px 14px 7px;
-  font-size: 11px; color: var(--text-dim); letter-spacing: 0.01em;
-  background: color-mix(in srgb, var(--text-dim) 5%, transparent);
-  border-bottom: 1px solid var(--border);
+/* 유니버스 꼬리표("코스피·코스닥 시총 200 · 08-21"). 항상 보이는 줄로 두면 자리를 차지하고
+   반복해서 눈에 띄어 화면이 산만해진다 — 구획 제목 오른쪽 물음표 토글로 접어둔다. */
+.fv-scope { position: relative; display: inline-block; }
+.fv-scope-btn {
+  display: inline-flex; align-items: center; justify-content: center; vertical-align: middle;
+  width: 16px; height: 16px; margin-left: 6px; padding: 0;
+  border-radius: 50%; border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--text-dim) 10%, transparent);
+  color: var(--text-dim); font-size: 10px; line-height: 1; font-weight: 700;
+  cursor: pointer; transition: color .12s, border-color .12s, background .12s, transform .12s;
 }
-.fv-scope-bar .fv-scope-label {
-  flex: none; font-weight: 700; font-size: 9.5px; letter-spacing: 0.07em;
-  color: var(--accent); text-transform: uppercase; opacity: 0.9;
+.fv-scope-btn:hover, .fv-scope-btn:focus-visible {
+  color: var(--accent); border-color: var(--accent); transform: scale(1.12);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+/* 열린 상태는 색으로 고정 — 말풍선이 어느 물음표에서 나왔는지 눈으로 잇는다 */
+.fv-scope-btn[aria-expanded='true'] {
+  color: var(--accent); border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+/* 말풍선: 패널과 같은 유리 카드 결. 제목의 대문자·자간·굵기를 물려받으면 본문이 읽히지
+   않으므로 여기서 되돌린다. */
+.fv-scope-pop {
+  position: absolute; top: calc(100% + 8px); left: -6px; z-index: 30;
+  display: block; min-width: 180px; max-width: 300px; width: max-content;
+  padding: 8px 10px; border-radius: 10px;
+  /* 표 글자 위에 겹치는 층이라 카드(반투명)보다 불투명해야 읽힌다 */
+  background: color-mix(in srgb, var(--bg) 88%, var(--text-dim)); border: 1px solid var(--border);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45); backdrop-filter: blur(16px);
+  color: var(--text); font-size: 12px; font-weight: 400; line-height: 1.45;
+  text-transform: none; letter-spacing: normal; white-space: normal;
+}
+.fv-scope-pop-t {
+  display: block; margin-bottom: 3px; color: var(--text-dim); font-size: 10.5px;
+  font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+}
+/* 꼬리 — 물음표를 가리키는 작은 삼각형 */
+.fv-scope-pop::before {
+  content: ''; position: absolute; top: -5px; left: 10px; width: 8px; height: 8px;
+  background: color-mix(in srgb, var(--bg) 88%, var(--text-dim));
+  border-left: 1px solid var(--border); border-top: 1px solid var(--border);
+  transform: rotate(45deg);
 }
 .fv-signal { color: var(--text-dim); display: inline-block; max-width: 96px; overflow: hidden;
              text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
@@ -194,6 +226,11 @@
 
 /* ── 헤드라인 ── */
 .fv-headlines td { white-space: normal; }
+/* 헤드라인 링크는 `.fv-table td .fv-tk`(티커명 130px 말줄임)에 걸려 제목이 잘려 나왔다.
+   기사 제목은 잘리면 무슨 기사인지 알 수 없어 목록의 쓸모가 없다 — 칸 폭만큼 줄바꿈시킨다. */
+.fv-headlines td .fv-tk {
+  display: inline; max-width: none; white-space: normal; overflow: visible; line-height: 1.4;
+}
 .fv-src { width: 30px; }
 .fv-src-ico {
   display: inline-block; min-width: 22px; height: 16px; padding: 0 3px; border-radius: 4px;
