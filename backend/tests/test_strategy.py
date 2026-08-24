@@ -55,3 +55,42 @@ def test_signals_have_no_lookahead():
     cut = full.iloc[:40]
     out_cut = strategy.abs_momentum(cut, {"lookback": 10, "skip": 2, "trend_ma": 5})
     pd.testing.assert_frame_equal(out_full.iloc[:40], out_cut)
+
+
+def _ohlc(rows: list[tuple[float, float, float, float]]) -> pd.DataFrame:
+    """(open, high, low, close) 튜플 목록 → 일봉."""
+    idx = pd.date_range("2024-01-01", periods=len(rows), freq="D")
+    return pd.DataFrame(
+        {"open": [r[0] for r in rows], "high": [r[1] for r in rows],
+         "low": [r[2] for r in rows], "close": [r[3] for r in rows],
+         "volume": 1000.0}, index=idx)
+
+
+def test_donchian_enters_on_breakout_of_prior_high():
+    """N일 최고가를 넘어서면 진입. 비교 대상은 **어제까지의** 최고가다."""
+    rows = [(100, 110, 90, 100)] * 3 + [(100, 116, 95, 115)]
+    out = strategy.donchian(_ohlc(rows), {"entry_n": 3, "exit_n": 2})
+    assert out["enter"].iloc[3]
+
+
+def test_donchian_does_not_use_todays_high_in_its_own_breakout():
+    """오늘 고가를 오늘 돌파 판정에 넣으면 매일 진입 신호가 뜬다.
+
+    .shift(1) 누락 회귀를 잡는 테스트다.
+    """
+    rows = [(100, 110, 90, 100), (100, 120, 90, 105),
+            (100, 130, 90, 115), (100, 140, 90, 125)]
+    out = strategy.donchian(_ohlc(rows), {"entry_n": 2, "exit_n": 2})
+    assert not out["enter"].any()
+
+
+def test_donchian_exits_below_prior_low():
+    """M일 최저가를 이탈하면 청산."""
+    rows = [(100, 110, 95, 100)] * 3 + [(100, 105, 80, 90)]
+    out = strategy.donchian(_ohlc(rows), {"entry_n": 3, "exit_n": 3})
+    assert out["exit"].iloc[3]
+
+
+def test_donchian_registered_in_presets():
+    assert "donchian" in strategy.PRESETS
+    assert strategy.PRESETS["donchian"]["fn"] is strategy.donchian

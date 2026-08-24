@@ -41,6 +41,24 @@ def abs_momentum(df: pd.DataFrame, params: dict) -> pd.DataFrame:
                         index=df.index)
 
 
+def donchian(df: pd.DataFrame, params: dict) -> pd.DataFrame:
+    """돈치안 채널 돌파 — 가격 자체가 신호다.
+
+    진입: 종가 > 직전 entry_n일 최고가
+    청산: 종가 < 직전 exit_n일 최저가
+
+    .shift(1)이 핵심이다. 빼면 오늘 고가가 오늘의 비교 대상에 들어가
+    고가를 경신한 날마다 진입 신호가 뜬다.
+    """
+    hh = df["high"].rolling(params["entry_n"]).max().shift(1)
+    ll = df["low"].rolling(params["exit_n"]).min().shift(1)
+    enter = df["close"] > hh
+    exit_ = df["close"] < ll
+    return pd.DataFrame({"enter": enter.fillna(False).astype(bool),
+                         "exit": exit_.fillna(False).astype(bool)},
+                        index=df.index)
+
+
 PRESETS = {
     "abs_momentum": {
         "label": "절대 모멘텀",
@@ -49,6 +67,14 @@ PRESETS = {
             "lookback": {"default": 252, "min": 20, "max": 504, "label": "룩백(일)"},
             "skip": {"default": 21, "min": 0, "max": 63, "label": "스킵(일)"},
             "trend_ma": {"default": 200, "min": 20, "max": 300, "label": "추세필터(일)"},
+        },
+    },
+    "donchian": {
+        "label": "돈치안 돌파",
+        "fn": donchian,
+        "params": {
+            "entry_n": {"default": 55, "min": 5, "max": 200, "label": "진입 채널(일)"},
+            "exit_n": {"default": 20, "min": 5, "max": 200, "label": "청산 채널(일)"},
         },
     },
 }
