@@ -154,7 +154,7 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
         prepared[sym] = {
             "df": enriched, "sig": fn(enriched, params),
             "rate": fx if tickers.get(sym, {}).get("currency") == "USD" else 1.0,
-            "cost": _cost_pct(tickers.get(sym, {}), df, fx),
+            "cost": _cost_pct(tickers.get(sym, {}), clean, fx),
         }
 
     equity = initial_capital_krw
