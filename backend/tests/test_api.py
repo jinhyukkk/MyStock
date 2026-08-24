@@ -542,20 +542,47 @@ def test_strategy_presets_lists_both_strategies(client):
 
 
 def test_strategy_backtest_returns_curve_and_metrics(client):
+    """종목·가격을 실제로 심고 돌린다 — 빈 DB로는 엔진을 들어내도 통과한다.
+
+    빈 유니버스에서는 curve가 []라 키 존재만 보는 단언이 전부 통과하면서
+    "curve and metrics"라는 이름이 검증하는 게 아무것도 없어진다.
+    세 곡선이 같은 달력 위에 서는지(발견 3·4)까지 여기서 함께 막는다.
+    """
+    _add_and_refresh(client)
     r = client.post("/api/strategy/backtest",
                     json={"preset": "abs_momentum",
+                          "params": {"lookback": 60, "skip": 5, "trend_ma": 30},
                           "initial_capital_krw": 10_000_000})
     assert r.status_code == 200
     body = r.json()
-    assert "equity_curve" in body
-    assert "trades" in body
     assert set(body["metrics"]) >= {"cagr", "mdd", "sharpe", "win_rate",
-                                    "trade_count", "final_equity_krw"}
-    assert "buy_and_hold" in body
-    assert "benchmark" in body
+                                    "trade_count", "final_equity_krw",
+                                    "excess_vs_bench", "bench_cagr"}
+    assert body["universe_size"] == 1
+    assert len(body["equity_curve"]) > 0
+    # 비교선은 전략과 같은 달력 위에 서야 한다 — 길이가 갈라지면 차트가
+    # 에러 없이 조용히 날짜를 어긋나게 그린다
+    assert len(body["buy_and_hold"]) == len(body["equity_curve"])
+    assert len(body["benchmark"]) == len(body["equity_curve"])
+    assert body["metrics"]["final_equity_krw"] is not None
+    assert body["metrics"]["excess_vs_bench"] == pytest.approx(
+        body["metrics"]["cagr"] - body["metrics"]["bench_cagr"], abs=0.01)
     # 유니버스 편향 경고는 화면이 문구를 지어내지 않도록 서버가 내려준다
     assert body["universe_warning"]
     assert body["fx_note"]
+
+
+def test_strategy_backtest_empty_universe_has_no_final_equity(client):
+    """종목이 하나도 없으면 최종자본은 0원이 아니라 '없음'이다.
+
+    0을 내려보내면 지표 카드가 초기자본을 전액 잃은 것처럼 표시한다.
+    """
+    body = client.post("/api/strategy/backtest",
+                       json={"preset": "abs_momentum"}).json()
+    assert body["equity_curve"] == []
+    assert body["metrics"]["final_equity_krw"] is None
+    assert body["metrics"]["cagr"] is None
+    assert body["metrics"]["excess_vs_bench"] is None
 
 
 def test_strategy_backtest_rejects_unknown_preset(client):

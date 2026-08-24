@@ -919,10 +919,14 @@ def run_strategy_backtest(conn, preset: str, params: dict | None = None,
     out = engine.run(frames, tickers, preset, merged,
                      initial_capital_krw=initial_capital_krw, fx=fx)
 
-    calendar = sorted(set().union(*(set(df.index) for df in frames.values()))) \
-        if frames else []
+    # 달력과 유니버스는 engine.run이 실제로 쓴 것을 그대로 받아 쓴다. 여기서
+    # 다시 만들면 30봉 미만으로 걸러진 종목이 비교선에만 들어가 "N종목 동일가중"
+    # 범례가 거짓이 되고, 길이가 갈라지면 차트가 날짜를 어긋나게 그린다.
+    used = out.pop("_used")
+    calendar = used["calendar"]
+    used_frames = {s: frames[s] for s in used["symbols"]}
     out["buy_and_hold"] = engine.buy_and_hold(
-        frames, tickers, initial_capital_krw, fx, calendar)
+        used_frames, tickers, initial_capital_krw, fx, calendar)
     # 벤치마크는 KOSPI. _refresh_benchmark가 BENCH:KR로 저장해 둔다
     bdf = db.load_prices(conn, "BENCH:KR", limit=STRATEGY_DAYS)
     out["benchmark"] = engine.buy_and_hold(
