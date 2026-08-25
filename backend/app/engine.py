@@ -483,3 +483,136 @@ def buy_and_hold(price_frames: dict, tickers: dict, initial_capital_krw: float,
             total += qty * last.get(s, float(df["close"].iloc[0])) * rate
         out.append({"date": day.strftime("%Y-%m-%d"), "equity_krw": round(total, 0)})
     return out
+
+
+def walkforward(price_frames: dict, tickers: dict, preset: str, *,
+                initial_capital_krw: float, fx: float, membership=None,
+                bench_frame: pd.DataFrame | None = None, folds: int = 5,
+                min_train_frac: float = 0.4, progress_cb=None) -> dict:
+    """anchored 워크포워드 — 폴드마다 학습에서 고른 조합을 다음 구간에서 실행한다.
+
+    단일 홀드아웃(optimize)은 검증 구간 레짐이 순위를 지배한다 — 실측에서
+    검증 구간 KOSPI가 CAGR 66%라 모든 조합이 이겼다. 검증 창을 굴려 상승장·
+    하락장을 모두 검증에 넣고, 판정은 절대 CAGR이 아니라 벤치마크 대비
+    초과수익과 폴드 간 일관성으로 한다.
+
+    창은 anchored(확장): 학습은 항상 데이터 시작부터, 검증만 뒤로 구른다.
+    rolling을 안 쓰는 이유는 이력이 약 6년뿐이라 고정폭 학습창은 폴드당
+    표본이 수십 거래로 떨어져 그리드가 다시 노이즈를 고르기 때문이다(스펙).
+
+    검증 구간에 걸친 미청산 포지션은 구간 끝에서 end로 닫힌다 — 다음 폴드로
+    이월하지 않는 근사이며, 폴드 수를 늘릴수록 경계 효과가 커진다.
+    """
+    if preset not in strategy.PRESETS:
+        raise ValueError(f"알 수 없는 전략: {preset}")
+    grids = {k: v["grid"] for k, v in strategy.PRESETS[preset]["params"].items()}
+    combos = [dict(zip(grids.keys(), c))
+              for c in itertools.product(*grids.values())]
+
+    days = sorted(set().union(*(
+        set(df.dropna(subset=["close"]).index) for df in price_frames.values()))) \
+        if price_frames else []
+    if len(days) < MIN_OPTIMIZE_DAYS:
+        return {"folds": [], "summary": None, "stitched_curve": [],
+                "stitched_metrics": metrics([], []), "stitched_bench": []}
+
+    # 앞 min_train_frac는 최소 학습 구간 — 검증 영역을 folds 등분한다
+    valid_zone = days[int(len(days) * min_train_frac):]
+    segments = [seg for seg in
+                (list(a) for a in np.array_split(np.array(valid_zone), folds))
+                if len(seg)]
+    total_steps = len(segments) * (len(combos) + 1)
+    done = 0
+
+    fold_rows = []
+    stitched, stitched_bench = [], []
+    scale = 1.0
+    bench_scale = 1.0
+    for k, seg in enumerate(segments):
+        valid_start, valid_end = pd.Timestamp(seg[0]), pd.Timestamp(seg[-1])
+        train_frames = {s: df[df.index < valid_start]
+                        for s, df in price_frames.items()}
+        best, best_sharpe = None, None
+        for params in combos:
+            tr = run(train_frames, tickers, preset, params,
+                     initial_capital_krw=initial_capital_krw, fx=fx,
+                     membership=membership)
+            sh = tr["metrics"]["sharpe"]
+            # None(거래 없음)은 후보에서 제외 — 0으로 치면 손실 조합보다 위에 선다
+            if sh is not None and (best_sharpe is None or sh > best_sharpe):
+                best, best_sharpe = params, sh
+            done += 1
+            if progress_cb:
+                progress_cb(done, total_steps)
+        if best is None:
+            best = combos[0]  # 전 조합 무거래 — 기본 조합으로 검증만 남긴다
+        # 검증 프레임은 valid_end까지 절단 — 다음 폴드 가격이 새어들지 않게.
+        # valid_start 이전은 남긴다(워밍업, run 주석 참조).
+        va_frames = {s: df[df.index <= valid_end]
+                     for s, df in price_frames.items()}
+        va = run(va_frames, tickers, preset, best,
+                 initial_capital_krw=initial_capital_krw, fx=fx,
+                 trade_start=valid_start, membership=membership)
+        done += 1
+        if progress_cb:
+            progress_cb(done, total_steps)
+        used = va.pop("_used")
+        bench_cagr = None
+        bench_curve = []
+        if bench_frame is not None and not bench_frame.empty:
+            # 같은 검증 달력 위에서 계산해야 한다 — 달력이 갈라지면 초과수익이
+            # 기간 차이를 재게 된다(스펙)
+            bench_curve = buy_and_hold(
+                {"BENCH": bench_frame[bench_frame.index <= valid_end]},
+                {"BENCH": {"market": "KR", "currency": "KRW", "is_etf": 0}},
+                initial_capital_krw, fx, used["calendar"])
+            bench_cagr = metrics([p["equity_krw"] for p in bench_curve], [])["cagr"]
+        v = va["metrics"]
+        excess = (round(v["cagr"] - bench_cagr, 2)
+                  if v["cagr"] is not None and bench_cagr is not None else None)
+        fold_rows.append({
+            "fold": k + 1,
+            "train_end": (valid_start - pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+            "valid_start": valid_start.strftime("%Y-%m-%d"),
+            "valid_end": valid_end.strftime("%Y-%m-%d"),
+            "params": best, "valid": v, "bench_cagr": bench_cagr,
+            "excess_pct": excess,
+        })
+        # 체인링크 — 각 폴드는 초기자본에서 새로 시작하므로, 직전 폴드
+        # 종료자본/초기자본 배율을 곱해 하나의 곡선으로 잇는다
+        for pt in va["equity_curve"]:
+            stitched.append({"date": pt["date"],
+                             "equity_krw": round(pt["equity_krw"] * scale, 0)})
+        if va["equity_curve"]:
+            scale *= va["equity_curve"][-1]["equity_krw"] / initial_capital_krw
+        for pt in bench_curve:
+            stitched_bench.append({"date": pt["date"],
+                                   "equity_krw": round(pt["equity_krw"] * bench_scale, 0)})
+        if bench_curve:
+            bench_scale *= bench_curve[-1]["equity_krw"] / initial_capital_krw
+
+    excesses = sorted(f["excess_pct"] for f in fold_rows
+                      if f["excess_pct"] is not None)
+    median_excess = None
+    if excesses:
+        m = len(excesses) // 2
+        median_excess = round(excesses[m] if len(excesses) % 2
+                              else (excesses[m - 1] + excesses[m]) / 2, 2)
+    distinct = {tuple(sorted(f["params"].items())) for f in fold_rows}
+    summary = {
+        "median_excess_pct": median_excess,
+        "positive_folds": sum(1 for f in fold_rows
+                              if (f["excess_pct"] or 0) > 0 and f["excess_pct"] is not None),
+        "total_folds": len(fold_rows),
+        "param_stability": {
+            "distinct_combos": len(distinct),
+            # 폴드마다 최적값이 튀면 그 파라미터에는 의미가 없다는 증거(스펙)
+            "note": ("안정적" if len(distinct) == 1 else
+                     "보통" if len(distinct) <= max(2, len(fold_rows) // 2) else
+                     "불안정 — 폴드마다 최적 파라미터가 달라 채택 비추천"),
+        },
+    }
+    return {"folds": fold_rows, "summary": summary,
+            "stitched_curve": stitched,
+            "stitched_metrics": metrics([c["equity_krw"] for c in stitched], []),
+            "stitched_bench": stitched_bench}

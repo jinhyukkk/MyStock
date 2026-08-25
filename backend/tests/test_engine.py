@@ -1,7 +1,8 @@
+import numpy as np
 import pandas as pd
 import pytest
 
-from app import engine
+from app import engine, strategy
 
 
 def test_position_size_risks_one_percent_of_equity():
@@ -611,3 +612,92 @@ def test_delisted_symbol_exit_reason():
                      initial_capital_krw=1e7, fx=1400.0)
     assert out["metrics"]["trade_count"] > 0
     assert out["trades"][-1]["exit_reason"] == "delisted"
+
+
+# ── 워크포워드 ────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def tiny_preset(monkeypatch):
+    """조합 2개짜리 미니 그리드 — 실제 그리드(15조합)로 돌리면 테스트가 느리다."""
+    monkeypatch.setitem(strategy.PRESETS, "tiny", {
+        "label": "미니", "fn": strategy.donchian,
+        "params": {
+            "entry_n": {"default": 20, "min": 5, "max": 200, "label": "진입",
+                        "grid": [10, 20]},
+            "exit_n": {"default": 10, "min": 5, "max": 200, "label": "청산",
+                       "grid": [5]},
+        }})
+
+
+def _wavy_frames(n=600, n_symbols=3, seed=11):
+    """추세가 굽이치는 합성 일봉 — 전 폴드에서 거래가 나게 한다."""
+    rng = np.random.default_rng(seed)
+    idx = pd.bdate_range("2022-01-03", periods=n)
+    frames, tickers = {}, {}
+    for k in range(n_symbols):
+        rets = rng.normal(0.0008, 0.02, n) + 0.01 * np.sin(np.arange(n) / 40)
+        close = 10_000 * np.exp(np.cumsum(rets))
+        df = pd.DataFrame({"open": close, "high": close * 1.015,
+                           "low": close * 0.985, "close": close,
+                           "volume": 50_000.0}, index=idx)
+        frames[f"W{k}"] = df
+        tickers[f"W{k}"] = {"name": f"W{k}", "market": "KR", "currency": "KRW",
+                            "is_etf": 0}
+    return frames, tickers
+
+
+def test_walkforward_fold_boundaries(tiny_preset):
+    """폴드 검증 구간은 서로 겹치지 않고 시간순이며, 학습은 항상 검증보다 앞."""
+    frames, tickers = _wavy_frames()
+    out = engine.walkforward(frames, tickers, "tiny",
+                             initial_capital_krw=1e7, fx=1400.0, folds=3)
+    assert len(out["folds"]) == 3
+    prev_end = None
+    for f in out["folds"]:
+        assert f["train_end"] < f["valid_start"] <= f["valid_end"]
+        if prev_end is not None:
+            assert f["valid_start"] > prev_end  # 겹침 금지
+        prev_end = f["valid_end"]
+    # anchored: 학습 끝은 폴드가 갈수록 뒤로 늘어난다
+    ends = [f["train_end"] for f in out["folds"]]
+    assert ends == sorted(ends)
+
+
+def test_walkforward_excess_and_summary(tiny_preset):
+    """벤치마크를 주면 폴드별 초과수익과 요약 판정이 계산된다."""
+    frames, tickers = _wavy_frames()
+    bench = next(iter(frames.values())).copy()
+    out = engine.walkforward(frames, tickers, "tiny",
+                             initial_capital_krw=1e7, fx=1400.0, folds=3,
+                             bench_frame=bench)
+    for f in out["folds"]:
+        assert f["bench_cagr"] is not None
+        assert f["excess_pct"] == pytest.approx(
+            (f["valid"]["cagr"] or 0) - f["bench_cagr"], abs=0.01)
+    s = out["summary"]
+    assert s["total_folds"] == 3
+    assert 0 <= s["positive_folds"] <= 3
+    assert s["median_excess_pct"] is not None
+    assert s["param_stability"]["distinct_combos"] >= 1
+
+
+def test_walkforward_stitched_curve_is_continuous(tiny_preset):
+    """연결 곡선은 날짜가 단조 증가하고 폴드 경계에서 자본이 이어진다."""
+    frames, tickers = _wavy_frames()
+    out = engine.walkforward(frames, tickers, "tiny",
+                             initial_capital_krw=1e7, fx=1400.0, folds=3)
+    curve = out["stitched_curve"]
+    dates = [c["date"] for c in curve]
+    assert dates == sorted(dates) and len(set(dates)) == len(dates)
+    # 첫 점은 초기자본 근처에서 출발한다(첫 폴드는 배율 1)
+    assert curve[0]["equity_krw"] == pytest.approx(1e7, rel=0.2)
+    assert out["stitched_metrics"]["cagr"] is not None
+
+
+def test_walkforward_progress_callback(tiny_preset):
+    frames, tickers = _wavy_frames(n=400)
+    calls = []
+    engine.walkforward(frames, tickers, "tiny", initial_capital_krw=1e7,
+                       fx=1400.0, folds=2,
+                       progress_cb=lambda done, total: calls.append((done, total)))
+    assert calls and calls[-1][0] == calls[-1][1]  # 마지막엔 done == total
