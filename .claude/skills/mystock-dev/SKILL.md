@@ -65,7 +65,7 @@ Windows venv는 `backend/.venv/Scripts/`. `.env`는 루트에 있고 `backend/ap
 | Income | `/portfolio/income` | `pages/portfolio/Income.tsx` | context + `POST/PATCH/DELETE /api/cash-flows` |
 | Journal | `/portfolio/journal` | `pages/portfolio/Journal.tsx` | context + `DELETE /api/trades` |
 | Settings | `/portfolio/settings` | `pages/portfolio/Settings.tsx` | `PUT /api/cash`, `/api/notify*`, `PUT /api/position-rule` |
-| 전략 연구실 | `/strategy` | `pages/Strategy.tsx`, `components/EquityCurve.tsx` | `GET /api/strategy/presets`, `POST /api/strategy/backtest`, `POST /api/strategy/optimize` |
+| 전략 연구실 | `/strategy` | `pages/Strategy.tsx`, `components/EquityCurve.tsx` | `GET /api/strategy/presets`, `POST /api/strategy/backtest`, `POST /api/strategy/walkforward`(잡+폴링), `POST /api/universe/collect` |
 | 자동매매 | `/autotrade` | `pages/Autotrade.tsx` | `GET /api/autotrade/status`, `PUT .../settings`, `POST .../plan`, `POST .../execute` |
 
 포트폴리오 하위 화면은 `PortfolioLayout.tsx`가 **4개 API**(`GET /api/portfolio`, `/api/trades`,
@@ -86,7 +86,9 @@ Windows venv는 `backend/.venv/Scripts/`. `.env`는 루트에 있고 `backend/ap
 | `scoring.py` / `indicators.py` | 스윙·장기 점수, 기술 지표 |
 | `backtest.py` | 시그널 백테스트 (표본 수·비용 반영 여부가 결과에 같이 나가야 한다) |
 | `strategy.py` | 전략 프리셋 — 일봉 → 진입/청산 시그널 (순수 함수) |
-| `engine.py` | 포트폴리오 백테스트 — 시그널 → 자본곡선·지표, 홀드아웃 최적화(optimize) |
+| `engine.py` | 포트폴리오 백테스트 — 시그널 → 자본곡선·지표, 홀드아웃 최적화(optimize), 워크포워드 검증(walkforward). 일별 루프는 numpy 벡터화 — 결과 불변은 `tests/test_engine_golden.py` 골든 픽스처가 지킨다 |
+| `universe.py` | 생존편향 없는 검증 유니버스 — KRX 거래대금 상위 + 폐지 종목 수집, 시점별 월간 멤버십(monthly_membership) |
+| `jobs.py` | 백그라운드 잡 스토어 — 워크포워드·유니버스 수집처럼 수 분짜리 작업의 진행률·결과 |
 | `kis.py` | 한국투자증권 REST — 토큰·잔고·시장가 주문. 모의/실전은 KIS_MODE로 전환 |
 | `autotrade.py` | 자동매매 — 마지막 봉 신호 → 주문 계획(plan)·발송(execute). 규칙 상수는 engine 것 재사용 |
 | `costs.py` | 수수료·세금 요율. **새 상수 금지, 여기 것을 쓴다** |
