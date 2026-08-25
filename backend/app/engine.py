@@ -10,6 +10,7 @@ strategy.py가 "언제"를 답하면 여기가 "얼마나"를 답한다. 두 관
 import itertools
 import math
 
+import numpy as np
 import pandas as pd
 
 from app import backtest, costs, indicators, strategy
@@ -69,6 +70,24 @@ def resolve_exit(bars: pd.DataFrame, entry_i: int, stop: float | None,
         if exit_signal[d] and d + 1 < n:
             return d + 1, o[d + 1], "signal"
     return n - 1, close[n - 1], "end"
+
+
+def _resolve_exit_arrays(o, low, close, exit_sig, start: int,
+                         stop: float | None) -> tuple[int, float, str]:
+    """resolve_exit과 같은 판정을 종목 자기 배열 위에서, 절대 인덱스로 돌려준다.
+
+    벡터화 이후 일별 루프가 쓰는 내부 버전이다. bars 슬라이스(DataFrame 복사)를
+    만들지 않는 것이 존재 이유 — 진입마다 iloc 슬라이스를 만들면 그 비용이
+    루프 전체를 지배한다. 판정 순서·가격 규칙은 resolve_exit과 한 글자도
+    다르면 안 된다(골든 픽스처가 지킨다).
+    """
+    n = len(o)
+    for d in range(start, n):
+        if stop is not None and low[d] <= stop:
+            return d, min(float(o[d]), stop), "stop"
+        if exit_sig[d] and d + 1 < n:
+            return d + 1, float(o[d + 1]), "signal"
+    return n - 1, float(close[n - 1]), "end"
 
 
 def metrics(equity: list[float], trades: list[dict]) -> dict:
@@ -159,7 +178,11 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
         clean = df.dropna(subset=["open", "high", "low", "close"])
         if len(clean) < 30:
             continue
-        enriched = indicators.compute_indicators(clean)
+        # 전체 지표 세트(RSI·MACD·볼린저…)는 계산하지 않는다 — 엔진이 쓰는
+        # 것은 atr14뿐이고 전략 함수는 OHLC만 본다. compute_indicators를 부르면
+        # 540종목 기준 run() 시간의 6할이 안 쓰는 지표 계산에 나간다.
+        enriched = clean.copy()
+        enriched["atr14"] = indicators.atr(clean["high"], clean["low"], clean["close"])
         prepared[sym] = {
             "df": enriched, "sig": fn(enriched, params),
             "rate": fx if tickers.get(sym, {}).get("currency") == "USD" else 1.0,
@@ -178,17 +201,50 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
         # 자본곡선·CAGR 분모도 검증 구간 길이로 맞춰진다.
         calendar = [d for d in calendar if d >= trade_start]
 
+    # ── 배열 준비 — 일별 루프의 pandas 스칼라 조회(.at/get_loc/in index)가
+    # 전체 시간의 8할이라(540종목 실측 9.3s/11.2s), 종목별 own-index numpy
+    # 배열 + 달력→own 위치 매핑으로 펼쳐 둔다. 진입·청산 판정은 여전히
+    # "그 종목 자기 봉" 위에서 돈다 — 달력 정렬 배열로 판정하면 휴장 NaN이
+    # 끼어 손절 판정일이 달라진다(골든 픽스처가 지키는 불변).
+    cal_index = pd.DatetimeIndex(calendar)
+    syms = list(prepared)
+    n_days = len(calendar)
+    enter_mat = np.zeros((n_days, len(syms)), dtype=bool)
+    strength_mat = np.full((n_days, len(syms)), -np.inf)
+    close_mat = np.full((n_days, len(syms)), np.nan)
+    arrs = []
+    for j, sym in enumerate(syms):
+        pr = prepared[sym]
+        df, sig = pr["df"], pr["sig"]
+        idxr = df.index.get_indexer(cal_index)  # 휴장일은 -1
+        valid = idxr >= 0
+        own = {
+            "open": df["open"].to_numpy(dtype=float),
+            "low": df["low"].to_numpy(dtype=float),
+            "close": df["close"].to_numpy(dtype=float),
+            "atr": df["atr14"].to_numpy(dtype=float),
+            "exit": sig["exit"].to_numpy(dtype=bool),
+            "dates": df.index,
+            "cal2own": idxr,
+            "rate": pr["rate"], "cost": pr["cost"],
+        }
+        arrs.append(own)
+        st = sig["strength"].to_numpy(dtype=float)
+        vi = idxr[valid]
+        enter_mat[valid, j] = sig["enter"].to_numpy(dtype=bool)[vi]
+        # NaN 강도는 기존 로직과 동일하게 -inf(최하 순위)로 둔다
+        strength_mat[valid, j] = np.where(np.isnan(st[vi]), -np.inf, st[vi])
+        close_mat[valid, j] = own["close"][vi]
+
     equity = initial_capital_krw
     open_pos: dict[str, dict] = {}
     trades: list[dict] = []
     curve: list[dict] = []
     max_concurrent = 0
 
-    for day in calendar:
+    for d, day in enumerate(calendar):
         # ⓪ 오늘 체결되는 진입의 편도 비용을 먼저 뺀다. 신호일에 빼면 아직
         # 존재하지 않는 포지션의 비용이 하루 먼저 자본곡선에 찍힌다.
-        # entry_date는 그 종목 인덱스의 다음 봉이고 달력의 각 날은 한 번만
-        # 지나므로, 이 조건은 포지션당 정확히 한 번 참이 된다(플래그 불필요).
         # ①보다 앞에 둬야 진입 당일 손절로 나가는 포지션도 비용을 낸다.
         for p in open_pos.values():
             if p["entry_date"] == day:
@@ -215,111 +271,83 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
             del open_pos[sym]
 
         # ①-b 사이징 기준 자본 = 확정 자본 + 전일 종가 기준 평가손익.
-        # equity는 실현 자본(현금 + 보유분 취득원가)이라 보유가 30% 하락 중이어도
-        # 그대로다 — 그 값으로 1%를 계산하면 드로다운 중에 계속 크게 산다.
-        # 앱의 _risk_block도 총자산(평가액 + 예수금)을 분모로 쓴다.
-        # last_mark는 항상 그날 이전 종가라 룩어헤드가 아니다.
+        # equity는 실현 자본이라 보유가 하락 중이어도 그대로다 — 그 값으로 1%를
+        # 계산하면 드로다운 중에 계속 크게 산다. last_mark는 항상 그날 이전
+        # 종가라 룩어헤드가 아니다.
         mark_equity = equity + sum(
             (p["last_mark"] - p["entry_price"]) * p["qty"] * p["rate"]
             for p in open_pos.values() if p["entry_date"] <= day)
 
-        # ② 진입 — 자리가 남아 있고 계좌 총 리스크·현금이 한도 안일 때만.
-        # 미결 리스크 = 모든 보유가 동시에 손절에 닿았을 때의 손실 합
+        # ② 진입 — 자리·계좌 총 리스크·현금이 한도 안일 때만.
         open_risk = sum((p["entry_price"] - p["stop"]) * p["qty"] * p["rate"]
                         for p in open_pos.values())
-        # 이미 현금에서 나갔거나 나갈 것이 확정된 금액 = 취득원가 합 + 아직 안 낸
-        # 진입 비용(오늘 이후 체결되는 건). 현금 계좌는 마진이 없어 신규 진입이
-        # 잔여 현금을 넘을 수 없다 — 이 제약이 없으면 position_size가 진입마다
-        # 같은 자본으로 수량을 정하는 탓에 동시 진입 시
-        # MAX_WEIGHT×MAX_POSITIONS(140%)까지 매수된다(원 계획서에 없던 규칙).
-        # 진입 비용을 빼먹으면 노셔널 합이 딱 100%인 조합이 통과해 다음 날
-        # 현금이 마이너스가 된다.
+        # 이미 현금에서 나갔거나 나갈 것이 확정된 금액 — 상세는 커밋 이력의
+        # 원 구현 주석 참조(취득원가 합 + 미체결 진입 비용, 현금 계좌 제약)
         committed = sum(p["notional"] for p in open_pos.values()) \
             + sum(p["entry_cost_krw"] for p in open_pos.values()
                   if p["entry_date"] > day)
-        # 그날의 진입 후보를 모아 **신호 강도 내림차순**으로 자른다. 딕셔너리
-        # 삽입 순서(= db.list_tickers의 ORDER BY market, name)를 우선순위로 쓰면
-        # 결과가 종목 이름에 의존한다 — 종목 하나를 개명하기만 해도 CAGR이 바뀐다.
-        # 동점이면 sorted가 안정 정렬이라 삽입 순서가 유지된다.
-        cands = []
-        for sym, pr in prepared.items():
-            if sym in open_pos or day not in pr["sig"].index:
-                continue
-            if not bool(pr["sig"].at[day, "enter"]):
-                continue
-            s = pr["sig"].at[day, "strength"]
-            cands.append((sym, pr, -math.inf if pd.isna(s) else float(s)))
+        # 그날의 진입 후보를 신호 강도 내림차순으로 자른다 — 삽입 순서를 쓰면
+        # 결과가 종목 이름에 의존한다. 동점은 안정 정렬로 기존 순서 유지.
+        cands = [(syms[j], j, strength_mat[d, j])
+                 for j in np.nonzero(enter_mat[d])[0] if syms[j] not in open_pos]
         cands.sort(key=lambda c: c[2], reverse=True)
 
-        for sym, pr, _strength in cands:
+        for sym, j, _strength in cands:
             if len(open_pos) >= MAX_POSITIONS:
                 break
-            df = pr["df"]
-            i = df.index.get_loc(day)
-            if i + 1 >= len(df):
+            a = arrs[j]
+            i = int(a["cal2own"][d])
+            if i + 1 >= len(a["open"]):
                 continue  # 마지막 봉에서는 낼 수 있는 주문이 없다
-            entry = float(df["open"].iloc[i + 1])
-            atr = df["atr14"].iloc[i]
-            # NaN 시가(거래정지 등)를 그대로 흘리면 손절가도 NaN이 되고,
-            # NaN 비교는 항상 False라 뒤의 <= 0 가드를 다 통과해 버려
-            # round_to_lot의 int(NaN) 변환에서 죽는다 — 여기서 먼저 막는다
-            if pd.isna(entry) or entry <= 0 or pd.isna(atr) or atr <= 0:
+            entry = float(a["open"][i + 1])
+            atr = float(a["atr"][i])
+            # NaN 시가(거래정지 등)를 흘리면 손절가도 NaN이 되고 NaN 비교는
+            # 항상 False라 뒤의 가드를 다 통과한다 — 여기서 먼저 막는다
+            if math.isnan(entry) or entry <= 0 or math.isnan(atr) or atr <= 0:
                 continue
-            stop = entry - STOP_ATR_MULT * float(atr)
+            stop = entry - STOP_ATR_MULT * atr
             market = tickers.get(sym, {}).get("market", "")
-            qty = position_size(mark_equity, entry, stop, pr["rate"], market)
+            qty = position_size(mark_equity, entry, stop, a["rate"], market)
             if qty <= 0:
                 continue
-            notional = entry * qty * pr["rate"]
-            # 비용은 진입분/청산분으로 갈라 각 시점에 차감한다(스펙 "진입·청산
-            # 각각 차감"). 청산일에 왕복 전액을 빼면 보유 기간 내내 자본곡선이
-            # 그만큼 과대 표시되다가 청산일에 계단으로 떨어지고, MDD·샤프가
-            # 그 왜곡된 시리즈 위에서 계산된다. 편도 요율 분해가 없어 절반씩
-            # 근사하지만 타이밍은 옳아진다.
-            cost_krw = notional * pr["cost"]
+            notional = entry * qty * a["rate"]
+            # 비용은 진입분/청산분 절반씩, 각 시점에 차감(타이밍 왜곡 방지 —
+            # 원 구현 주석 참조)
+            cost_krw = notional * a["cost"]
             entry_cost = cost_krw / 2  # 실제 차감은 진입일(⓪)에 일어난다
-            # 현금 게이트만 mark_equity가 아니라 equity를 쓴다. 현금 계좌의
-            # 가용 현금은 (평가자산 - 보유 평가액)인데, 평가손익이 양쪽에서
-            # 상쇄돼 정확히 (equity - 취득원가 합)과 같다. 미실현이익은
-            # 팔기 전엔 매수 여력이 아니다.
+            # 현금 게이트만 equity 기준 — 미실현이익은 팔기 전엔 매수 여력이 아니다
             if notional + entry_cost > equity - committed:
                 continue  # 잔여 현금 초과 — 이 진입은 건너뛴다
-            # 이 포지션을 더했을 때 계좌 총 리스크가 한도를 넘으면 진입하지 않는다
-            add_risk = (entry - stop) * qty * pr["rate"]
+            add_risk = (entry - stop) * qty * a["rate"]
             if mark_equity > 0 and \
                     (open_risk + add_risk) / mark_equity * 100 > MAX_ACCOUNT_RISK_PCT:
                 continue
             open_risk += add_risk
             committed += notional + entry_cost
-            bars = df.iloc[i + 1:]
-            exit_i, exit_px, reason = resolve_exit(
-                bars, 0, stop, pr["sig"]["exit"].iloc[i + 1:].tolist())
+            exit_i, exit_px, reason = _resolve_exit_arrays(
+                a["open"], a["low"], a["close"], a["exit"], i + 1, stop)
             open_pos[sym] = {
-                "entry_date": df.index[i + 1], "entry_price": entry,
-                "exit_date": bars.index[exit_i], "exit_price": exit_px,
-                "exit_reason": reason, "qty": qty, "rate": pr["rate"],
+                "entry_date": a["dates"][i + 1], "entry_price": entry,
+                "exit_date": a["dates"][exit_i], "exit_price": exit_px,
+                "exit_reason": reason, "qty": qty, "rate": a["rate"],
                 "stop": stop,  # 계좌 총 리스크 합산에 필요하다
                 "notional": notional,  # 보유 노셔널 합산에 필요하다
                 "cost_krw": cost_krw, "entry_cost_krw": entry_cost,
                 "last_mark": entry,  # 직전 유효 종가 — 휴장일엔 이 값을 이어받는다
+                "j": j,  # close_mat 열 위치 — 마킹 루프가 쓴다
             }
 
         # 실제로 보유 중인 포지션만 — 오늘 막 진입한 포지션은 entry_date가
-        # 내일이라 아직 보유가 아니다(룩어헤드 방지, 발견 1)
+        # 내일이라 아직 보유가 아니다(룩어헤드 방지)
         held = {sym: p for sym, p in open_pos.items() if p["entry_date"] <= day}
         max_concurrent = max(max_concurrent, len(held))
 
-        # ③ 그날의 자본 — 확정 자본 + 보유 중인 포지션의 평가손익.
-        # calendar는 전 종목 거래일의 합집합이라 어떤 종목이 그날 휴장이면
-        # day가 그 종목 df.index에 없다. 평가손익을 0으로 놓으면 자본이
-        # 미실현손익만큼 튀었다가 다음 날 되돌아오는 가짜 갭이 생긴다
-        # (발견 1) — 대신 직전 유효 종가(last_mark)를 이어받는다. last_mark는
-        # 항상 그날 이전 종가만 담으므로 룩어헤드가 아니다.
+        # ③ 그날의 자본 — 확정 자본 + 보유 평가손익. 휴장일(NaN)은 직전 유효
+        # 종가(last_mark)를 이어받는다 — 0으로 두면 가짜 갭이 생긴다.
         unrealized = 0.0
         for sym, p in held.items():
-            df = prepared[sym]["df"]
-            c = df["close"].at[day] if day in df.index else float("nan")
-            if not pd.isna(c):
+            c = close_mat[d, p["j"]]
+            if not math.isnan(c):
                 p["last_mark"] = float(c)
             unrealized += (p["last_mark"] - p["entry_price"]) * p["qty"] * p["rate"]
         curve.append({"date": day.strftime("%Y-%m-%d"),
