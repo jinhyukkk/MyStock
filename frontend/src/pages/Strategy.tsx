@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react'
 import { get, post } from '../api'
 import EquityCurve from '../components/EquityCurve'
-import type { OptimizeResult, StrategyPreset, StrategyResult } from '../types'
+import type { JobProgress, JobStatus, StrategyPreset, StrategyResult,
+  UniverseStatus, WalkforwardResult } from '../types'
 
 const fmt = (n: number) => Math.round(n).toLocaleString()
 // 유니버스가 비면 지표가 null이다 — 0%로 그리면 전액 손실처럼 보인다
 const signed = (n: number | null) => n === null ? '—' : `${n >= 0 ? '+' : ''}${n}%`
 const pct = (n: number | null) => n === null ? '—' : `${n}%`
-const REASON_LABEL = { stop: '손절', signal: '신호', end: '기간종료' } as const
+const REASON_LABEL = { stop: '손절', signal: '신호', end: '기간종료',
+  delisted: '상장폐지' } as const
 
 export default function Strategy() {
   const [presets, setPresets] = useState<StrategyPreset[]>([])
@@ -17,10 +19,14 @@ export default function Strategy() {
   const [result, setResult] = useState<StrategyResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [opt, setOpt] = useState<OptimizeResult | null>(null)
-  const [optBusy, setOptBusy] = useState(false)
+  const [wf, setWf] = useState<WalkforwardResult | null>(null)
+  const [wfProgress, setWfProgress] = useState<JobProgress | null>(null)
+  const [universeKind, setUniverseKind] = useState<'watchlist' | 'krx300'>('watchlist')
+  const [uniStatus, setUniStatus] = useState<UniverseStatus | null>(null)
+  const [collectProgress, setCollectProgress] = useState<JobProgress | null>(null)
 
   useEffect(() => {
+    get<UniverseStatus>('/api/universe/status').then(setUniStatus).catch(() => {})
     get<StrategyPreset[]>('/api/strategy/presets')
       .then(ps => {
         setPresets(ps)
@@ -34,7 +40,7 @@ export default function Strategy() {
     setParams(Object.fromEntries(
       Object.entries(p.params).map(([k, meta]) => [k, meta.default])))
     setResult(null)
-    setOpt(null) // 다른 전략의 최적화 표가 남아 있으면 파라미터 적용이 어긋난다
+    setWf(null) // 다른 전략의 검증 표가 남아 있으면 파라미터 적용이 어긋난다
   }
 
   const current = presets.find(p => p.key === key)
@@ -54,16 +60,45 @@ export default function Strategy() {
     }
   }
 
-  async function optimize() {
-    setOptBusy(true); setError('')
+  // 잡 폴링 — 워크포워드는 수 분짜리라 동기 요청이 아니라 job_id를 받는다.
+  // 진행률이 없으면 사용자는 멈춘 것으로 보고 새로고침한다.
+  async function pollJob<T>(url: string,
+                            onProgress: (p: JobProgress) => void): Promise<T> {
+    for (;;) {
+      const st = await get<JobStatus<T>>(url)
+      if (st.status === 'done') return st.result as T
+      if (st.status === 'error') throw new Error(st.error ?? '작업이 실패했습니다.')
+      onProgress(st.progress)
+      await new Promise(r => setTimeout(r, 2000))
+    }
+  }
+
+  async function walkforward() {
+    setWfProgress({ done: 0, total: null }); setError(''); setWf(null)
     try {
-      setOpt(await post<OptimizeResult>('/api/strategy/optimize', {
-        preset: key, initial_capital_krw: capital,
-      }))
+      const { job_id } = await post<{ job_id: string }>('/api/strategy/walkforward', {
+        preset: key, initial_capital_krw: capital, universe: universeKind,
+      })
+      setWf(await pollJob<WalkforwardResult>(
+        `/api/strategy/walkforward/${job_id}`, setWfProgress))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
-      setOptBusy(false)
+      setWfProgress(null)
+    }
+  }
+
+  async function collectUniverse() {
+    setCollectProgress({ done: 0, total: null }); setError('')
+    try {
+      const { job_id } = await post<{ job_id: string }>('/api/universe/collect', {})
+      await pollJob<{ ok: number; failed: string[] }>(
+        `/api/universe/collect/${job_id}`, setCollectProgress)
+      setUniStatus(await get<UniverseStatus>('/api/universe/status'))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCollectProgress(null)
     }
   }
 
@@ -109,56 +144,119 @@ export default function Strategy() {
           </label>
           <button onClick={() => run()} disabled={busy || !key}>
             {busy ? '계산 중…' : '실행'}</button>
-          <button onClick={optimize} disabled={optBusy || !key}
-                  title="학습/검증 구간을 나눠 파라미터 조합을 탐색합니다">
-            {optBusy ? '탐색 중…' : '파라미터 최적화'}</button>
+          <select value={universeKind} title="워크포워드 검증에 쓸 유니버스"
+                  onChange={e =>
+                    setUniverseKind(e.target.value as 'watchlist' | 'krx300')}>
+            <option value="watchlist">관심종목 유니버스</option>
+            <option value="krx300">KRX 거래대금 300 (폐지 포함)</option>
+          </select>
+          <button onClick={walkforward} disabled={wfProgress !== null || !key}
+                  title="구간을 굴려가며 학습→검증을 반복합니다. 수 분 걸립니다.">
+            {wfProgress
+              ? `검증 중… ${wfProgress.total
+                  ? Math.round(wfProgress.done / wfProgress.total * 100) + '%' : ''}`
+              : '워크포워드 검증'}</button>
+          {universeKind === 'krx300' && uniStatus !== null
+            && uniStatus.symbols === 0 && (
+            <button onClick={collectUniverse} disabled={collectProgress !== null}
+                    title="KRX 거래대금 상위 + 상장폐지 종목 시세를 받습니다 (약 2~3분)">
+              {collectProgress
+                ? `수집 중… ${collectProgress.total
+                    ? `${collectProgress.done}/${collectProgress.total}` : ''}`
+                : '유니버스 수집'}</button>
+          )}
+          {universeKind === 'krx300' && uniStatus !== null && uniStatus.symbols > 0 && (
+            <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+              {uniStatus.symbols}종목 (폐지 {uniStatus.delisted_count}) ~{uniStatus.last_date}
+            </span>
+          )}
         </div>
         {error && <div className="warn" style={{ marginTop: 8 }}>⚠ {error}</div>}
       </div>
 
-      {opt && (
+      {wf && (
         <div className="card">
-          <strong>최적화 결과</strong>
-          {opt.split_date === null || opt.results.length === 0
+          <strong>워크포워드 검증 — {wf.universe === 'krx300'
+            ? `KRX 거래대금 300 (${wf.universe_size}종목, 폐지 포함)`
+            : `관심종목 ${wf.universe_size}종목`}</strong>
+          {wf.folds.length === 0
             ? <div className="empty">
                 데이터가 부족합니다 — 검증 구간을 나눌 만큼(120거래일 이상)
                 가격 이력이 쌓여야 합니다.
               </div>
             : <>
                 <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 4 }}>
-                  ~{opt.split_date} 학습({opt.train_days}일) /{' '}
-                  {opt.valid_start ?? ''}~ 검증({opt.valid_days}일). {opt.note}{' '}
-                  행을 클릭하면 그 파라미터로 백테스트를 실행합니다.
+                  폴드마다 학습 구간에서 고른 파라미터를 다음 구간에서 실행합니다.
+                  판정 기준은 CAGR이 아니라 <b>같은 구간 벤치마크 대비 초과수익</b>과
+                  폴드 간 일관성입니다. 행을 클릭하면 그 파라미터로 백테스트를
+                  실행합니다.
                 </div>
+                {wf.summary && (
+                  <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap',
+                                marginTop: 10 }}>
+                    {([
+                      ['초과수익 중앙값', signed(wf.summary.median_excess_pct)],
+                      ['벤치마크를 이긴 폴드',
+                        `${wf.summary.positive_folds}/${wf.summary.total_folds}`],
+                      ['파라미터 안정성',
+                        `${wf.summary.param_stability.note} `
+                        + `(${wf.summary.param_stability.distinct_combos}조합)`],
+                      ['연결곡선 CAGR', signed(wf.stitched_metrics.cagr)],
+                      ['연결곡선 MDD', pct(wf.stitched_metrics.mdd)],
+                    ] as const).map(([label, value]) => (
+                      <div key={label}>
+                        <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+                          {label}</div>
+                        <div style={{ fontSize: 16, fontWeight: 700 }}>{value}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div className="table-scroll" style={{ marginTop: 8 }}>
                   <table>
                     <thead><tr>
-                      <th>파라미터</th>
-                      <th>학습 CAGR</th><th>학습 샤프</th><th>학습 MDD</th>
-                      <th>검증 CAGR</th><th>검증 샤프</th><th>검증 MDD</th>
-                      <th>검증 거래</th>
+                      <th>검증 구간</th><th>선택 파라미터</th>
+                      <th>검증 CAGR</th><th>{wf.benchmark_label ?? '벤치'} CAGR</th>
+                      <th>초과수익</th><th>MDD</th><th>거래</th>
                     </tr></thead>
                     <tbody>
-                      {opt.results.map((r, i) => (
-                        <tr key={i} onClick={() => applyRow(r.params)}
+                      {wf.folds.map(f => (
+                        <tr key={f.fold} onClick={() => applyRow(f.params)}
                             style={{ cursor: 'pointer' }}>
+                          <td>{f.valid_start} ~ {f.valid_end}</td>
                           <td>{current
-                            ? Object.entries(r.params).map(([k, v]) =>
+                            ? Object.entries(f.params).map(([k, v]) =>
                                 `${current.params[k]?.label ?? k} ${v}`).join(' · ')
-                            : JSON.stringify(r.params)}</td>
-                          <td>{signed(r.train.cagr)}</td>
-                          <td>{r.train.sharpe ?? '—'}</td>
-                          <td style={{ color: 'var(--text-dim)' }}>{pct(r.train.mdd)}</td>
-                          <td className={r.valid.cagr !== null && r.valid.cagr >= 0
-                            ? 'pos' : 'neg'}>{signed(r.valid.cagr)}</td>
-                          <td>{r.valid.sharpe ?? '—'}</td>
-                          <td style={{ color: 'var(--text-dim)' }}>{pct(r.valid.mdd)}</td>
-                          <td>{r.valid.trade_count}회</td>
+                            : JSON.stringify(f.params)}</td>
+                          <td>{signed(f.valid.cagr)}</td>
+                          <td style={{ color: 'var(--text-dim)' }}>
+                            {signed(f.bench_cagr)}</td>
+                          <td className={f.excess_pct !== null && f.excess_pct >= 0
+                            ? 'pos' : 'neg'}>{signed(f.excess_pct)}</td>
+                          <td style={{ color: 'var(--text-dim)' }}>
+                            {pct(f.valid.mdd)}</td>
+                          <td>{f.valid.trade_count}회</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
+                {/* 이 경고를 지우면 숫자만 남고 전제가 사라진다 */}
+                <div className="warn" style={{ fontSize: 12, marginTop: 8 }}>
+                  ⚠ {wf.universe_warning}
+                </div>
+                {wf.stitched_curve.length > 0 && (
+                  <div style={{ marginTop: 10 }}>
+                    {/* 연결곡선 = 매 폴드 이 절차를 따랐다면 얻었을 곡선 —
+                        실전 기대값에 가장 가까운 대표 숫자 */}
+                    <EquityCurve series={[
+                      { label: `검증 연결곡선 ${signed(wf.stitched_metrics.cagr)}`,
+                        color: 'var(--buy)', points: wf.stitched_curve },
+                      { label: `${wf.benchmark_label ?? '벤치마크'} 매수보유`,
+                        color: 'var(--text-dim)', points: wf.stitched_bench },
+                    ]} />
+                  </div>
+                )}
               </>}
         </div>
       )}

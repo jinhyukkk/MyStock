@@ -404,8 +404,9 @@ export interface StrategyTrade {
   symbol: string; name: string;
   entry_date: string; entry_price: number;
   exit_date: string; exit_price: number;
-  /** stop=손절 터치, signal=청산 신호, end=데이터 끝 평가청산 */
-  exit_reason: 'stop' | 'signal' | 'end';
+  /** stop=손절 터치, signal=청산 신호, end=데이터 끝 평가청산,
+      delisted=상장폐지 강제청산(마지막 종가 근사 — 실손실 과소평가 가능) */
+  exit_reason: 'stop' | 'signal' | 'end' | 'delisted';
   qty: number; cost_krw: number; pnl_krw: number;
 }
 export interface StrategyMetrics {
@@ -468,6 +469,52 @@ export interface OptimizeResult {
 }
 export interface StrategyPreset {
   key: string; label: string; params: Record<string, StrategyParamMeta>;
+}
+
+/** engine.metrics 그대로 — StrategyMetrics의 bench 필드는 백테스트 API가
+    별도로 붙이는 것이라 워크포워드 폴드에는 없다 */
+export interface WalkforwardMetrics {
+  cagr: number | null; mdd: number | null; sharpe: number | null;
+  win_rate: number | null; trade_count: number;
+  final_equity_krw: number | null;
+}
+export interface WalkforwardFold {
+  fold: number;
+  train_end: string; valid_start: string; valid_end: string;
+  /** 학습 구간 그리드 1등(학습 샤프 기준) — 이 조합이 검증 구간을 돌았다 */
+  params: Record<string, number>;
+  valid: WalkforwardMetrics;
+  bench_cagr: number | null;
+  /** 검증 CAGR − 같은 구간 벤치마크 CAGR. 이 값이 판정 기준이다 */
+  excess_pct: number | null;
+}
+export interface WalkforwardSummary {
+  median_excess_pct: number | null;
+  positive_folds: number; total_folds: number;
+  param_stability: { distinct_combos: number; note: string };
+}
+export interface WalkforwardResult {
+  folds: WalkforwardFold[];
+  summary: WalkforwardSummary | null;
+  /** 폴드 검증 곡선을 체인링크로 이은 것 — 실전 기대값에 가장 가까운 곡선 */
+  stitched_curve: EquityPoint[];
+  stitched_metrics: WalkforwardMetrics;
+  stitched_bench: EquityPoint[];
+  preset: string; universe: string; universe_size: number;
+  initial_capital_krw: number;
+  benchmark_label: string | null;
+  universe_warning: string;
+}
+export interface JobProgress { done: number; total: number | null }
+export interface JobStatus<T> {
+  status: 'running' | 'done' | 'error';
+  progress: JobProgress;
+  started_at?: string;
+  result?: T; error?: string;
+}
+export interface UniverseStatus {
+  symbols: number; last_date: string | null;
+  delisted_count: number; collected_at: string | null;
 }
 
 // ── 자동매매 ────────────────────────────────────────────────────────────────
