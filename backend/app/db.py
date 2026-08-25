@@ -301,3 +301,52 @@ def insert_auto_order(conn, created_at, mode, symbol, name, side, qty, reason,
 def list_auto_orders(conn, limit=100):
     return conn.execute(
         "SELECT * FROM auto_orders ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+
+
+# ── 전략 검증용 유니버스 (universe_prices / universe_meta) ────────────────────
+
+def save_universe_prices(conn, symbol: str, df: pd.DataFrame) -> None:
+    """DELETE 후 INSERT — 재수집이 중복 행을 만들면 거래대금 통계가 오염된다."""
+    conn.execute("DELETE FROM universe_prices WHERE symbol=?", (symbol,))
+    conn.executemany(
+        "INSERT INTO universe_prices (symbol, date, open, high, low, close, volume) "
+        "VALUES (?,?,?,?,?,?,?)",
+        [(symbol, idx.strftime("%Y-%m-%d"),
+          None if pd.isna(r["open"]) else float(r["open"]),
+          None if pd.isna(r["high"]) else float(r["high"]),
+          None if pd.isna(r["low"]) else float(r["low"]),
+          None if pd.isna(r["close"]) else float(r["close"]),
+          None if pd.isna(r["volume"]) else float(r["volume"]))
+         for idx, r in df.iterrows()])
+    conn.commit()
+
+
+def load_universe_prices(conn, symbol: str, limit: int = 3000) -> pd.DataFrame:
+    rows = conn.execute(
+        """SELECT date, open, high, low, close, volume FROM
+             (SELECT * FROM universe_prices WHERE symbol=? ORDER BY date DESC LIMIT ?)
+           ORDER BY date ASC""", (symbol, limit)).fetchall()
+    if not rows:
+        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+    df = pd.DataFrame([dict(r) for r in rows])
+    df.index = pd.to_datetime(df.pop("date"))
+    return df
+
+
+def upsert_universe_meta(conn, symbol: str, name: str, market: str,
+                         listing_date: str | None, delisting_date: str | None,
+                         is_etf: int) -> None:
+    conn.execute(
+        """INSERT INTO universe_meta (symbol, name, market, listing_date,
+                                      delisting_date, is_etf)
+           VALUES (?,?,?,?,?,?)
+           ON CONFLICT(symbol) DO UPDATE SET
+             name=excluded.name, market=excluded.market,
+             listing_date=excluded.listing_date,
+             delisting_date=excluded.delisting_date, is_etf=excluded.is_etf""",
+        (symbol, name, market, listing_date, delisting_date, is_etf))
+    conn.commit()
+
+
+def list_universe_meta(conn):
+    return conn.execute("SELECT * FROM universe_meta ORDER BY symbol").fetchall()

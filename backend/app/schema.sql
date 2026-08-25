@@ -106,3 +106,23 @@ CREATE TABLE IF NOT EXISTS auto_orders (
   error TEXT,
   price_ref REAL                -- 판단에 쓴 직전 종가
 );
+
+-- 전략 검증용 유니버스 시세 — price_cache와 분리한다. price_cache는 대시보드
+-- 갱신 루프가 전 종목을 순회하는 대상이라, 수백 종목을 섞으면 갱신이 수십 배
+-- 느려지고 화면에서 관심종목처럼 취급될 위험이 있다.
+CREATE TABLE IF NOT EXISTS universe_prices (
+  symbol TEXT NOT NULL,
+  date TEXT NOT NULL,
+  open REAL, high REAL, low REAL, close REAL, volume REAL,
+  PRIMARY KEY (symbol, date)
+);
+-- 폐지일(delisting_date)을 보관해야 그 이후 거래를 막고 강제 청산을 기록할 수
+-- 있다 — 폐지 종목이 조용히 사라지면 그것이 곧 생존편향이다.
+CREATE TABLE IF NOT EXISTS universe_meta (
+  symbol TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  market TEXT NOT NULL,
+  listing_date TEXT,
+  delisting_date TEXT,
+  is_etf INTEGER NOT NULL DEFAULT 0
+);
