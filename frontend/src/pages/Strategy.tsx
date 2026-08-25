@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { get, post } from '../api'
 import EquityCurve from '../components/EquityCurve'
-import type { StrategyPreset, StrategyResult } from '../types'
+import type { OptimizeResult, StrategyPreset, StrategyResult } from '../types'
 
 const fmt = (n: number) => Math.round(n).toLocaleString()
 // 유니버스가 비면 지표가 null이다 — 0%로 그리면 전액 손실처럼 보인다
@@ -17,6 +17,8 @@ export default function Strategy() {
   const [result, setResult] = useState<StrategyResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [opt, setOpt] = useState<OptimizeResult | null>(null)
+  const [optBusy, setOptBusy] = useState(false)
 
   useEffect(() => {
     get<StrategyPreset[]>('/api/strategy/presets')
@@ -32,21 +34,42 @@ export default function Strategy() {
     setParams(Object.fromEntries(
       Object.entries(p.params).map(([k, meta]) => [k, meta.default])))
     setResult(null)
+    setOpt(null) // 다른 전략의 최적화 표가 남아 있으면 파라미터 적용이 어긋난다
   }
 
   const current = presets.find(p => p.key === key)
 
-  async function run() {
+  // withParams — 최적화 표 행 클릭 시 setParams 직후 실행하면 state 반영 전이라
+  // 이전 파라미터로 돌게 된다. 적용할 값을 인자로 직접 받는다.
+  async function run(withParams: Record<string, number> = params) {
     setBusy(true); setError('')
     try {
       setResult(await post<StrategyResult>('/api/strategy/backtest', {
-        preset: key, params, initial_capital_krw: capital,
+        preset: key, params: withParams, initial_capital_krw: capital,
       }))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
     }
+  }
+
+  async function optimize() {
+    setOptBusy(true); setError('')
+    try {
+      setOpt(await post<OptimizeResult>('/api/strategy/optimize', {
+        preset: key, initial_capital_krw: capital,
+      }))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setOptBusy(false)
+    }
+  }
+
+  function applyRow(p: Record<string, number>) {
+    setParams(p)
+    void run(p)
   }
 
   const m = result?.metrics
@@ -84,11 +107,61 @@ export default function Strategy() {
                    style={{ width: 130 }}
                    onChange={e => setCapital(Number(e.target.value))} />
           </label>
-          <button onClick={run} disabled={busy || !key}>
+          <button onClick={() => run()} disabled={busy || !key}>
             {busy ? '계산 중…' : '실행'}</button>
+          <button onClick={optimize} disabled={optBusy || !key}
+                  title="학습/검증 구간을 나눠 파라미터 조합을 탐색합니다">
+            {optBusy ? '탐색 중…' : '파라미터 최적화'}</button>
         </div>
         {error && <div className="warn" style={{ marginTop: 8 }}>⚠ {error}</div>}
       </div>
+
+      {opt && (
+        <div className="card">
+          <strong>최적화 결과</strong>
+          {opt.split_date === null || opt.results.length === 0
+            ? <div className="empty">
+                데이터가 부족합니다 — 검증 구간을 나눌 만큼(120거래일 이상)
+                가격 이력이 쌓여야 합니다.
+              </div>
+            : <>
+                <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 4 }}>
+                  ~{opt.split_date} 학습({opt.train_days}일) /{' '}
+                  {opt.valid_start ?? ''}~ 검증({opt.valid_days}일). {opt.note}{' '}
+                  행을 클릭하면 그 파라미터로 백테스트를 실행합니다.
+                </div>
+                <div className="table-scroll" style={{ marginTop: 8 }}>
+                  <table>
+                    <thead><tr>
+                      <th>파라미터</th>
+                      <th>학습 CAGR</th><th>학습 샤프</th><th>학습 MDD</th>
+                      <th>검증 CAGR</th><th>검증 샤프</th><th>검증 MDD</th>
+                      <th>검증 거래</th>
+                    </tr></thead>
+                    <tbody>
+                      {opt.results.map((r, i) => (
+                        <tr key={i} onClick={() => applyRow(r.params)}
+                            style={{ cursor: 'pointer' }}>
+                          <td>{current
+                            ? Object.entries(r.params).map(([k, v]) =>
+                                `${current.params[k]?.label ?? k} ${v}`).join(' · ')
+                            : JSON.stringify(r.params)}</td>
+                          <td>{signed(r.train.cagr)}</td>
+                          <td>{r.train.sharpe ?? '—'}</td>
+                          <td style={{ color: 'var(--text-dim)' }}>{pct(r.train.mdd)}</td>
+                          <td className={r.valid.cagr !== null && r.valid.cagr >= 0
+                            ? 'pos' : 'neg'}>{signed(r.valid.cagr)}</td>
+                          <td>{r.valid.sharpe ?? '—'}</td>
+                          <td style={{ color: 'var(--text-dim)' }}>{pct(r.valid.mdd)}</td>
+                          <td>{r.valid.trade_count}회</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>}
+        </div>
+      )}
 
       {result && (
         <>

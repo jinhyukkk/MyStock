@@ -488,3 +488,70 @@ def test_buy_and_hold_carries_last_close_through_individual_holiday():
     normal = sorted(diffs)[len(diffs) // 2]
     assert abs(values[gi] - values[gi - 1]) < normal * 5 + 1.0
     assert abs(values[gi + 1] - values[gi]) < normal * 5 + 1.0
+
+
+# ── 홀드아웃 최적화 ──────────────────────────────────────────────────────────
+
+_KR = {"name": "가", "market": "KR", "currency": "KRW", "is_etf": 0}
+
+
+def test_run_trade_start_excludes_earlier_trading():
+    """trade_start 이전에는 자본곡선 점도, 거래도 없어야 한다.
+
+    시그널은 전체 이력으로 계산되므로 검증 구간 첫 날부터 워밍업이 차 있다 —
+    frames를 날짜로 잘라 넘기는 방식이었다면 첫 lookback일은 신호가 비어
+    검증이 전략에 불리하게 왜곡된다.
+    """
+    out = engine.run({"AAA": _rising(260)}, {"AAA": _KR},
+                     preset="abs_momentum",
+                     params={"lookback": 60, "skip": 5, "trend_ma": 30},
+                     initial_capital_krw=10_000_000.0, fx=1_300.0,
+                     trade_start=pd.Timestamp("2024-07-01"))
+    assert out["equity_curve"][0]["date"] >= "2024-07-01"
+    assert out["trades"], "워밍업이 살아 있으면 검증 구간에서도 진입이 나와야 한다"
+    assert all(t["entry_date"] >= "2024-07-01" for t in out["trades"])
+
+
+def test_optimize_splits_by_date_and_sorts_by_valid_sharpe():
+    """조합 수 = grid 곱, split은 학습 70%, 정렬은 검증 샤프 내림차순(None 최하)."""
+    import math as _math
+    grids = [v["grid"] for v in engine.strategy.PRESETS["donchian"]["params"].values()]
+    expected = _math.prod(len(g) for g in grids)
+    out = engine.optimize({"AAA": _rising(300)}, {"AAA": _KR}, "donchian",
+                          initial_capital_krw=10_000_000.0, fx=1_300.0)
+    assert out["split_date"] < out["valid_start"]
+    assert out["train_days"] == 210 and out["valid_days"] == 90
+    assert len(out["results"]) == expected
+    for r in out["results"]:
+        assert set(r["params"]) == {"entry_n", "exit_n"}
+        assert "cagr" in r["train"] and "sharpe" in r["valid"]
+    sharpes = [r["valid"]["sharpe"] for r in out["results"]]
+    non_null = [s for s in sharpes if s is not None]
+    assert non_null == sorted(non_null, reverse=True)
+    assert all(s is None for s in sharpes[len(non_null):])
+
+
+def test_optimize_train_run_cannot_see_validation_prices():
+    """학습 지표는 split 이전 데이터만으로 계산돼야 한다 — frames를 절단해
+    돌린 결과와 정확히 같아야 검증 구간 누수가 없다."""
+    df = _rising(300)
+    out = engine.optimize({"AAA": df}, {"AAA": _KR}, "donchian",
+                          initial_capital_krw=10_000_000.0, fx=1_300.0)
+    split = pd.Timestamp(out["split_date"])
+    truncated = engine.run({"AAA": df[df.index <= split]}, {"AAA": _KR},
+                           "donchian", out["results"][0]["params"],
+                           initial_capital_krw=10_000_000.0, fx=1_300.0)
+    assert out["results"][0]["train"] == truncated["metrics"]
+
+
+def test_optimize_short_history_returns_empty():
+    """표본이 너무 짧으면 빈 결과 — 검증 구간 수십 일로는 아무것도 증명 못 한다."""
+    out = engine.optimize({"AAA": _rising(60)}, {"AAA": _KR}, "donchian",
+                          initial_capital_krw=10_000_000.0, fx=1_300.0)
+    assert out["results"] == [] and out["split_date"] is None
+
+
+def test_optimize_rejects_unknown_preset():
+    with pytest.raises(ValueError):
+        engine.optimize({}, {}, "없는전략",
+                        initial_capital_krw=10_000_000.0, fx=1_300.0)

@@ -597,3 +597,21 @@ def test_strategy_backtest_fills_missing_params_with_defaults(client):
                     json={"preset": "donchian", "params": {"entry_n": 20}})
     assert r.status_code == 200
     assert r.json()["params"] == {"entry_n": 20, "exit_n": 20}
+
+
+def test_strategy_optimize_returns_ranked_results(client):
+    """종목을 심고 최적화를 돌리면 학습/검증 지표가 함께 내려온다."""
+    _add_and_refresh(client)
+    r = client.post("/api/strategy/optimize", json={"preset": "donchian"})
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body) >= {"split_date", "train_days", "valid_days",
+                         "results", "universe_warning", "note"}
+    if body["results"]:  # 시드 데이터가 120일 미만이면 빈 결과도 정상
+        first = body["results"][0]
+        assert set(first) == {"params", "train", "valid"}
+
+
+def test_strategy_optimize_rejects_unknown_preset(client):
+    r = client.post("/api/strategy/optimize", json={"preset": "없는전략"})
+    assert r.status_code == 400

@@ -373,3 +373,18 @@ def strategy_backtest(body: StrategyBacktestIn, request: Request):
     except ValueError as e:
         # 알 수 없는 전략이 500이 되면 화면에 원인이 안 남는다
         raise HTTPException(400, str(e))
+
+
+class StrategyOptimizeIn(BaseModel):
+    preset: str = Field(min_length=1)
+    initial_capital_krw: float = Field(default=10_000_000.0, gt=0)
+
+
+@router.post("/strategy/optimize")
+def strategy_optimize(body: StrategyOptimizeIn, request: Request):
+    """홀드아웃 그리드 서치 — 조합 수 × 2회 백테스트라 수 초~수십 초 걸린다."""
+    try:
+        return service.run_strategy_optimize(
+            _conn(request), body.preset, body.initial_capital_krw)
+    except ValueError as e:
+        raise HTTPException(400, str(e))

@@ -897,15 +897,8 @@ def strategy_presets() -> list[dict]:
             for k, v in strategy.PRESETS.items()]
 
 
-def run_strategy_backtest(conn, preset: str, params: dict | None = None,
-                          initial_capital_krw: float = 10_000_000.0) -> dict:
-    """등록 종목 전체를 유니버스로 전략 백테스트를 돌린다."""
-    if preset not in strategy.PRESETS:
-        raise ValueError(f"알 수 없는 전략: {preset}")
-    # 화면이 일부 파라미터만 보내도 나머지는 기본값으로 채운다
-    merged = {k: v["default"] for k, v in strategy.PRESETS[preset]["params"].items()}
-    merged.update(params or {})
-
+def _strategy_universe(conn) -> tuple[dict, dict, float]:
+    """등록 종목 전체의 일봉·메타·환율 — 백테스트와 최적화가 같은 유니버스를 쓴다."""
     frames, tickers = {}, {}
     for row in db.list_tickers(conn):
         t = dict(row)
@@ -915,6 +908,32 @@ def run_strategy_backtest(conn, preset: str, params: dict | None = None,
         frames[t["symbol"]] = df
         tickers[t["symbol"]] = t
     fx = get_sentiment_view(conn).get("usdkrw") or portfolio.DEFAULT_USDKRW
+    return frames, tickers, fx
+
+
+def run_strategy_optimize(conn, preset: str,
+                          initial_capital_krw: float = 10_000_000.0) -> dict:
+    """홀드아웃 그리드 서치 — 학습/검증 구간 분리로 파라미터를 줄 세운다."""
+    frames, tickers, fx = _strategy_universe(conn)
+    out = engine.optimize(frames, tickers, preset,
+                          initial_capital_krw=initial_capital_krw, fx=fx)
+    out["universe_warning"] = UNIVERSE_WARNING
+    # 화면 안내 — 검증에서 무너지는 조합을 고르지 말라는 것이 이 도구의 존재 이유
+    out["note"] = ("학습 구간에서 좋고 검증 구간에서 무너지는 조합은 "
+                   "과최적화입니다. 검증 성과 기준으로 고르세요.")
+    return out
+
+
+def run_strategy_backtest(conn, preset: str, params: dict | None = None,
+                          initial_capital_krw: float = 10_000_000.0) -> dict:
+    """등록 종목 전체를 유니버스로 전략 백테스트를 돌린다."""
+    if preset not in strategy.PRESETS:
+        raise ValueError(f"알 수 없는 전략: {preset}")
+    # 화면이 일부 파라미터만 보내도 나머지는 기본값으로 채운다
+    merged = {k: v["default"] for k, v in strategy.PRESETS[preset]["params"].items()}
+    merged.update(params or {})
+
+    frames, tickers, fx = _strategy_universe(conn)
 
     out = engine.run(frames, tickers, preset, merged,
                      initial_capital_krw=initial_capital_krw, fx=fx)

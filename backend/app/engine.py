@@ -7,6 +7,7 @@ strategy.py가 "언제"를 답하면 여기가 "얼마나"를 답한다. 두 관
 사이징·손절·비용은 앱이 화면에서 권하는 규칙을 그대로 쓴다. 검증한 전략과
 실행할 전략이 다르면 이 백테스트는 아무것도 증명하지 못한다.
 """
+import itertools
 import math
 
 import pandas as pd
@@ -131,11 +132,16 @@ def _cost_pct(t: dict, df: pd.DataFrame, fx: float) -> float:
 
 
 def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
-        initial_capital_krw: float, fx: float) -> dict:
+        initial_capital_krw: float, fx: float, trade_start=None) -> dict:
     """포트폴리오 백테스트 — 시그널을 계좌 단위 자본곡선으로.
 
     진입은 신호 익일 시가, 손절은 2×ATR, 사이징은 1% 룰. 전부 앱이 화면에서
     권하는 규칙과 같다.
+
+    trade_start를 주면 그 날짜부터만 거래·자본곡선을 계산한다(홀드아웃 검증용).
+    시그널·지표는 여전히 전체 이력으로 계산되므로 검증 구간 첫날부터 롤링
+    윈도가 차 있다 — frames를 날짜로 잘라 넘기면 워밍업 구간만큼 신호가
+    비어 검증이 전략에 불리하게 왜곡된다.
     """
     if preset not in strategy.PRESETS:
         raise ValueError(f"알 수 없는 전략: {preset}")
@@ -166,6 +172,11 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
     # 반환값에 담아 service가 비교선에 그대로 넘긴다(단일 진실 원천).
     calendar = sorted(set().union(*(set(pr["df"].index) for pr in prepared.values()))) \
         if prepared else []
+    if trade_start is not None:
+        # 달력만 자른다 — prepared의 시그널은 전체 이력 그대로다. 진입 후보
+        # 스캔이 달력을 돌므로 이 필터만으로 trade_start 이전 거래가 사라지고,
+        # 자본곡선·CAGR 분모도 검증 구간 길이로 맞춰진다.
+        calendar = [d for d in calendar if d >= trade_start]
 
     equity = initial_capital_krw
     open_pos: dict[str, dict] = {}
@@ -326,6 +337,59 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
         # 호출부가 이걸 다시 계산하면 우연히 같을 뿐 계약이 아니고, 길이가
         # 갈라져도 차트는 조용히 날짜를 어긋나게 그린다. service가 pop한다.
         "_used": {"calendar": calendar, "symbols": list(prepared)},
+    }
+
+
+TRAIN_FRAC = 0.7  # 홀드아웃 분리 비율 — 앞 70% 학습, 뒤 30% 검증
+MIN_OPTIMIZE_DAYS = 120  # 이보다 짧으면 검증 구간이 통계적으로 무의미하다
+
+
+def optimize(price_frames: dict, tickers: dict, preset: str, *,
+             initial_capital_krw: float, fx: float) -> dict:
+    """홀드아웃 그리드 서치 — 학습 구간에서 탐색하고 검증 구간 성과로 줄 세운다.
+
+    학습·검증을 같은 구간으로 두고 CAGR을 최대화하면 과거에만 맞는 조합이
+    1등이 된다(오버피팅). 날짜로 갈라 두면 학습에서만 좋고 검증에서 무너지는
+    조합이 표에서 그대로 드러난다. 정렬은 검증 샤프 내림차순 — CAGR로 줄
+    세우면 변동성을 무시하고 한 방 크게 맞은 조합이 앞에 선다.
+    """
+    if preset not in strategy.PRESETS:
+        raise ValueError(f"알 수 없는 전략: {preset}")
+    grids = {k: v["grid"] for k, v in strategy.PRESETS[preset]["params"].items()}
+
+    # split은 전 종목 유효 거래일 합집합에서 잡는다 — 종목 하나 기준으로 잡으면
+    # 상장일이 다른 종목들의 학습/검증 비율이 제각각이 된다
+    days = sorted(set().union(*(
+        set(df.dropna(subset=["close"]).index) for df in price_frames.values()))) \
+        if price_frames else []
+    if len(days) < MIN_OPTIMIZE_DAYS:
+        return {"split_date": None, "train_days": 0, "valid_days": 0, "results": []}
+    split_i = int(len(days) * TRAIN_FRAC)
+    split, valid_start = days[split_i - 1], days[split_i]
+
+    # 학습 프레임은 split까지 절단 — 검증 구간 가격이 학습 성과에 새어들지 않게.
+    # 검증은 전체 프레임 + trade_start — 워밍업 유지 이유는 run() 주석 참조.
+    train_frames = {s: df[df.index <= split] for s, df in price_frames.items()}
+
+    results = []
+    for combo in itertools.product(*grids.values()):
+        params = dict(zip(grids.keys(), combo))
+        tr = run(train_frames, tickers, preset, params,
+                 initial_capital_krw=initial_capital_krw, fx=fx)
+        va = run(price_frames, tickers, preset, params,
+                 initial_capital_krw=initial_capital_krw, fx=fx,
+                 trade_start=valid_start)
+        results.append({"params": params,
+                        "train": tr["metrics"], "valid": va["metrics"]})
+    # 샤프 None(거래 없음 등)은 최하위로 — 0으로 치면 손실 조합보다 위에 선다
+    results.sort(key=lambda r: (r["valid"]["sharpe"] is None,
+                                -(r["valid"]["sharpe"] or 0.0)))
+    return {
+        "split_date": split.strftime("%Y-%m-%d"),
+        "valid_start": valid_start.strftime("%Y-%m-%d"),
+        "train_days": split_i,
+        "valid_days": len(days) - split_i,
+        "results": results,
     }
 
 

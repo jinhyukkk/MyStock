@@ -74,17 +74,26 @@ PRESETS = {
         "label": "절대 모멘텀",
         "fn": abs_momentum,
         "params": {
-            "lookback": {"default": 252, "min": 20, "max": 504, "label": "룩백(일)"},
-            "skip": {"default": 21, "min": 0, "max": 63, "label": "스킵(일)"},
-            "trend_ma": {"default": 200, "min": 20, "max": 300, "label": "추세필터(일)"},
+            # grid는 최적화(engine.optimize) 탐색 후보다. 조합 수를 12~15개로
+            # 묶어 두는 이유는 두 가지 — 동기 API가 수십 초 안에 끝나야 하고,
+            # 후보가 많을수록 우연히 검증 구간까지 맞는 조합이 나올 확률(다중
+            # 비교 오버피팅)이 올라간다.
+            "lookback": {"default": 252, "min": 20, "max": 504, "label": "룩백(일)",
+                         "grid": [63, 126, 252]},
+            "skip": {"default": 21, "min": 0, "max": 63, "label": "스킵(일)",
+                     "grid": [0, 21]},
+            "trend_ma": {"default": 200, "min": 20, "max": 300, "label": "추세필터(일)",
+                         "grid": [100, 200]},
         },
     },
     "donchian": {
         "label": "돈치안 돌파",
         "fn": donchian,
         "params": {
-            "entry_n": {"default": 55, "min": 5, "max": 200, "label": "진입 채널(일)"},
-            "exit_n": {"default": 20, "min": 5, "max": 200, "label": "청산 채널(일)"},
+            "entry_n": {"default": 55, "min": 5, "max": 200, "label": "진입 채널(일)",
+                        "grid": [20, 40, 55, 80, 120]},
+            "exit_n": {"default": 20, "min": 5, "max": 200, "label": "청산 채널(일)",
+                       "grid": [10, 20, 40]},
         },
     },
 }

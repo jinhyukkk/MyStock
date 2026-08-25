@@ -442,6 +442,29 @@ export interface StrategyResult {
 }
 export interface StrategyParamMeta {
   default: number; min: number; max: number; label: string;
+  /** 최적화 그리드 서치 탐색 후보 */
+  grid?: number[];
+}
+/** engine.metrics 원형 — 최적화 표는 벤치마크 비교 없이 이 6개만 받는다 */
+export interface OptimizeMetrics {
+  cagr: number | null; mdd: number | null; sharpe: number | null;
+  win_rate: number | null; trade_count: number;
+  final_equity_krw: number | null;
+}
+export interface OptimizeRow {
+  params: Record<string, number>;
+  train: OptimizeMetrics;
+  valid: OptimizeMetrics;
+}
+export interface OptimizeResult {
+  /** 표본이 120일 미만이면 null — 결과도 빈 배열 */
+  split_date: string | null;
+  valid_start?: string;
+  train_days: number; valid_days: number;
+  /** 검증 샤프 내림차순(null 최하) 정렬 상태로 내려온다 */
+  results: OptimizeRow[];
+  universe_warning: string;
+  note: string;
 }
 export interface StrategyPreset {
   key: string; label: string; params: Record<string, StrategyParamMeta>;
