@@ -151,13 +151,19 @@ def _cost_pct(t: dict, df: pd.DataFrame, fx: float) -> float:
 
 
 def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
-        initial_capital_krw: float, fx: float, trade_start=None) -> dict:
+        initial_capital_krw: float, fx: float, trade_start=None,
+        membership: dict | None = None) -> dict:
     """포트폴리오 백테스트 — 시그널을 계좌 단위 자본곡선으로.
 
     진입은 신호 익일 시가, 손절은 2×ATR, 사이징은 1% 룰. 전부 앱이 화면에서
     권하는 규칙과 같다.
 
     trade_start를 주면 그 날짜부터만 거래·자본곡선을 계산한다(홀드아웃 검증용).
+
+    membership은 {symbol: bool Series} — 그날 시점별 유니버스 멤버인 종목만
+    신규 진입을 허용한다(universe.monthly_membership 참조). 멤버십 이탈은
+    청산 사유가 아니다 — 이미 산 주식은 유니버스에서 빠져도 계좌에 남는
+    실전과 같게, 보유는 신호·손절로만 끝난다.
     시그널·지표는 여전히 전체 이력으로 계산되므로 검증 구간 첫날부터 롤링
     윈도가 차 있다 — frames를 날짜로 잘라 넘기면 워밍업 구간만큼 신호가
     비어 검증이 전략에 불리하게 왜곡된다.
@@ -231,7 +237,14 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
         arrs.append(own)
         st = sig["strength"].to_numpy(dtype=float)
         vi = idxr[valid]
-        enter_mat[valid, j] = sig["enter"].to_numpy(dtype=bool)[vi]
+        ent = sig["enter"].to_numpy(dtype=bool)
+        if membership is not None:
+            # 멤버십은 진입만 막는다 — exit 신호·손절 판정에는 걸지 않는다
+            mem = membership.get(sym)
+            mem_own = mem.reindex(df.index, fill_value=False).to_numpy(dtype=bool) \
+                if mem is not None else np.zeros(len(df), dtype=bool)
+            ent = ent & mem_own
+        enter_mat[valid, j] = ent[vi]
         # NaN 강도는 기존 로직과 동일하게 -inf(최하 순위)로 둔다
         strength_mat[valid, j] = np.where(np.isnan(st[vi]), -np.inf, st[vi])
         close_mat[valid, j] = own["close"][vi]
@@ -326,6 +339,11 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
             committed += notional + entry_cost
             exit_i, exit_px, reason = _resolve_exit_arrays(
                 a["open"], a["low"], a["close"], a["exit"], i + 1, stop)
+            if reason == "end" and tickers.get(sym, {}).get("delisting_date"):
+                # 폐지 종목의 "데이터 끝" 보유는 만기 보유가 아니라 강제 청산이다.
+                # 마지막 종가 청산은 실손실(정리매매 급락·회수불가)을 과소평가하는
+                # 근사다 — 방향은 스펙에 기록돼 있다.
+                reason = "delisted"
             open_pos[sym] = {
                 "entry_date": a["dates"][i + 1], "entry_price": entry,
                 "exit_date": a["dates"][exit_i], "exit_price": exit_px,

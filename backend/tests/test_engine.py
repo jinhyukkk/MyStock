@@ -555,3 +555,59 @@ def test_optimize_rejects_unknown_preset():
     with pytest.raises(ValueError):
         engine.optimize({}, {}, "없는전략",
                         initial_capital_krw=10_000_000.0, fx=1_300.0)
+
+
+# ── 멤버십 게이트 · 상장폐지 청산 ─────────────────────────────────────────────
+
+def _trend_frame(n=120, start="2024-01-01"):
+    """진입 신호가 확실히 나는 상승 일봉 — 지수 상승이어야 한다.
+
+    등차(+1) 상승은 고가(close+1)가 항상 다음날 종가와 같아져 돈치안 돌파
+    (종가 > 직전 고가 최대)가 영원히 안 난다."""
+    idx = pd.bdate_range(start, periods=n)
+    close = pd.Series([100 * 1.03 ** i for i in range(n)], index=idx)
+    return pd.DataFrame({"open": close.values, "high": close.values * 1.01,
+                         "low": close.values * 0.99, "close": close.values,
+                         "volume": 10_000.0}, index=idx)
+
+
+def test_membership_gate_blocks_entry_outside_universe():
+    """멤버십 False인 날의 진입 신호는 무시된다 — 시점별 유니버스의 핵심."""
+    df = _trend_frame()
+    tickers = {"S": {"name": "S", "market": "KR", "currency": "KRW", "is_etf": 0}}
+    params = {"entry_n": 20, "exit_n": 10}
+    base = engine.run({"S": df}, tickers, "donchian", params,
+                      initial_capital_krw=1e7, fx=1400.0)
+    assert base["metrics"]["trade_count"] > 0  # 게이트 없으면 거래가 난다
+    never = {"S": pd.Series(False, index=df.index)}
+    gated = engine.run({"S": df}, tickers, "donchian", params,
+                       initial_capital_krw=1e7, fx=1400.0, membership=never)
+    assert gated["metrics"]["trade_count"] == 0
+
+
+def test_membership_gate_does_not_force_exit():
+    """멤버십 이탈은 청산 사유가 아니다 — 보유는 신호·손절로만 끝난다."""
+    df = _trend_frame()
+    tickers = {"S": {"name": "S", "market": "KR", "currency": "KRW", "is_etf": 0}}
+    params = {"entry_n": 20, "exit_n": 10}
+    # 진입 가능 구간을 앞 40일로 제한 — 이후 멤버십 이탈
+    mem = pd.Series([i < 40 for i in range(len(df))], index=df.index)
+    out = engine.run({"S": df}, tickers, "donchian", params,
+                     initial_capital_krw=1e7, fx=1400.0, membership={"S": mem})
+    assert out["metrics"]["trade_count"] > 0
+    # 상승 추세라 청산 신호·손절이 없다 → 데이터 끝까지 보유(end)여야 한다.
+    # 멤버십 이탈(40일째)에 강제 청산됐다면 exit_date가 훨씬 앞이다.
+    last = out["trades"][-1]
+    assert last["exit_reason"] == "end"
+    assert last["exit_date"] == df.index[-1].strftime("%Y-%m-%d")
+
+
+def test_delisted_symbol_exit_reason():
+    """폐지 종목을 데이터 끝까지 들고 있으면 사유가 end가 아니라 delisted."""
+    df = _trend_frame(n=80)
+    tickers = {"S": {"name": "S", "market": "KR", "currency": "KRW", "is_etf": 0,
+                     "delisting_date": df.index[-1].strftime("%Y-%m-%d")}}
+    out = engine.run({"S": df}, tickers, "donchian", {"entry_n": 20, "exit_n": 10},
+                     initial_capital_krw=1e7, fx=1400.0)
+    assert out["metrics"]["trade_count"] > 0
+    assert out["trades"][-1]["exit_reason"] == "delisted"
