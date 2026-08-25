@@ -701,3 +701,31 @@ def test_walkforward_progress_callback(tiny_preset):
                        fx=1400.0, folds=2,
                        progress_cb=lambda done, total: calls.append((done, total)))
     assert calls and calls[-1][0] == calls[-1][1]  # 마지막엔 done == total
+
+
+# ── 시장 레짐 필터 ────────────────────────────────────────────────────────────
+
+def test_regime_filter_blocks_entry_when_off():
+    """레짐 False인 날의 진입 신호는 무시된다 — 하락장 신규 진입 차단."""
+    df = _trend_frame()
+    tickers = {"S": {"name": "S", "market": "KR", "currency": "KRW", "is_etf": 0}}
+    params = {"entry_n": 20, "exit_n": 10}
+    off = pd.Series(False, index=df.index)
+    out = engine.run({"S": df}, tickers, "donchian", params,
+                     initial_capital_krw=1e7, fx=1400.0, regime=off)
+    assert out["metrics"]["trade_count"] == 0
+
+
+def test_regime_filter_carries_last_value_on_bench_holiday():
+    """벤치마크 휴장일은 직전 레짐을 이어받는다 — 빈 날을 False로 치면
+    벤치 휴장일마다 진입이 통째로 막힌다."""
+    df = _trend_frame()
+    tickers = {"S": {"name": "S", "market": "KR", "currency": "KRW", "is_etf": 0}}
+    params = {"entry_n": 20, "exit_n": 10}
+    # 벤치 캘린더에서 종목 거래일 일부가 빠진 레짐(전부 True)
+    sparse = pd.Series(True, index=df.index[::2])
+    out = engine.run({"S": df}, tickers, "donchian", params,
+                     initial_capital_krw=1e7, fx=1400.0, regime=sparse)
+    base = engine.run({"S": df}, tickers, "donchian", params,
+                      initial_capital_krw=1e7, fx=1400.0)
+    assert out["metrics"]["trade_count"] == base["metrics"]["trade_count"]

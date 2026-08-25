@@ -394,6 +394,7 @@ class WalkforwardIn(BaseModel):
     preset: str = Field(min_length=1)
     initial_capital_krw: float = Field(default=10_000_000.0, gt=0)
     universe: str = Field(default="watchlist", pattern="^(watchlist|krx300)$")
+    regime_filter: bool = False
 
 
 @router.post("/strategy/walkforward")
@@ -407,7 +408,7 @@ def strategy_walkforward(body: WalkforwardIn, request: Request):
     # 요청 스레드의 연결을 넘기면 동시 접근으로 프로세스가 죽는다
     job_id = jobs.start(lambda cb: service.run_walkforward(
         state_db.conn(), body.preset, body.initial_capital_krw,
-        body.universe, progress_cb=cb))
+        body.universe, body.regime_filter, progress_cb=cb))
     return {"job_id": job_id}
 
 

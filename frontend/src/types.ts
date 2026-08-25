@@ -504,6 +504,8 @@ export interface WalkforwardResult {
   initial_capital_krw: number;
   benchmark_label: string | null;
   universe_warning: string;
+  /** true면 KOSPI 200일선 위에서만 신규 진입한 결과 */
+  regime_filter?: boolean;
 }
 export interface JobProgress { done: number; total: number | null }
 export interface JobStatus<T> {

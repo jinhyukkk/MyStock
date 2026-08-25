@@ -708,3 +708,11 @@ def test_optimize_response_carries_regime_warning(client, monkeypatch):
     r = client.post("/api/strategy/optimize", json={"preset": "donchian"})
     assert r.status_code == 200
     assert any("워크포워드" in w for w in r.json()["warnings"])
+
+
+def test_walkforward_regime_filter_needs_benchmark(client):
+    """벤치마크 이력이 없는 상태의 레짐 필터 요청은 안내가 담긴 error."""
+    r = client.post("/api/strategy/walkforward",
+                    json={"preset": "donchian", "regime_filter": True})
+    st = _poll_job(client, f"/api/strategy/walkforward/{r.json()['job_id']}")
+    assert st["status"] == "error" and "벤치마크" in st["error"]

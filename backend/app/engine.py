@@ -152,13 +152,19 @@ def _cost_pct(t: dict, df: pd.DataFrame, fx: float) -> float:
 
 def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
         initial_capital_krw: float, fx: float, trade_start=None,
-        membership: dict | None = None) -> dict:
+        membership: dict | None = None,
+        regime: pd.Series | None = None) -> dict:
     """포트폴리오 백테스트 — 시그널을 계좌 단위 자본곡선으로.
 
     진입은 신호 익일 시가, 손절은 2×ATR, 사이징은 1% 룰. 전부 앱이 화면에서
     권하는 규칙과 같다.
 
     trade_start를 주면 그 날짜부터만 거래·자본곡선을 계산한다(홀드아웃 검증용).
+
+    regime은 달력 날짜별 bool Series — False인 날은 전 종목 신규 진입을
+    막는다(예: 벤치마크가 200일선 아래). 청산·손절은 레짐과 무관하다 —
+    하락장에서 못 파는 필터는 리스크 장치가 아니라 족쇄다. 벤치마크
+    휴장일은 직전 값을 이어받는다.
 
     membership은 {symbol: bool Series} — 그날 시점별 유니버스 멤버인 종목만
     신규 진입을 허용한다(universe.monthly_membership 참조). 멤버십 이탈은
@@ -248,6 +254,13 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
         # NaN 강도는 기존 로직과 동일하게 -inf(최하 순위)로 둔다
         strength_mat[valid, j] = np.where(np.isnan(st[vi]), -np.inf, st[vi])
         close_mat[valid, j] = own["close"][vi]
+
+    if regime is not None and n_days:
+        # 벤치 휴장일은 직전 레짐 유지(ffill) — False로 채우면 벤치가 쉰 날마다
+        # 전 종목 진입이 이유 없이 막힌다. 이력 시작 전(NaN)은 판단 근거가
+        # 없으므로 진입을 막는 쪽(False)이 보수적이다.
+        reg = regime.reindex(cal_index).ffill().fillna(False).to_numpy(dtype=bool)
+        enter_mat &= reg[:, None]
 
     equity = initial_capital_krw
     open_pos: dict[str, dict] = {}
@@ -488,7 +501,8 @@ def buy_and_hold(price_frames: dict, tickers: dict, initial_capital_krw: float,
 def walkforward(price_frames: dict, tickers: dict, preset: str, *,
                 initial_capital_krw: float, fx: float, membership=None,
                 bench_frame: pd.DataFrame | None = None, folds: int = 5,
-                min_train_frac: float = 0.4, progress_cb=None) -> dict:
+                min_train_frac: float = 0.4, regime: pd.Series | None = None,
+                progress_cb=None) -> dict:
     """anchored 워크포워드 — 폴드마다 학습에서 고른 조합을 다음 구간에서 실행한다.
 
     단일 홀드아웃(optimize)은 검증 구간 레짐이 순위를 지배한다 — 실측에서
@@ -536,7 +550,7 @@ def walkforward(price_frames: dict, tickers: dict, preset: str, *,
         for params in combos:
             tr = run(train_frames, tickers, preset, params,
                      initial_capital_krw=initial_capital_krw, fx=fx,
-                     membership=membership)
+                     membership=membership, regime=regime)
             sh = tr["metrics"]["sharpe"]
             # None(거래 없음)은 후보에서 제외 — 0으로 치면 손실 조합보다 위에 선다
             if sh is not None and (best_sharpe is None or sh > best_sharpe):
@@ -552,7 +566,7 @@ def walkforward(price_frames: dict, tickers: dict, preset: str, *,
                      for s, df in price_frames.items()}
         va = run(va_frames, tickers, preset, best,
                  initial_capital_krw=initial_capital_krw, fx=fx,
-                 trade_start=valid_start, membership=membership)
+                 trade_start=valid_start, membership=membership, regime=regime)
         done += 1
         if progress_cb:
             progress_cb(done, total_steps)

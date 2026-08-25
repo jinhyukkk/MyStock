@@ -24,6 +24,7 @@ export default function Strategy() {
   const [universeKind, setUniverseKind] = useState<'watchlist' | 'krx300'>('watchlist')
   const [uniStatus, setUniStatus] = useState<UniverseStatus | null>(null)
   const [collectProgress, setCollectProgress] = useState<JobProgress | null>(null)
+  const [regimeFilter, setRegimeFilter] = useState(false)
 
   useEffect(() => {
     get<UniverseStatus>('/api/universe/status').then(setUniStatus).catch(() => {})
@@ -78,6 +79,7 @@ export default function Strategy() {
     try {
       const { job_id } = await post<{ job_id: string }>('/api/strategy/walkforward', {
         preset: key, initial_capital_krw: capital, universe: universeKind,
+        regime_filter: regimeFilter,
       })
       setWf(await pollJob<WalkforwardResult>(
         `/api/strategy/walkforward/${job_id}`, setWfProgress))
@@ -150,6 +152,11 @@ export default function Strategy() {
             <option value="watchlist">관심종목 유니버스</option>
             <option value="krx300">KRX 거래대금 300 (폐지 포함)</option>
           </select>
+          <label style={{ fontSize: 12, color: 'var(--text-dim)' }}
+                 title="KOSPI가 200일선 위일 때만 신규 진입 (청산은 항상)">
+            <input type="checkbox" checked={regimeFilter}
+                   onChange={e => setRegimeFilter(e.target.checked)} /> 레짐 필터
+          </label>
           <button onClick={walkforward} disabled={wfProgress !== null || !key}
                   title="구간을 굴려가며 학습→검증을 반복합니다. 수 분 걸립니다.">
             {wfProgress
