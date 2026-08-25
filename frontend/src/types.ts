@@ -469,3 +469,44 @@ export interface OptimizeResult {
 export interface StrategyPreset {
   key: string; label: string; params: Record<string, StrategyParamMeta>;
 }
+
+// ── 자동매매 ────────────────────────────────────────────────────────────────
+export interface AutoPosition {
+  symbol: string; qty: number;
+  /** 주문 시점 직전 종가 근사 — 실제 체결가와 다를 수 있다 */
+  entry_price: number;
+  stop: number; entry_date: string;
+}
+export interface AutoOrderRow {
+  id: number; created_at: string; mode: string;
+  symbol: string; name: string | null;
+  side: 'BUY' | 'SELL'; qty: number;
+  reason: 'enter' | 'exit_signal' | 'stop';
+  status: 'sent' | 'failed';
+  order_no: string | null; error: string | null; price_ref: number | null;
+}
+export interface AutotradeStatus {
+  configured: boolean;
+  mode: string;
+  settings: { preset: string; params: Record<string, number> };
+  positions: AutoPosition[];
+  orders: AutoOrderRow[];
+}
+export interface PlannedOrder {
+  symbol: string; name: string;
+  side: 'BUY' | 'SELL'; qty: number;
+  reason: 'enter' | 'exit_signal' | 'stop';
+  price_ref: number; stop: number | null;
+  /** execute 응답에만 실림 */
+  status?: 'sent' | 'failed'; order_no?: string; error?: string;
+}
+export interface AutotradePlan {
+  date: string;
+  /** 신호 계산에 쓴 마지막 일봉 날짜 — 오래됐으면 warnings에 경고가 실린다 */
+  as_of: string | null;
+  mode: string;
+  preset: string; params: Record<string, number>;
+  equity_krw: number; cash_krw: number;
+  orders: PlannedOrder[];
+  warnings: string[];
+}

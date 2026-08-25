@@ -80,3 +80,29 @@ CREATE TABLE IF NOT EXISTS company_cache (
   error TEXT,                   -- 마지막 실패 사유. 성공 시 NULL로 지운다
   PRIMARY KEY (symbol, block)
 );
+-- 자동매매가 연 포지션. KIS 잔고에도 보유가 보이지만 손절가(stop)는 증권사에
+-- 없다 — 진입 시점 2×ATR 손절선을 여기 남겨야 다음 날 판정이 가능하다.
+-- 수동 보유와 섞이지 않게 자동매매는 이 표에 있는 종목만 자기 것으로 본다.
+CREATE TABLE IF NOT EXISTS auto_positions (
+  symbol TEXT PRIMARY KEY,
+  qty REAL NOT NULL,
+  entry_price REAL NOT NULL,  -- 체결가 근사(주문 시점 직전 종가) — 화면에 근사임을 표시
+  stop REAL NOT NULL,
+  entry_date TEXT NOT NULL
+);
+-- 자동매매 주문 원장. 계획(planned)→발송(sent)/실패(failed)가 전부 남아야
+-- "왜 샀는지/왜 안 샀는지"를 나중에 복기할 수 있다.
+CREATE TABLE IF NOT EXISTS auto_orders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at TEXT NOT NULL,
+  mode TEXT NOT NULL,           -- paper|live
+  symbol TEXT NOT NULL,
+  name TEXT,
+  side TEXT NOT NULL CHECK (side IN ('BUY','SELL')),
+  qty REAL NOT NULL,
+  reason TEXT NOT NULL,         -- enter|exit_signal|stop
+  status TEXT NOT NULL,         -- sent|failed
+  order_no TEXT,
+  error TEXT,
+  price_ref REAL                -- 판단에 쓴 직전 종가
+);

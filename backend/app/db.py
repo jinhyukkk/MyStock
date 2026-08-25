@@ -264,3 +264,40 @@ def set_meta(conn, key, value):
 def get_meta(conn, key):
     row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
     return row["value"] if row else None
+
+
+# ── 자동매매 ─────────────────────────────────────────────────────────────────
+
+def upsert_auto_position(conn, symbol, qty, entry_price, stop, entry_date):
+    conn.execute(
+        "INSERT INTO auto_positions (symbol, qty, entry_price, stop, entry_date) "
+        "VALUES (?,?,?,?,?) ON CONFLICT(symbol) DO UPDATE SET "
+        "qty=excluded.qty, entry_price=excluded.entry_price, "
+        "stop=excluded.stop, entry_date=excluded.entry_date",
+        (symbol, qty, entry_price, stop, entry_date))
+    conn.commit()
+
+
+def delete_auto_position(conn, symbol):
+    conn.execute("DELETE FROM auto_positions WHERE symbol=?", (symbol,))
+    conn.commit()
+
+
+def list_auto_positions(conn):
+    return conn.execute("SELECT * FROM auto_positions ORDER BY entry_date").fetchall()
+
+
+def insert_auto_order(conn, created_at, mode, symbol, name, side, qty, reason,
+                      status, order_no=None, error=None, price_ref=None) -> int:
+    cur = conn.execute(
+        "INSERT INTO auto_orders (created_at, mode, symbol, name, side, qty, "
+        "reason, status, order_no, error, price_ref) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (created_at, mode, symbol, name, side, qty, reason, status,
+         order_no, error, price_ref))
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_auto_orders(conn, limit=100):
+    return conn.execute(
+        "SELECT * FROM auto_orders ORDER BY id DESC LIMIT ?", (limit,)).fetchall()

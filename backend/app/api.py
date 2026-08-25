@@ -3,7 +3,7 @@ from typing import Literal
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
 
-from app import db, fetchers, preview, service
+from app import autotrade, db, fetchers, kis, preview, service
 
 router = APIRouter(prefix="/api")
 
@@ -387,4 +387,60 @@ def strategy_optimize(body: StrategyOptimizeIn, request: Request):
         return service.run_strategy_optimize(
             _conn(request), body.preset, body.initial_capital_krw)
     except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+# ── 자동매매 ────────────────────────────────────────────────────────────────
+
+class AutotradeSettingsIn(BaseModel):
+    preset: str = Field(min_length=1)
+    params: dict[str, int] | None = None
+
+
+class AutotradeExecuteIn(BaseModel):
+    # 실수 클릭 한 번이 실제 주문이 되면 안 된다 — 화면이 명시적으로 보낸다
+    confirm: bool = False
+
+
+@router.get("/autotrade/status")
+def autotrade_status(request: Request):
+    """설정·포지션·주문 이력 — KIS를 부르지 않아 키가 없어도 뜬다."""
+    conn = _conn(request)
+    return {
+        "configured": kis.configured(),
+        "mode": kis.mode(),
+        "settings": autotrade.settings(conn),
+        "positions": [dict(r) for r in db.list_auto_positions(conn)],
+        "orders": [dict(r) for r in db.list_auto_orders(conn)],
+    }
+
+
+@router.put("/autotrade/settings")
+def autotrade_settings(body: AutotradeSettingsIn, request: Request):
+    try:
+        autotrade.save_settings(_conn(request), body.preset, body.params or {})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@router.post("/autotrade/plan")
+def autotrade_plan(request: Request):
+    """오늘 낼 주문 미리보기 — 주문은 발송하지 않는다."""
+    conn = _conn(request)
+    try:
+        client = kis.Client(conn)
+        return autotrade.plan(conn, client.balance())
+    except kis.KisError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/autotrade/execute")
+def autotrade_execute(body: AutotradeExecuteIn, request: Request):
+    if not body.confirm:
+        raise HTTPException(400, "confirm=true 없이 주문을 실행할 수 없습니다.")
+    conn = _conn(request)
+    try:
+        return autotrade.execute(conn, kis.Client(conn))
+    except kis.KisError as e:
         raise HTTPException(400, str(e))

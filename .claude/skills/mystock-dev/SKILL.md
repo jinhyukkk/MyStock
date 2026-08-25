@@ -65,7 +65,8 @@ Windows venv는 `backend/.venv/Scripts/`. `.env`는 루트에 있고 `backend/ap
 | Income | `/portfolio/income` | `pages/portfolio/Income.tsx` | context + `POST/PATCH/DELETE /api/cash-flows` |
 | Journal | `/portfolio/journal` | `pages/portfolio/Journal.tsx` | context + `DELETE /api/trades` |
 | Settings | `/portfolio/settings` | `pages/portfolio/Settings.tsx` | `PUT /api/cash`, `/api/notify*`, `PUT /api/position-rule` |
-| 전략 연구실 | `/strategy` | `pages/Strategy.tsx`, `components/EquityCurve.tsx` | `GET /api/strategy/presets`, `POST /api/strategy/backtest` |
+| 전략 연구실 | `/strategy` | `pages/Strategy.tsx`, `components/EquityCurve.tsx` | `GET /api/strategy/presets`, `POST /api/strategy/backtest`, `POST /api/strategy/optimize` |
+| 자동매매 | `/autotrade` | `pages/Autotrade.tsx` | `GET /api/autotrade/status`, `PUT .../settings`, `POST .../plan`, `POST .../execute` |
 
 포트폴리오 하위 화면은 `PortfolioLayout.tsx`가 **4개 API**(`GET /api/portfolio`, `/api/trades`,
 `/api/cash-flows`, `/api/position-rule`)를 한 번에 받아 `context.ts`(`usePortfolio()`)로 내려준다.
@@ -85,7 +86,9 @@ Windows venv는 `backend/.venv/Scripts/`. `.env`는 루트에 있고 `backend/ap
 | `scoring.py` / `indicators.py` | 스윙·장기 점수, 기술 지표 |
 | `backtest.py` | 시그널 백테스트 (표본 수·비용 반영 여부가 결과에 같이 나가야 한다) |
 | `strategy.py` | 전략 프리셋 — 일봉 → 진입/청산 시그널 (순수 함수) |
-| `engine.py` | 포트폴리오 백테스트 — 시그널 → 자본곡선·지표 |
+| `engine.py` | 포트폴리오 백테스트 — 시그널 → 자본곡선·지표, 홀드아웃 최적화(optimize) |
+| `kis.py` | 한국투자증권 REST — 토큰·잔고·시장가 주문. 모의/실전은 KIS_MODE로 전환 |
+| `autotrade.py` | 자동매매 — 마지막 봉 신호 → 주문 계획(plan)·발송(execute). 규칙 상수는 engine 것 재사용 |
 | `costs.py` | 수수료·세금 요율. **새 상수 금지, 여기 것을 쓴다** |
 | `db.py` / `schema.sql` | 스키마 + 마이그레이션. 둘 다 고친다 |
 | `fetchers.py` / `sentiment.py` | 외부 시세·심리 데이터 (테스트는 `smoke`) |

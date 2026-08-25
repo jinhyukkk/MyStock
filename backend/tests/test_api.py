@@ -615,3 +615,39 @@ def test_strategy_optimize_returns_ranked_results(client):
 def test_strategy_optimize_rejects_unknown_preset(client):
     r = client.post("/api/strategy/optimize", json={"preset": "없는전략"})
     assert r.status_code == 400
+
+
+def test_autotrade_status_without_keys(client, monkeypatch):
+    """KIS 키가 없어도 상태 화면은 떠야 한다 — 설정 안내를 보여줄 곳이 이 화면이다."""
+    for k in ("KIS_APP_KEY", "KIS_APP_SECRET", "KIS_ACCOUNT", "KIS_MODE"):
+        monkeypatch.delenv(k, raising=False)
+    r = client.get("/api/autotrade/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["configured"] is False
+    assert body["mode"] == "paper"  # KIS_MODE 미설정 기본값은 모의투자다
+    assert body["settings"]["preset"] in ("abs_momentum", "donchian")
+    assert body["positions"] == [] and body["orders"] == []
+
+
+def test_autotrade_plan_without_keys_is_400(client, monkeypatch):
+    for k in ("KIS_APP_KEY", "KIS_APP_SECRET", "KIS_ACCOUNT", "KIS_MODE"):
+        monkeypatch.delenv(k, raising=False)
+    r = client.post("/api/autotrade/plan")
+    assert r.status_code == 400
+    assert "KIS" in r.json()["detail"]
+
+
+def test_autotrade_execute_requires_confirm(client):
+    """confirm 없는 실행은 무조건 400 — 실수 클릭 한 번이 실제 주문이 되면 안 된다."""
+    assert client.post("/api/autotrade/execute", json={}).status_code == 400
+
+
+def test_autotrade_settings_roundtrip(client):
+    r = client.put("/api/autotrade/settings",
+                   json={"preset": "donchian", "params": {"entry_n": 40}})
+    assert r.status_code == 200
+    s = client.get("/api/autotrade/status").json()["settings"]
+    assert s["preset"] == "donchian" and s["params"]["entry_n"] == 40
+    assert client.put("/api/autotrade/settings",
+                      json={"preset": "없는전략"}).status_code == 400

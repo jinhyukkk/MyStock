@@ -4,6 +4,7 @@ import CommandPalette from './CommandPalette'
 const tabs = [
   { to: '/', label: '대시보드' }, { to: '/portfolio', label: '포트폴리오' },
   { to: '/watchlist', label: '워치리스트' }, { to: '/strategy', label: '전략' },
+  { to: '/autotrade', label: '자동매매' },
 ]
 export default function Layout() {
   // 고정폭(1100px)이면 와이드 모니터에서 양옆이 비어 표가 좁게 눌린다 — 화면 폭을 다 쓰되,
