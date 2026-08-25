@@ -8,7 +8,7 @@ import requests
 import pandas as pd
 
 from app import (backtest, company, costs, db, engine, fetchers, indicators,
-                 portfolio, scoring, sentiment, strategy)
+                 portfolio, scoring, sentiment, strategy, universe)
 
 BACKTEST_DAYS = 1100  # 약 3년 — 한 국면짜리 400일 검증은 상승장 착시를 못 거른다
 
@@ -921,6 +921,10 @@ def run_strategy_optimize(conn, preset: str,
     # 화면 안내 — 검증에서 무너지는 조합을 고르지 말라는 것이 이 도구의 존재 이유
     out["note"] = ("학습 구간에서 좋고 검증 구간에서 무너지는 조합은 "
                    "과최적화입니다. 검증 성과 기준으로 고르세요.")
+    # 단일 홀드아웃의 구조적 한계 — 실측에서 검증 구간 KOSPI가 CAGR 66%라
+    # 모든 조합이 이겼다. 워크포워드가 이 도구를 대체한다.
+    out["warnings"] = ["단일 홀드아웃은 검증 구간 레짐에 지배될 수 있습니다. "
+                       "워크포워드 결과를 우선하세요."]
     return out
 
 
@@ -970,3 +974,50 @@ def run_strategy_backtest(conn, preset: str, params: dict | None = None,
     out["fx_note"] = f"USD 종목은 현재 환율 {fx:,.0f}원 고정 근사입니다."
     out["initial_capital_krw"] = initial_capital_krw
     return out
+
+
+def run_walkforward(conn, preset: str, initial_capital_krw: float = 10_000_000.0,
+                    universe_kind: str = "watchlist", progress_cb=None) -> dict:
+    """워크포워드 검증 — 백그라운드 잡에서 돈다(폴드×조합 약 150회 실행).
+
+    universe_kind="krx300"이면 생존편향 없는 유니버스(universe 테이블 + 시점별
+    멤버십), "watchlist"면 기존 등록 종목. 후자는 선택편향 경고가 그대로
+    유효하다 — 두 결과의 차이가 곧 그 편향의 크기다.
+    """
+    if universe_kind == "krx300":
+        frames, tickers = universe.load_frames(conn)
+        if not frames:
+            raise ValueError("유니버스가 비어 있습니다. 먼저 수집을 실행하세요.")
+        membership = universe.monthly_membership(frames)
+        # 전 종목 KRW라 환율은 결과에 안 쓰인다 — 네트워크를 피해 기본값
+        fx = portfolio.DEFAULT_USDKRW
+    else:
+        frames, tickers, fx = _strategy_universe(conn)
+        membership = None
+    bench = db.load_prices(conn, "BENCH:KR", limit=STRATEGY_DAYS)
+    out = engine.walkforward(
+        frames, tickers, preset,
+        initial_capital_krw=initial_capital_krw, fx=fx, membership=membership,
+        bench_frame=bench if not bench.empty else None, progress_cb=progress_cb)
+    out["preset"] = preset
+    out["universe"] = universe_kind
+    out["universe_size"] = len(frames)
+    out["initial_capital_krw"] = initial_capital_krw
+    out["benchmark_label"] = fetchers.BENCHMARKS["KR"][1] if not bench.empty else None
+    if universe_kind == "watchlist":
+        out["universe_warning"] = UNIVERSE_WARNING
+    else:
+        out["universe_warning"] = (
+            "폐지 종목은 마지막 종가 청산 근사라 실손실(정리매매 급락)을 "
+            "과소평가할 수 있습니다.")
+    return out
+
+
+def universe_status(conn) -> dict:
+    row = conn.execute(
+        "SELECT COUNT(DISTINCT symbol), MAX(date) FROM universe_prices").fetchone()
+    delisted = conn.execute(
+        "SELECT COUNT(*) FROM universe_meta WHERE delisting_date IS NOT NULL"
+    ).fetchone()[0]
+    return {"symbols": row[0], "last_date": row[1], "delisted_count": delisted,
+            "collected_at": db.get_meta(conn, "universe_collected_at")}

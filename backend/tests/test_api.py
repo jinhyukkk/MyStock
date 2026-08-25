@@ -651,3 +651,60 @@ def test_autotrade_settings_roundtrip(client):
     assert s["preset"] == "donchian" and s["params"]["entry_n"] == 40
     assert client.put("/api/autotrade/settings",
                       json={"preset": "없는전략"}).status_code == 400
+
+
+# ── 워크포워드 · 유니버스 API ─────────────────────────────────────────────────
+
+def _poll_job(client, url, tries=200):
+    import time
+    for _ in range(tries):
+        st = client.get(url).json()
+        if st["status"] != "running":
+            return st
+        time.sleep(0.02)
+    raise AssertionError("잡이 끝나지 않습니다")
+
+
+def test_walkforward_rejects_unknown_preset(client):
+    r = client.post("/api/strategy/walkforward", json={"preset": "없는전략"})
+    assert r.status_code == 400
+
+
+def test_walkforward_unknown_job_404(client):
+    assert client.get("/api/strategy/walkforward/없는잡").status_code == 404
+
+
+def test_walkforward_empty_universe_completes(client):
+    """종목이 없어도 잡은 error가 아니라 빈 결과로 끝나야 한다 —
+    watchlist가 비어 있는 신규 설치에서 500이 나면 안 된다."""
+    r = client.post("/api/strategy/walkforward",
+                    json={"preset": "donchian", "universe": "watchlist"})
+    assert r.status_code == 200
+    st = _poll_job(client, f"/api/strategy/walkforward/{r.json()['job_id']}")
+    assert st["status"] == "done"
+    assert st["result"]["folds"] == []
+
+
+def test_walkforward_krx300_without_collection_errors(client):
+    """수집 전 krx300 요청은 안내 메시지가 담긴 error로 끝난다."""
+    r = client.post("/api/strategy/walkforward",
+                    json={"preset": "donchian", "universe": "krx300"})
+    st = _poll_job(client, f"/api/strategy/walkforward/{r.json()['job_id']}")
+    assert st["status"] == "error"
+    assert "수집" in st["error"]
+
+
+def test_universe_status_empty(client):
+    r = client.get("/api/universe/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["symbols"] == 0 and body["delisted_count"] == 0
+
+
+def test_optimize_response_carries_regime_warning(client, monkeypatch):
+    """optimize는 유지하되 레짐 경고가 붙는다 — 기존 필드는 그대로."""
+    from app import service as svc
+    monkeypatch.setattr(svc, "_strategy_universe", lambda conn: ({}, {}, 1400.0))
+    r = client.post("/api/strategy/optimize", json={"preset": "donchian"})
+    assert r.status_code == 200
+    assert any("워크포워드" in w for w in r.json()["warnings"])

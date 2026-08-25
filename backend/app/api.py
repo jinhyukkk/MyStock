@@ -3,7 +3,7 @@ from typing import Literal
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
 
-from app import autotrade, db, fetchers, kis, preview, service
+from app import autotrade, db, fetchers, jobs, kis, preview, service, universe
 
 router = APIRouter(prefix="/api")
 
@@ -388,6 +388,58 @@ def strategy_optimize(body: StrategyOptimizeIn, request: Request):
             _conn(request), body.preset, body.initial_capital_krw)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+class WalkforwardIn(BaseModel):
+    preset: str = Field(min_length=1)
+    initial_capital_krw: float = Field(default=10_000_000.0, gt=0)
+    universe: str = Field(default="watchlist", pattern="^(watchlist|krx300)$")
+
+
+@router.post("/strategy/walkforward")
+def strategy_walkforward(body: WalkforwardIn, request: Request):
+    """워크포워드 검증 — 수 분 걸리는 작업이라 잡으로 돌리고 job_id를 돌려준다."""
+    from app import strategy as strategy_mod
+    if body.preset not in strategy_mod.PRESETS:
+        raise HTTPException(400, f"알 수 없는 전략: {body.preset}")
+    state_db = request.app.state.db
+    # 잡 스레드가 자기 연결을 얻도록 conn()을 잡 함수 안에서 부른다 —
+    # 요청 스레드의 연결을 넘기면 동시 접근으로 프로세스가 죽는다
+    job_id = jobs.start(lambda cb: service.run_walkforward(
+        state_db.conn(), body.preset, body.initial_capital_krw,
+        body.universe, progress_cb=cb))
+    return {"job_id": job_id}
+
+
+@router.get("/strategy/walkforward/{job_id}")
+def strategy_walkforward_status(job_id: str):
+    st = jobs.get(job_id)
+    if st is None:
+        raise HTTPException(404, "해당 작업을 찾을 수 없습니다.")
+    return st
+
+
+# ── 검증 유니버스 ────────────────────────────────────────────────────────────
+
+@router.post("/universe/collect")
+def universe_collect(request: Request):
+    """KRX 거래대금 상위 + 폐지 종목 시세 수집 — 약 2~3분, 잡으로 돌린다."""
+    state_db = request.app.state.db
+    job_id = jobs.start(lambda cb: universe.collect(state_db.conn(), progress_cb=cb))
+    return {"job_id": job_id}
+
+
+@router.get("/universe/collect/{job_id}")
+def universe_collect_status(job_id: str):
+    st = jobs.get(job_id)
+    if st is None:
+        raise HTTPException(404, "해당 작업을 찾을 수 없습니다.")
+    return st
+
+
+@router.get("/universe/status")
+def universe_status(request: Request):
+    return service.universe_status(_conn(request))
 
 
 # ── 자동매매 ────────────────────────────────────────────────────────────────
