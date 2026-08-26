@@ -891,9 +891,32 @@ UNIVERSE_WARNING = (
     "유니버스는 등록된 보유·관심 종목입니다. 직접 고른 종목이라 전략의 알파와 "
     "종목 선택 효과를 분리할 수 없습니다. 이 수치를 실전 기대값으로 쓰지 마세요.")
 
+# 횡단면 프리셋의 랭킹 분모가 이보다 작으면 "상위 K%"가 사실상 종목 1~2개다.
+# 수집 종목 수가 아니라 run()이 실제로 신호를 만든 수(universe_size)를 센다.
+XS_MIN_UNIVERSE = 50
+
+
+def _xs_universe_warning(preset: str, universe_size: int) -> str | None:
+    """횡단면 프리셋을 작은 유니버스로 돌렸을 때의 고지. 아니면 None.
+
+    수치 옆에 한계가 없으면 그 수치를 근거로 읽게 된다 — 자동매매의 유니버스
+    불일치 고지와 같은 취지다.
+    """
+    if strategy.PRESETS.get(preset, {}).get("kind") != strategy.CROSS_SECTIONAL:
+        return None
+    if universe_size >= XS_MIN_UNIVERSE:
+        return None
+    return (f"유니버스가 {universe_size}종목이라 상대 랭킹의 의미가 약합니다. "
+            f"횡단면 전략은 krx300 유니버스({XS_MIN_UNIVERSE}종목 이상)에서 "
+            "판정하세요.")
+
 
 def strategy_presets() -> list[dict]:
-    return [{"key": k, "label": v["label"], "params": v["params"]}
+    return [{"key": k, "label": v["label"], "params": v["params"],
+             "kind": v["kind"],
+             # 화면이 자동매매 드롭다운에서 걸러낼 수 있게 계산해 내보낸다 —
+             # 프론트가 kind 문자열을 직접 해석하면 규칙이 두 곳에 생긴다
+             "autotrade_capable": v["kind"] == strategy.TIMESERIES}
             for k, v in strategy.PRESETS.items()]
 
 
@@ -971,6 +994,7 @@ def run_strategy_backtest(conn, preset: str, params: dict | None = None,
                             else None)
 
     out["universe_warning"] = UNIVERSE_WARNING
+    out["xs_universe_warning"] = _xs_universe_warning(preset, out["universe_size"])
     out["fx_note"] = f"USD 종목은 현재 환율 {fx:,.0f}원 고정 근사입니다."
     out["initial_capital_krw"] = initial_capital_krw
     return out
@@ -1013,7 +1037,12 @@ def run_walkforward(conn, preset: str, initial_capital_krw: float = 10_000_000.0
     out["preset"] = preset
     out["universe"] = universe_kind
     out["regime_filter"] = regime_filter
+    # engine이 실제로 신호를 만든 종목 수(30봉 미만 필터 후)가 아니라 수집
+    # 프레임 수를 쓴다 — krx300은 964종목, 관심종목은 ~18종목이라 임계값
+    # 50과 멀어 30봉 미만 필터 차이만으로는 경고 여부가 바뀌지 않는다.
+    # 표시하는 수(경고 문구)와 비교에 쓰는 수가 같아야 하므로 이 근사를 쓴다.
     out["universe_size"] = len(frames)
+    out["xs_universe_warning"] = _xs_universe_warning(preset, out["universe_size"])
     out["initial_capital_krw"] = initial_capital_krw
     out["benchmark_label"] = fetchers.BENCHMARKS["KR"][1] if not bench.empty else None
     if universe_kind == "watchlist":

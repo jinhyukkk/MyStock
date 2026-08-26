@@ -727,3 +727,14 @@ def test_walkforward_regime_filter_needs_benchmark(client):
                     json={"preset": "donchian", "regime_filter": True})
     st = _poll_job(client, f"/api/strategy/walkforward/{r.json()['job_id']}")
     assert st["status"] == "error" and "벤치마크" in st["error"]
+
+
+def test_strategy_presets_declare_autotrade_capability(client):
+    """화면이 자동매매 드롭다운에서 횡단면을 걸러낼 수 있어야 한다."""
+    presets = {p["key"]: p for p in client.get("/api/strategy/presets").json()}
+    assert presets["abs_momentum"]["autotrade_capable"] is True
+    assert presets["abs_momentum"]["kind"] == "timeseries"
+    assert presets["xs_momentum"]["autotrade_capable"] is False
+    assert presets["xs_momentum"]["kind"] == "cross_sectional"
+    # 기존 필드는 그대로 — 빌드본이 구버전일 수 있다
+    assert presets["xs_momentum"]["label"] and presets["xs_momentum"]["params"]

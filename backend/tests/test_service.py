@@ -585,3 +585,22 @@ def test_detail_exposes_profile_and_snapshot(conn):
     assert d["snapshot"]["status"] == "pending"
     assert d["snapshot"]["note"]
     assert d["fundamentals"] == {"per": 15.0}  # 기존 계약 유지
+
+
+def test_cross_sectional_backtest_warns_about_a_thin_universe(conn, ohlcv_up):
+    """18종목 유니버스에서 상위 20%는 3.6종목 — 수치 옆에 한계가 없으면 근거로 읽힌다."""
+    for i in range(3):
+        sym = f"00593{i}"
+        db.upsert_ticker(conn, sym, "KR", f"종목{i}")
+        db.save_prices(conn, sym, ohlcv_up)
+    out = service.run_strategy_backtest(conn, "xs_momentum")
+    assert out["xs_universe_warning"] is not None
+    assert "3" in out["xs_universe_warning"]
+
+
+def test_timeseries_backtest_has_no_thin_universe_warning(conn, ohlcv_up):
+    """시계열 프리셋은 유니버스 크기와 무관하다 — 경고로 화면을 채우지 않는다."""
+    db.upsert_ticker(conn, "005930", "KR", "삼성전자")
+    db.save_prices(conn, "005930", ohlcv_up)
+    out = service.run_strategy_backtest(conn, "abs_momentum")
+    assert out["xs_universe_warning"] is None
