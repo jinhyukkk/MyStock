@@ -653,6 +653,17 @@ def test_autotrade_settings_roundtrip(client):
                       json={"preset": "없는전략"}).status_code == 400
 
 
+def test_autotrade_settings_carry_the_regime_filter(client):
+    """레짐 필터는 화면에서 끌 수 있어야 하고, 안 보내면 ON이 기본이다."""
+    client.put("/api/autotrade/settings",
+               json={"preset": "donchian", "regime_filter": False})
+    s = client.get("/api/autotrade/status").json()["settings"]
+    assert s["regime_filter"] is False
+    client.put("/api/autotrade/settings", json={"preset": "donchian"})
+    s = client.get("/api/autotrade/status").json()["settings"]
+    assert s["regime_filter"] is True
+
+
 # ── 워크포워드 · 유니버스 API ─────────────────────────────────────────────────
 
 def _poll_job(client, url, tries=200):

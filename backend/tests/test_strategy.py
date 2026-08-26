@@ -113,3 +113,31 @@ def test_both_presets_expose_a_continuous_strength():
     assert don["strength"].iloc[3] == pytest.approx(5 / 110)
     # 지표가 안 찬 앞부분은 0 — NaN을 남기면 정렬에서 튄다
     assert don["strength"].iloc[0] == 0.0
+
+
+# ── 시장 레짐 ──────────────────────────────────────────────────────────────
+# 이 함수가 검증(service.run_walkforward)과 실행(autotrade.plan)의 단일 진실
+# 원천이다. 두 곳이 각자 200일선을 계산하면 정합성은 다시 깨진다.
+
+def test_regime_series_is_true_only_above_the_moving_average():
+    """지수가 이동평균 위인 날만 True — 신규 진입을 허용하는 날의 정의."""
+    closes = list(range(100, 130)) + [90] * 5
+    reg = strategy.regime_series(_series(closes), ma=5)
+    assert bool(reg.iloc[20]) is True     # 상승 구간 — 종가 > 5일선
+    assert bool(reg.iloc[-1]) is False    # 급락 구간 — 종가 < 5일선
+
+
+def test_regime_series_is_false_while_the_moving_average_is_unfilled():
+    """MA가 안 찬 앞 구간은 False — 판단 근거가 없을 때는 진입을 막는 쪽이 보수적이다."""
+    reg = strategy.regime_series(_series([100, 101, 102, 103, 104]), ma=5)
+    assert list(reg.iloc[:4]) == [False, False, False, False]
+    assert reg.dtype == bool  # NaN이 남으면 engine이 NaN을 참으로 읽을 여지가 생긴다
+
+
+def test_regime_series_defaults_to_the_validated_200_day_window():
+    """기본 창은 워크포워드에서 검증한 200일 — 기본값이 다르면 검증과 실행이 갈린다."""
+    assert strategy.REGIME_MA == 200
+    closes = list(range(100, 400))
+    default = strategy.regime_series(_series(closes))
+    explicit = strategy.regime_series(_series(closes), ma=200)
+    pd.testing.assert_series_equal(default, explicit)

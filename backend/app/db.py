@@ -23,6 +23,10 @@ def get_conn(db_path: str | None = None) -> sqlite3.Connection:
                       ("exclude_from_stats", "INTEGER NOT NULL DEFAULT 0")):
         if col not in cols:
             conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {decl}")
+    if "fill_synced" not in [r[1] for r in
+                             conn.execute("PRAGMA table_info(auto_positions)")]:
+        conn.execute("ALTER TABLE auto_positions ADD COLUMN "
+                     "fill_synced INTEGER NOT NULL DEFAULT 0")
     if "ext_key" not in [r[1] for r in conn.execute("PRAGMA table_info(cash_flows)")]:
         conn.execute("ALTER TABLE cash_flows ADD COLUMN ext_key TEXT")
     # ALTER는 UNIQUE를 못 붙이므로 인덱스로 건다. schema.sql이 아니라 여기서 만드는 건
@@ -275,6 +279,17 @@ def upsert_auto_position(conn, symbol, qty, entry_price, stop, entry_date):
         "qty=excluded.qty, entry_price=excluded.entry_price, "
         "stop=excluded.stop, entry_date=excluded.entry_date",
         (symbol, qty, entry_price, stop, entry_date))
+    conn.commit()
+
+
+def sync_auto_fill(conn, symbol, entry_price, stop):
+    """진입가·손절선을 실체결 기준으로 고치고 보정 완료로 표시한다.
+
+    fill_synced를 함께 세우는 이유 — 이후 부분매도·추가매수로 계좌 평단이
+    움직여도 다시 손절선을 옮기지 않는다. 그때의 평단은 진입 체결가가 아니다.
+    """
+    conn.execute("UPDATE auto_positions SET entry_price=?, stop=?, fill_synced=1 "
+                 "WHERE symbol=?", (entry_price, stop, symbol))
     conn.commit()
 
 

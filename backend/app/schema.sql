@@ -86,9 +86,12 @@ CREATE TABLE IF NOT EXISTS company_cache (
 CREATE TABLE IF NOT EXISTS auto_positions (
   symbol TEXT PRIMARY KEY,
   qty REAL NOT NULL,
-  entry_price REAL NOT NULL,  -- 체결가 근사(주문 시점 직전 종가) — 화면에 근사임을 표시
+  entry_price REAL NOT NULL,  -- 주문 시점엔 직전 종가 근사, 이후 계좌 평단으로 보정
   stop REAL NOT NULL,
-  entry_date TEXT NOT NULL
+  entry_date TEXT NOT NULL,
+  -- 실체결 평단으로 한 번 보정했는지. 재보정을 막는다 — 부분매도·추가매수 이후의
+  -- 평단은 더 이상 진입 체결가가 아니라서, 그걸로 손절선을 옮기면 규칙이 흐트러진다.
+  fill_synced INTEGER NOT NULL DEFAULT 0
 );
 -- 자동매매 주문 원장. 계획(planned)→발송(sent)/실패(failed)가 전부 남아야
 -- "왜 샀는지/왜 안 샀는지"를 나중에 복기할 수 있다.

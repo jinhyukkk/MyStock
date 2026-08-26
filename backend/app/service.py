@@ -1001,9 +1001,10 @@ def run_walkforward(conn, preset: str, initial_capital_krw: float = 10_000_000.0
         if bench.empty:
             raise ValueError("레짐 필터에는 벤치마크(KOSPI) 이력이 필요합니다. "
                              "대시보드에서 갱신 후 다시 시도하세요.")
-        # 지수가 200일선 위일 때만 신규 진입 — MA가 안 찬 초기 구간은 close>NaN이
-        # False라 자동으로 진입이 막힌다(판단 근거 없음 = 보수적)
-        regime = bench["close"] > bench["close"].rolling(200).mean()
+        # 지수가 200일선 위일 때만 신규 진입. 식을 여기 두지 않고 strategy에서
+        # 가져오는 이유 — 자동매매(autotrade.plan)도 같은 함수를 부른다. 복제하면
+        # 창 하나만 어긋나도 검증한 전략과 주문 내는 전략이 갈린다.
+        regime = strategy.regime_series(bench["close"])
     out = engine.walkforward(
         frames, tickers, preset,
         initial_capital_krw=initial_capital_krw, fx=fx, membership=membership,

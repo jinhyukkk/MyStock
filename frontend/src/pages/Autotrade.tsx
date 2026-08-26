@@ -10,6 +10,7 @@ export default function Autotrade() {
   const [presets, setPresets] = useState<StrategyPreset[]>([])
   const [preset, setPreset] = useState('')
   const [params, setParams] = useState<Record<string, number>>({})
+  const [regimeFilter, setRegimeFilter] = useState(true)
   const [plan, setPlan] = useState<AutotradePlan | null>(null)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -19,6 +20,7 @@ export default function Autotrade() {
     setStatus(s)
     setPreset(s.settings.preset)
     setParams(s.settings.params)
+    setRegimeFilter(s.settings.regime_filter)
   }
 
   useEffect(() => {
@@ -32,7 +34,8 @@ export default function Autotrade() {
   async function saveSettings() {
     setBusy('save'); setError('')
     try {
-      await put('/api/autotrade/settings', { preset, params })
+      await put('/api/autotrade/settings',
+                { preset, params, regime_filter: regimeFilter })
       await reload()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -78,7 +81,8 @@ export default function Autotrade() {
         <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 4 }}>
           전략 연구실에서 검증한 규칙 그대로 오늘의 주문을 만듭니다(국내 종목만).
           장 시작 전에 계획을 확인하고 실행하세요. 진입은 시장가, 손절은 진입가
-          −2×ATR, 사이징은 1% 룰입니다. 수익을 보장하지 않습니다.
+          −2×ATR, 사이징은 1% 룰, 신규 진입은 KOSPI가 200일선 위일 때만입니다.
+          수익을 보장하지 않습니다.
         </div>
         {!status.configured && (
           <div className="warn" style={{ marginTop: 8, fontSize: 12 }}>
@@ -111,12 +115,24 @@ export default function Autotrade() {
                        { ...params, [k]: Number(e.target.value) })} />
             </label>
           ))}
+          <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
+            <input type="checkbox" checked={regimeFilter}
+                   onChange={e => setRegimeFilter(e.target.checked)} />
+            레짐 필터 (KOSPI 200일선 위에서만 진입)
+          </label>
           <button onClick={saveSettings} disabled={busy !== ''}>
             {busy === 'save' ? '저장 중…' : '설정 저장'}</button>
         </div>
         <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
           파라미터는 전략 연구실의 최적화에서 검증 성과가 좋았던 조합을 쓰세요.
         </div>
+        {!regimeFilter && (
+          <div className="warn" style={{ marginTop: 6, fontSize: 12 }}>
+            ⚠ 레짐 필터를 끈 구성은 krx300 워크포워드 검증에서 5폴드 전패
+            (초과수익 중앙값 −16.3%p, MDD −56%)했습니다. 켜면 MDD가 절반
+            (−28%)으로 줄어듭니다.
+          </div>
+        )}
       </div>
 
       <div className="card">
@@ -138,6 +154,16 @@ export default function Autotrade() {
               신호 기준일 {plan.as_of ?? '—'} · 총평가 ₩{fmt(plan.equity_krw)} ·
               예수금 ₩{fmt(plan.cash_krw)} · {plan.preset}{' '}
               {Object.entries(plan.params).map(([k, v]) => `${k}=${v}`).join(' ')}
+            </div>
+            <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 2 }}>
+              스캔 {plan.universe.size}종목(관심종목) · 레짐{' '}
+              {!plan.regime.enabled ? 'OFF'
+                : plan.regime.ok === null ? <span className="neg">판정 불가 — 신규 진입 차단</span>
+                : plan.regime.ok
+                  ? <span className="pos">통과 (지수 {fmt(plan.regime.bench_close!)} &gt;{' '}
+                      {plan.regime.ma}일선 {fmt(plan.regime.bench_ma!)})</span>
+                  : <span className="neg">차단 (지수 {fmt(plan.regime.bench_close!)} &lt;{' '}
+                      {plan.regime.ma}일선 {fmt(plan.regime.bench_ma!)})</span>}
             </div>
             {plan.warnings.map((w, i) => (
               <div key={i} className="warn" style={{ marginTop: 6, fontSize: 12 }}>⚠ {w}</div>
@@ -179,14 +205,15 @@ export default function Autotrade() {
           : <div className="table-scroll" style={{ marginTop: 8 }}>
               <table>
                 <thead><tr>
-                  <th>종목</th><th>수량</th><th>진입가(근사)</th><th>손절선</th><th>진입일</th>
+                  <th>종목</th><th>수량</th><th>진입가</th><th>손절선</th><th>진입일</th>
                 </tr></thead>
                 <tbody>
                   {status.positions.map(p => (
                     <tr key={p.symbol}>
                       <td>{p.symbol}</td>
                       <td>{fmt(p.qty)}</td>
-                      <td>₩{fmt(p.entry_price)}</td>
+                      <td>₩{fmt(p.entry_price)}
+                        {!p.fill_synced && <span style={{ color: 'var(--text-dim)' }}> (근사)</span>}</td>
                       <td>₩{fmt(p.stop)}</td>
                       <td>{p.entry_date}</td>
                     </tr>

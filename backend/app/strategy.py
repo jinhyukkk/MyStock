@@ -21,6 +21,23 @@ def momentum(close: pd.Series, lookback: int, skip: int) -> pd.Series:
     return base / base.shift(lookback) - 1
 
 
+REGIME_MA = 200  # 시장 레짐 판정 이동평균 — 워크포워드에서 검증한 창
+
+
+def regime_series(bench_close: pd.Series, ma: int = REGIME_MA) -> pd.Series:
+    """벤치마크가 이동평균 위인 날만 True — 신규 진입을 허용하는 날.
+
+    검증(service.run_walkforward)과 실행(autotrade.plan)이 **같은 함수**를
+    불러야 한다. 양쪽이 각자 200일선을 계산하면 창 하나만 어긋나도 검증한
+    전략과 주문 내는 전략이 다른 물건이 되고, 그 사실이 어디에도 안 남는다.
+
+    MA가 안 찬 앞 구간은 close > NaN이 False라 자동으로 진입이 막힌다 —
+    판단 근거가 없을 때 막는 쪽이 보수적이다. bool로 확정해 돌려주는 이유는
+    engine이 NaN을 참으로 읽을 여지를 남기지 않기 위해서다.
+    """
+    return (bench_close > bench_close.rolling(ma).mean()).fillna(False).astype(bool)
+
+
 def abs_momentum(df: pd.DataFrame, params: dict) -> pd.DataFrame:
     """절대(시계열) 모멘텀 — 자기 과거 수익률의 부호를 본다.
 

@@ -448,6 +448,8 @@ def universe_status(request: Request):
 class AutotradeSettingsIn(BaseModel):
     preset: str = Field(min_length=1)
     params: dict[str, int] | None = None
+    # 생략하면 ON — 워크포워드에서 유효성이 확인된 유일한 구성이다
+    regime_filter: bool = True
 
 
 class AutotradeExecuteIn(BaseModel):
@@ -471,7 +473,8 @@ def autotrade_status(request: Request):
 @router.put("/autotrade/settings")
 def autotrade_settings(body: AutotradeSettingsIn, request: Request):
     try:
-        autotrade.save_settings(_conn(request), body.preset, body.params or {})
+        autotrade.save_settings(_conn(request), body.preset, body.params or {},
+                                body.regime_filter)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True}

@@ -522,9 +522,11 @@ export interface UniverseStatus {
 // ── 자동매매 ────────────────────────────────────────────────────────────────
 export interface AutoPosition {
   symbol: string; qty: number;
-  /** 주문 시점 직전 종가 근사 — 실제 체결가와 다를 수 있다 */
+  /** fill_synced가 0이면 주문 시점 직전 종가 근사, 1이면 계좌 평단으로 보정된 값 */
   entry_price: number;
   stop: number; entry_date: string;
+  /** 실체결 평단으로 보정을 마쳤는지 (0=근사값) */
+  fill_synced: number;
 }
 export interface AutoOrderRow {
   id: number; created_at: string; mode: string;
@@ -537,7 +539,11 @@ export interface AutoOrderRow {
 export interface AutotradeStatus {
   configured: boolean;
   mode: string;
-  settings: { preset: string; params: Record<string, number> };
+  settings: {
+    preset: string; params: Record<string, number>;
+    /** 지수가 200일선 위일 때만 신규 진입. 끄면 검증에서 전패한 구성이 된다 */
+    regime_filter: boolean;
+  };
   positions: AutoPosition[];
   orders: AutoOrderRow[];
 }
@@ -555,6 +561,13 @@ export interface AutotradePlan {
   as_of: string | null;
   mode: string;
   preset: string; params: Record<string, number>;
+  /** 진입을 허용/차단한 근거. ok=null이면 지수 이력이 없어 판정 불가(=차단) */
+  regime: {
+    enabled: boolean; ok: boolean | null; ma: number;
+    bench_close: number | null; bench_ma: number | null; as_of: string | null;
+  };
+  /** 신호를 스캔한 모집단 — 검증(krx300)과 다르면 warnings에 고지가 실린다 */
+  universe: { kind: string; size: number };
   equity_krw: number; cash_krw: number;
   orders: PlannedOrder[];
   warnings: string[];
