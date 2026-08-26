@@ -777,10 +777,13 @@ def test_cross_sectional_signals_stay_aligned_with_suspended_bars():
                      {"lookback": 126, "skip": 21, "enter_pct": 30, "exit_pct": 60},
                      initial_capital_krw=10_000_000.0, fx=1300.0)
     valid_opens = set(f["open"].dropna().round(4))
-    for t in out["trades"]:
-        if t["symbol"] == victim:
-            assert t["entry_price"] in valid_opens, \
-                "진입가가 그 종목의 실제 시가가 아니면 신호가 밀린 것이다"
+    victim_trades = [t for t in out["trades"] if t["symbol"] == victim]
+    # 단언을 루프 안에만 두면 회귀로 victim이 거래를 안 하게 될 때 아무것도
+    # 검증하지 않고 통과한다 — 정확히 이 테스트가 잡아야 하는 상황이다
+    assert victim_trades, "모멘텀 1위가 거래를 안 했다 — 신호가 밀렸다는 뜻이다"
+    for t in victim_trades:
+        assert t["entry_price"] in valid_opens, \
+            "진입가가 그 종목의 실제 시가가 아니면 신호가 밀린 것이다"
 
 
 def test_cross_sectional_membership_restricts_the_ranking_denominator():

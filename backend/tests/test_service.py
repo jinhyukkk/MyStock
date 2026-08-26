@@ -594,8 +594,13 @@ def test_cross_sectional_backtest_warns_about_a_thin_universe(conn, ohlcv_up):
         db.upsert_ticker(conn, sym, "KR", f"종목{i}")
         db.save_prices(conn, sym, ohlcv_up)
     out = service.run_strategy_backtest(conn, "xs_momentum")
-    assert out["xs_universe_warning"] is not None
-    assert "3" in out["xs_universe_warning"]
+    # 부분 문자열("3" in ...)로 재면 문구에 다른 숫자가 들어와도 통과한다.
+    # 실제 유니버스 크기와 임계값이 문구에 그대로 실렸는지를 본다.
+    assert out["universe_size"] == 3
+    assert out["xs_universe_warning"] == service._xs_universe_warning(
+        "xs_momentum", 3)
+    assert "유니버스가 3종목" in out["xs_universe_warning"]
+    assert str(service.XS_MIN_UNIVERSE) in out["xs_universe_warning"]
 
 
 def test_timeseries_backtest_has_no_thin_universe_warning(conn, ohlcv_up):
