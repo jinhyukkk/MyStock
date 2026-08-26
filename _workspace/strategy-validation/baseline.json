@@ -1,0 +1,785 @@
+{
+ "krx300_abs": {
+  "folds": [
+   {
+    "fold": 1,
+    "train_end": "2022-01-12",
+    "valid_start": "2022-01-13",
+    "valid_end": "2022-12-13",
+    "params": {
+     "lookback": 63,
+     "skip": 0,
+     "trend_ma": 200
+    },
+    "valid": {
+     "cagr": -38.34,
+     "mdd": -36.33,
+     "sharpe": -2.03,
+     "win_rate": 19.0,
+     "trade_count": 79,
+     "final_equity_krw": 6493465.0
+    },
+    "bench_cagr": -22.01,
+    "excess_pct": -16.33
+   },
+   {
+    "fold": 2,
+    "train_end": "2022-12-13",
+    "valid_start": "2022-12-14",
+    "valid_end": "2023-11-14",
+    "params": {
+     "lookback": 63,
+     "skip": 0,
+     "trend_ma": 200
+    },
+    "valid": {
+     "cagr": -13.24,
+     "mdd": -42.47,
+     "sharpe": -0.21,
+     "win_rate": 28.6,
+     "trade_count": 49,
+     "final_equity_krw": 8809324.0
+    },
+    "bench_cagr": 1.59,
+    "excess_pct": -14.83
+   },
+   {
+    "fold": 3,
+    "train_end": "2023-11-14",
+    "valid_start": "2023-11-15",
+    "valid_end": "2024-10-18",
+    "params": {
+     "lookback": 252,
+     "skip": 21,
+     "trend_ma": 100
+    },
+    "valid": {
+     "cagr": -9.84,
+     "mdd": -19.88,
+     "sharpe": -0.42,
+     "win_rate": 22.2,
+     "trade_count": 36,
+     "final_equity_krw": 9119977.0
+    },
+    "bench_cagr": 4.86,
+    "excess_pct": -14.7
+   },
+   {
+    "fold": 4,
+    "train_end": "2024-10-20",
+    "valid_start": "2024-10-21",
+    "valid_end": "2025-09-18",
+    "params": {
+     "lookback": 252,
+     "skip": 21,
+     "trend_ma": 100
+    },
+    "valid": {
+     "cagr": 18.45,
+     "mdd": -15.88,
+     "sharpe": 1.02,
+     "win_rate": 23.3,
+     "trade_count": 30,
+     "final_equity_krw": 11623985.0
+    },
+    "bench_cagr": 37.68,
+    "excess_pct": -19.23
+   },
+   {
+    "fold": 5,
+    "train_end": "2025-09-18",
+    "valid_start": "2025-09-19",
+    "valid_end": "2026-08-25",
+    "params": {
+     "lookback": 252,
+     "skip": 0,
+     "trend_ma": 100
+    },
+    "valid": {
+     "cagr": -17.01,
+     "mdd": -34.67,
+     "sharpe": -0.29,
+     "win_rate": 12.2,
+     "trade_count": 41,
+     "final_equity_krw": 8472885.0
+    },
+    "bench_cagr": 112.84,
+    "excess_pct": -129.85
+   }
+  ],
+  "summary": {
+   "median_excess_pct": -16.33,
+   "positive_folds": 0,
+   "total_folds": 5,
+   "param_stability": {
+    "distinct_combos": 3,
+    "note": "불안정 — 폴드마다 최적 파라미터가 달라 채택 비추천"
+   }
+  },
+  "stitched_metrics": {
+   "cagr": -13.85,
+   "mdd": -56.49,
+   "sharpe": -0.38,
+   "win_rate": null,
+   "trade_count": 0,
+   "final_equity_krw": 5138060.0
+  },
+  "preset": "abs_momentum",
+  "universe": "krx300",
+  "regime_filter": false,
+  "universe_size": 964,
+  "initial_capital_krw": 10000000.0,
+  "benchmark_label": "KOSPI",
+  "universe_warning": "폐지 종목은 마지막 종가 청산 근사라 실손실(정리매매 급락)을 과소평가할 수 있습니다."
+ },
+ "krx300_don": {
+  "folds": [
+   {
+    "fold": 1,
+    "train_end": "2022-01-12",
+    "valid_start": "2022-01-13",
+    "valid_end": "2022-12-13",
+    "params": {
+     "entry_n": 55,
+     "exit_n": 10
+    },
+    "valid": {
+     "cagr": -29.67,
+     "mdd": -31.66,
+     "sharpe": -1.83,
+     "win_rate": 25.9,
+     "trade_count": 81,
+     "final_equity_krw": 7303596.0
+    },
+    "bench_cagr": -22.01,
+    "excess_pct": -7.66
+   },
+   {
+    "fold": 2,
+    "train_end": "2022-12-13",
+    "valid_start": "2022-12-14",
+    "valid_end": "2023-11-14",
+    "params": {
+     "entry_n": 80,
+     "exit_n": 40
+    },
+    "valid": {
+     "cagr": 69.5,
+     "mdd": -15.99,
+     "sharpe": 1.71,
+     "win_rate": 29.7,
+     "trade_count": 37,
+     "final_equity_krw": 16017992.0
+    },
+    "bench_cagr": 1.59,
+    "excess_pct": 67.91
+   },
+   {
+    "fold": 3,
+    "train_end": "2023-11-14",
+    "valid_start": "2023-11-15",
+    "valid_end": "2024-10-18",
+    "params": {
+     "entry_n": 80,
+     "exit_n": 40
+    },
+    "valid": {
+     "cagr": 6.17,
+     "mdd": -29.92,
+     "sharpe": 0.35,
+     "win_rate": 26.2,
+     "trade_count": 42,
+     "final_equity_krw": 10547040.0
+    },
+    "bench_cagr": 4.86,
+    "excess_pct": 1.31
+   },
+   {
+    "fold": 4,
+    "train_end": "2024-10-20",
+    "valid_start": "2024-10-21",
+    "valid_end": "2025-09-18",
+    "params": {
+     "entry_n": 80,
+     "exit_n": 40
+    },
+    "valid": {
+     "cagr": -20.78,
+     "mdd": -36.68,
+     "sharpe": -0.75,
+     "win_rate": 16.9,
+     "trade_count": 59,
+     "final_equity_krw": 8130035.0
+    },
+    "bench_cagr": 37.68,
+    "excess_pct": -58.46
+   },
+   {
+    "fold": 5,
+    "train_end": "2025-09-18",
+    "valid_start": "2025-09-19",
+    "valid_end": "2026-08-25",
+    "params": {
+     "entry_n": 55,
+     "exit_n": 10
+    },
+    "valid": {
+     "cagr": -19.43,
+     "mdd": -37.1,
+     "sharpe": -0.31,
+     "win_rate": 23.2,
+     "trade_count": 95,
+     "final_equity_krw": 8252492.0
+    },
+    "bench_cagr": 112.84,
+    "excess_pct": -132.27
+   }
+  ],
+  "summary": {
+   "median_excess_pct": -7.66,
+   "positive_folds": 2,
+   "total_folds": 5,
+   "param_stability": {
+    "distinct_combos": 2,
+    "note": "보통"
+   }
+  },
+  "stitched_metrics": {
+   "cagr": -4.14,
+   "mdd": -50.39,
+   "sharpe": 0.02,
+   "win_rate": null,
+   "trade_count": 0,
+   "final_equity_krw": 8278524.0
+  },
+  "preset": "donchian",
+  "universe": "krx300",
+  "regime_filter": false,
+  "universe_size": 964,
+  "initial_capital_krw": 10000000.0,
+  "benchmark_label": "KOSPI",
+  "universe_warning": "폐지 종목은 마지막 종가 청산 근사라 실손실(정리매매 급락)을 과소평가할 수 있습니다."
+ },
+ "krx300_abs_regime": {
+  "folds": [
+   {
+    "fold": 1,
+    "train_end": "2022-01-12",
+    "valid_start": "2022-01-13",
+    "valid_end": "2022-12-13",
+    "params": {
+     "lookback": 63,
+     "skip": 0,
+     "trend_ma": 100
+    },
+    "valid": {
+     "cagr": 0.0,
+     "mdd": 0.0,
+     "sharpe": null,
+     "win_rate": null,
+     "trade_count": 0,
+     "final_equity_krw": 10000000.0
+    },
+    "bench_cagr": -22.01,
+    "excess_pct": 22.01
+   },
+   {
+    "fold": 2,
+    "train_end": "2022-12-13",
+    "valid_start": "2022-12-14",
+    "valid_end": "2023-11-14",
+    "params": {
+     "lookback": 63,
+     "skip": 0,
+     "trend_ma": 100
+    },
+    "valid": {
+     "cagr": 12.92,
+     "mdd": -21.48,
+     "sharpe": 0.59,
+     "win_rate": 34.5,
+     "trade_count": 29,
+     "final_equity_krw": 11145533.0
+    },
+    "bench_cagr": 1.59,
+    "excess_pct": 11.33
+   },
+   {
+    "fold": 3,
+    "train_end": "2023-11-14",
+    "valid_start": "2023-11-15",
+    "valid_end": "2024-10-18",
+    "params": {
+     "lookback": 126,
+     "skip": 21,
+     "trend_ma": 200
+    },
+    "valid": {
+     "cagr": 7.38,
+     "mdd": -12.44,
+     "sharpe": 0.5,
+     "win_rate": 27.6,
+     "trade_count": 29,
+     "final_equity_krw": 10653315.0
+    },
+    "bench_cagr": 4.86,
+    "excess_pct": 2.52
+   },
+   {
+    "fold": 4,
+    "train_end": "2024-10-20",
+    "valid_start": "2024-10-21",
+    "valid_end": "2025-09-18",
+    "params": {
+     "lookback": 126,
+     "skip": 21,
+     "trend_ma": 200
+    },
+    "valid": {
+     "cagr": 16.68,
+     "mdd": -11.76,
+     "sharpe": 1.06,
+     "win_rate": 27.3,
+     "trade_count": 22,
+     "final_equity_krw": 11470135.0
+    },
+    "bench_cagr": 37.68,
+    "excess_pct": -21.0
+   },
+   {
+    "fold": 5,
+    "train_end": "2025-09-18",
+    "valid_start": "2025-09-19",
+    "valid_end": "2026-08-25",
+    "params": {
+     "lookback": 126,
+     "skip": 21,
+     "trend_ma": 200
+    },
+    "valid": {
+     "cagr": 0.26,
+     "mdd": -28.25,
+     "sharpe": 0.17,
+     "win_rate": 23.1,
+     "trade_count": 39,
+     "final_equity_krw": 10023181.0
+    },
+    "bench_cagr": 112.84,
+    "excess_pct": -112.58
+   }
+  ],
+  "summary": {
+   "median_excess_pct": 2.52,
+   "positive_folds": 3,
+   "total_folds": 5,
+   "param_stability": {
+    "distinct_combos": 2,
+    "note": "보통"
+   }
+  },
+  "stitched_metrics": {
+   "cagr": 7.21,
+   "mdd": -28.25,
+   "sharpe": 0.43,
+   "win_rate": null,
+   "trade_count": 0,
+   "final_equity_krw": 13650851.0
+  },
+  "preset": "abs_momentum",
+  "universe": "krx300",
+  "regime_filter": true,
+  "universe_size": 964,
+  "initial_capital_krw": 10000000.0,
+  "benchmark_label": "KOSPI",
+  "universe_warning": "폐지 종목은 마지막 종가 청산 근사라 실손실(정리매매 급락)을 과소평가할 수 있습니다."
+ },
+ "krx300_don_regime": {
+  "folds": [
+   {
+    "fold": 1,
+    "train_end": "2022-01-12",
+    "valid_start": "2022-01-13",
+    "valid_end": "2022-12-13",
+    "params": {
+     "entry_n": 20,
+     "exit_n": 10
+    },
+    "valid": {
+     "cagr": 0.0,
+     "mdd": 0.0,
+     "sharpe": null,
+     "win_rate": null,
+     "trade_count": 0,
+     "final_equity_krw": 10000000.0
+    },
+    "bench_cagr": -22.01,
+    "excess_pct": 22.01
+   },
+   {
+    "fold": 2,
+    "train_end": "2022-12-13",
+    "valid_start": "2022-12-14",
+    "valid_end": "2023-11-14",
+    "params": {
+     "entry_n": 20,
+     "exit_n": 10
+    },
+    "valid": {
+     "cagr": 40.19,
+     "mdd": -23.1,
+     "sharpe": 1.17,
+     "win_rate": 31.0,
+     "trade_count": 58,
+     "final_equity_krw": 13520801.0
+    },
+    "bench_cagr": 1.59,
+    "excess_pct": 38.6
+   },
+   {
+    "fold": 3,
+    "train_end": "2023-11-14",
+    "valid_start": "2023-11-15",
+    "valid_end": "2024-10-18",
+    "params": {
+     "entry_n": 55,
+     "exit_n": 40
+    },
+    "valid": {
+     "cagr": 9.49,
+     "mdd": -26.69,
+     "sharpe": 0.46,
+     "win_rate": 22.7,
+     "trade_count": 44,
+     "final_equity_krw": 10839068.0
+    },
+    "bench_cagr": 4.86,
+    "excess_pct": 4.63
+   },
+   {
+    "fold": 4,
+    "train_end": "2024-10-20",
+    "valid_start": "2024-10-21",
+    "valid_end": "2025-09-18",
+    "params": {
+     "entry_n": 55,
+     "exit_n": 40
+    },
+    "valid": {
+     "cagr": 7.73,
+     "mdd": -17.71,
+     "sharpe": 0.47,
+     "win_rate": 21.1,
+     "trade_count": 38,
+     "final_equity_krw": 10684504.0
+    },
+    "bench_cagr": 37.68,
+    "excess_pct": -29.95
+   },
+   {
+    "fold": 5,
+    "train_end": "2025-09-18",
+    "valid_start": "2025-09-19",
+    "valid_end": "2026-08-25",
+    "params": {
+     "entry_n": 55,
+     "exit_n": 40
+    },
+    "valid": {
+     "cagr": -14.49,
+     "mdd": -31.89,
+     "sharpe": -0.19,
+     "win_rate": 16.7,
+     "trade_count": 54,
+     "final_equity_krw": 8701253.0
+    },
+    "bench_cagr": 112.84,
+    "excess_pct": -127.33
+   }
+  ],
+  "summary": {
+   "median_excess_pct": 4.63,
+   "positive_folds": 3,
+   "total_folds": 5,
+   "param_stability": {
+    "distinct_combos": 2,
+    "note": "보통"
+   }
+  },
+  "stitched_metrics": {
+   "cagr": 7.17,
+   "mdd": -31.89,
+   "sharpe": 0.39,
+   "win_rate": null,
+   "trade_count": 0,
+   "final_equity_krw": 13624812.0
+  },
+  "preset": "donchian",
+  "universe": "krx300",
+  "regime_filter": true,
+  "universe_size": 964,
+  "initial_capital_krw": 10000000.0,
+  "benchmark_label": "KOSPI",
+  "universe_warning": "폐지 종목은 마지막 종가 청산 근사라 실손실(정리매매 급락)을 과소평가할 수 있습니다."
+ },
+ "watch_abs": {
+  "folds": [
+   {
+    "fold": 1,
+    "train_end": "2024-01-01",
+    "valid_start": "2024-01-02",
+    "valid_end": "2024-07-13",
+    "params": {
+     "lookback": 252,
+     "skip": 0,
+     "trend_ma": 200
+    },
+    "valid": {
+     "cagr": 99.26,
+     "mdd": -11.18,
+     "sharpe": 3.36,
+     "win_rate": 62.5,
+     "trade_count": 8,
+     "final_equity_krw": 16955748.0
+    },
+    "bench_cagr": 9.25,
+    "excess_pct": 90.01
+   },
+   {
+    "fold": 2,
+    "train_end": "2024-07-13",
+    "valid_start": "2024-07-14",
+    "valid_end": "2025-01-23",
+    "params": {
+     "lookback": 63,
+     "skip": 21,
+     "trend_ma": 200
+    },
+    "valid": {
+     "cagr": -0.9,
+     "mdd": -15.73,
+     "sharpe": 0.04,
+     "win_rate": 34.8,
+     "trade_count": 46,
+     "final_equity_krw": 9931093.0
+    },
+    "bench_cagr": -21.54,
+    "excess_pct": 20.64
+   },
+   {
+    "fold": 3,
+    "train_end": "2025-01-23",
+    "valid_start": "2025-01-24",
+    "valid_end": "2025-08-05",
+    "params": {
+     "lookback": 252,
+     "skip": 0,
+     "trend_ma": 200
+    },
+    "valid": {
+     "cagr": -1.2,
+     "mdd": -20.04,
+     "sharpe": -0.01,
+     "win_rate": 26.7,
+     "trade_count": 30,
+     "final_equity_krw": 9908121.0
+    },
+    "bench_cagr": 35.31,
+    "excess_pct": -36.51
+   },
+   {
+    "fold": 4,
+    "train_end": "2025-08-05",
+    "valid_start": "2025-08-06",
+    "valid_end": "2026-02-14",
+    "params": {
+     "lookback": 252,
+     "skip": 0,
+     "trend_ma": 200
+    },
+    "valid": {
+     "cagr": 146.34,
+     "mdd": -17.38,
+     "sharpe": 3.38,
+     "win_rate": 42.9,
+     "trade_count": 14,
+     "final_equity_krw": 19875369.0
+    },
+    "bench_cagr": 104.06,
+    "excess_pct": 42.28
+   },
+   {
+    "fold": 5,
+    "train_end": "2026-02-14",
+    "valid_start": "2026-02-15",
+    "valid_end": "2026-08-26",
+    "params": {
+     "lookback": 126,
+     "skip": 21,
+     "trend_ma": 200
+    },
+    "valid": {
+     "cagr": 17.12,
+     "mdd": -26.72,
+     "sharpe": 0.71,
+     "win_rate": 36.0,
+     "trade_count": 25,
+     "final_equity_krw": 11279654.0
+    },
+    "bench_cagr": 186.28,
+    "excess_pct": -169.16
+   }
+  ],
+  "summary": {
+   "median_excess_pct": 20.64,
+   "positive_folds": 3,
+   "total_folds": 5,
+   "param_stability": {
+    "distinct_combos": 3,
+    "note": "불안정 — 폴드마다 최적 파라미터가 달라 채택 비추천"
+   }
+  },
+  "stitched_metrics": {
+   "cagr": 41.03,
+   "mdd": -26.72,
+   "sharpe": 1.64,
+   "win_rate": null,
+   "trade_count": 0,
+   "final_equity_krw": 37403848.0
+  },
+  "preset": "abs_momentum",
+  "universe": "watchlist",
+  "regime_filter": false,
+  "universe_size": 27,
+  "initial_capital_krw": 10000000.0,
+  "benchmark_label": "KOSPI",
+  "universe_warning": "유니버스는 등록된 보유·관심 종목입니다. 직접 고른 종목이라 전략의 알파와 종목 선택 효과를 분리할 수 없습니다. 이 수치를 실전 기대값으로 쓰지 마세요."
+ },
+ "watch_don": {
+  "folds": [
+   {
+    "fold": 1,
+    "train_end": "2024-01-01",
+    "valid_start": "2024-01-02",
+    "valid_end": "2024-07-13",
+    "params": {
+     "entry_n": 120,
+     "exit_n": 40
+    },
+    "valid": {
+     "cagr": 57.84,
+     "mdd": -12.96,
+     "sharpe": 2.36,
+     "win_rate": 38.5,
+     "trade_count": 13,
+     "final_equity_krw": 14184291.0
+    },
+    "bench_cagr": 9.25,
+    "excess_pct": 48.59
+   },
+   {
+    "fold": 2,
+    "train_end": "2024-07-13",
+    "valid_start": "2024-07-14",
+    "valid_end": "2025-01-23",
+    "params": {
+     "entry_n": 120,
+     "exit_n": 40
+    },
+    "valid": {
+     "cagr": -6.33,
+     "mdd": -13.58,
+     "sharpe": -0.45,
+     "win_rate": 17.4,
+     "trade_count": 23,
+     "final_equity_krw": 9511414.0
+    },
+    "bench_cagr": -21.54,
+    "excess_pct": 15.21
+   },
+   {
+    "fold": 3,
+    "train_end": "2025-01-23",
+    "valid_start": "2025-01-24",
+    "valid_end": "2025-08-05",
+    "params": {
+     "entry_n": 120,
+     "exit_n": 40
+    },
+    "valid": {
+     "cagr": -5.75,
+     "mdd": -8.03,
+     "sharpe": -0.53,
+     "win_rate": 27.8,
+     "trade_count": 18,
+     "final_equity_krw": 9556220.0
+    },
+    "bench_cagr": 35.31,
+    "excess_pct": -41.06
+   },
+   {
+    "fold": 4,
+    "train_end": "2025-08-05",
+    "valid_start": "2025-08-06",
+    "valid_end": "2026-02-14",
+    "params": {
+     "entry_n": 120,
+     "exit_n": 40
+    },
+    "valid": {
+     "cagr": 100.81,
+     "mdd": -16.67,
+     "sharpe": 2.72,
+     "win_rate": 41.7,
+     "trade_count": 12,
+     "final_equity_krw": 17009668.0
+    },
+    "bench_cagr": 104.06,
+    "excess_pct": -3.25
+   },
+   {
+    "fold": 5,
+    "train_end": "2026-02-14",
+    "valid_start": "2026-02-15",
+    "valid_end": "2026-08-26",
+    "params": {
+     "entry_n": 80,
+     "exit_n": 40
+    },
+    "valid": {
+     "cagr": 16.3,
+     "mdd": -29.26,
+     "sharpe": 0.63,
+     "win_rate": 30.4,
+     "trade_count": 23,
+     "final_equity_krw": 11219437.0
+    },
+    "bench_cagr": 186.28,
+    "excess_pct": -169.98
+   }
+  ],
+  "summary": {
+   "median_excess_pct": -3.25,
+   "positive_folds": 2,
+   "total_folds": 5,
+   "param_stability": {
+    "distinct_combos": 2,
+    "note": "보통"
+   }
+  },
+  "stitched_metrics": {
+   "cagr": 26.44,
+   "mdd": -29.26,
+   "sharpe": 1.18,
+   "win_rate": null,
+   "trade_count": 0,
+   "final_equity_krw": 24604002.0
+  },
+  "preset": "donchian",
+  "universe": "watchlist",
+  "regime_filter": false,
+  "universe_size": 27,
+  "initial_capital_krw": 10000000.0,
+  "benchmark_label": "KOSPI",
+  "universe_warning": "유니버스는 등록된 보유·관심 종목입니다. 직접 고른 종목이라 전략의 알파와 종목 선택 효과를 분리할 수 없습니다. 이 수치를 실전 기대값으로 쓰지 마세요."
+ }
+}
