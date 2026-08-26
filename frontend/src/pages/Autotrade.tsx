@@ -24,8 +24,13 @@ export default function Autotrade() {
   }
 
   useEffect(() => {
-    Promise.all([reload(), get<StrategyPreset[]>('/api/strategy/presets').then(setPresets)])
-      .catch(e => setError(e instanceof Error ? e.message : String(e)))
+    Promise.all([
+      reload(),
+      get<StrategyPreset[]>('/api/strategy/presets')
+        // 횡단면 전략은 관심종목 모집단에서 상대 랭킹의 의미가 달라져
+        // 자동매매 대상이 아니다 — 애초에 고를 수 없게 한다
+        .then(ps => setPresets(ps.filter(p => p.autotrade_capable))),
+    ]).catch(e => setError(e instanceof Error ? e.message : String(e)))
   }, [])
 
   const current = presets.find(p => p.key === preset)

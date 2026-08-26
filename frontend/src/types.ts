@@ -469,6 +469,10 @@ export interface OptimizeResult {
 }
 export interface StrategyPreset {
   key: string; label: string; params: Record<string, StrategyParamMeta>;
+  /** 'timeseries' | 'cross_sectional' — 횡단면은 유니버스 전체를 봐야 신호가 나온다 */
+  kind: string;
+  /** 자동매매에서 실행 가능한지. 백엔드가 판단해 내보낸다(규칙을 두 곳에 두지 않는다) */
+  autotrade_capable: boolean;
 }
 
 /** engine.metrics 그대로 — StrategyMetrics의 bench 필드는 백테스트 API가
