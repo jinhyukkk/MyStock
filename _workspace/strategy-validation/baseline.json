@@ -781,5 +781,211 @@
   "initial_capital_krw": 10000000.0,
   "benchmark_label": "KOSPI",
   "universe_warning": "유니버스는 등록된 보유·관심 종목입니다. 직접 고른 종목이라 전략의 알파와 종목 선택 효과를 분리할 수 없습니다. 이 수치를 실전 기대값으로 쓰지 마세요."
+ },
+ "krx300_xs": {
+  "summary": {
+   "median_excess_pct": -16.11,
+   "positive_folds": 1,
+   "total_folds": 5,
+   "param_stability": {
+    "distinct_combos": 3,
+    "note": "불안정 — 폴드마다 최적 파라미터가 달라 채택 비추천"
+   }
+  },
+  "stitched": {
+   "cagr": -7.42,
+   "mdd": -35.99,
+   "sharpe": -0.26,
+   "win_rate": null,
+   "trade_count": 0,
+   "final_equity_krw": 7085181.0
+  },
+  "universe_size": 964,
+  "folds": [
+   {
+    "fold": 1,
+    "valid_start": "2022-01-13",
+    "valid_end": "2022-12-13",
+    "params": {
+     "lookback": 252,
+     "skip": 21,
+     "enter_pct": 30,
+     "exit_pct": 60
+    },
+    "cagr": -29.42,
+    "mdd": -27.52,
+    "trades": 43,
+    "bench_cagr": -22.01,
+    "excess": -7.41
+   },
+   {
+    "fold": 2,
+    "valid_start": "2022-12-14",
+    "valid_end": "2023-11-14",
+    "params": {
+     "lookback": 126,
+     "skip": 21,
+     "enter_pct": 20,
+     "exit_pct": 40
+    },
+    "cagr": 14.51,
+    "mdd": -21.2,
+    "trades": 31,
+    "bench_cagr": 1.59,
+    "excess": 12.92
+   },
+   {
+    "fold": 3,
+    "valid_start": "2023-11-15",
+    "valid_end": "2024-10-18",
+    "params": {
+     "lookback": 126,
+     "skip": 21,
+     "enter_pct": 10,
+     "exit_pct": 40
+    },
+    "cagr": -11.25,
+    "mdd": -24.53,
+    "trades": 38,
+    "bench_cagr": 4.86,
+    "excess": -16.11
+   },
+   {
+    "fold": 4,
+    "valid_start": "2024-10-21",
+    "valid_end": "2025-09-18",
+    "params": {
+     "lookback": 126,
+     "skip": 21,
+     "enter_pct": 10,
+     "exit_pct": 40
+    },
+    "cagr": 20.64,
+    "mdd": -13.52,
+    "trades": 40,
+    "bench_cagr": 37.68,
+    "excess": -17.04
+   },
+   {
+    "fold": 5,
+    "valid_start": "2025-09-19",
+    "valid_end": "2026-08-25",
+    "params": {
+     "lookback": 126,
+     "skip": 21,
+     "enter_pct": 10,
+     "exit_pct": 40
+    },
+    "cagr": -21.51,
+    "mdd": -28.14,
+    "trades": 48,
+    "bench_cagr": 112.84,
+    "excess": -134.35
+   }
+  ],
+  "elapsed_sec": 176.7
+ },
+ "krx300_xs_regime": {
+  "summary": {
+   "median_excess_pct": -9.38,
+   "positive_folds": 2,
+   "total_folds": 5,
+   "param_stability": {
+    "distinct_combos": 4,
+    "note": "불안정 — 폴드마다 최적 파라미터가 달라 채택 비추천"
+   }
+  },
+  "stitched": {
+   "cagr": 2.68,
+   "mdd": -29.03,
+   "sharpe": 0.23,
+   "win_rate": null,
+   "trade_count": 0,
+   "final_equity_krw": 11254301.0
+  },
+  "universe_size": 964,
+  "folds": [
+   {
+    "fold": 1,
+    "valid_start": "2022-01-13",
+    "valid_end": "2022-12-13",
+    "params": {
+     "lookback": 126,
+     "skip": 21,
+     "enter_pct": 10,
+     "exit_pct": 40
+    },
+    "cagr": 0.0,
+    "mdd": 0.0,
+    "trades": 0,
+    "bench_cagr": -22.01,
+    "excess": 22.01
+   },
+   {
+    "fold": 2,
+    "valid_start": "2022-12-14",
+    "valid_end": "2023-11-14",
+    "params": {
+     "lookback": 126,
+     "skip": 21,
+     "enter_pct": 10,
+     "exit_pct": 40
+    },
+    "cagr": 13.22,
+    "mdd": -17.51,
+    "trades": 27,
+    "bench_cagr": 1.59,
+    "excess": 11.63
+   },
+   {
+    "fold": 3,
+    "valid_start": "2023-11-15",
+    "valid_end": "2024-10-18",
+    "params": {
+     "lookback": 126,
+     "skip": 21,
+     "enter_pct": 20,
+     "exit_pct": 60
+    },
+    "cagr": -4.52,
+    "mdd": -20.87,
+    "trades": 34,
+    "bench_cagr": 4.86,
+    "excess": -9.38
+   },
+   {
+    "fold": 4,
+    "valid_start": "2024-10-21",
+    "valid_end": "2025-09-18",
+    "params": {
+     "lookback": 252,
+     "skip": 21,
+     "enter_pct": 20,
+     "exit_pct": 40
+    },
+    "cagr": 10.24,
+    "mdd": -12.82,
+    "trades": 24,
+    "bench_cagr": 37.68,
+    "excess": -27.44
+   },
+   {
+    "fold": 5,
+    "valid_start": "2025-09-19",
+    "valid_end": "2026-08-25",
+    "params": {
+     "lookback": 252,
+     "skip": 21,
+     "enter_pct": 20,
+     "exit_pct": 60
+    },
+    "cagr": -4.22,
+    "mdd": -29.03,
+    "trades": 25,
+    "bench_cagr": 112.84,
+    "excess": -117.06
+   }
+  ],
+  "elapsed_sec": 177.3
  }
 }
