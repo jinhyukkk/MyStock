@@ -176,8 +176,6 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
     """
     if preset not in strategy.PRESETS:
         raise ValueError(f"알 수 없는 전략: {preset}")
-    fn = strategy.PRESETS[preset]["fn"]
-
     prepared = {}
     for sym, df in price_frames.items():
         if len(df) < 30:
@@ -196,10 +194,38 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
         enriched = clean.copy()
         enriched["atr14"] = indicators.atr(clean["high"], clean["low"], clean["close"])
         prepared[sym] = {
-            "df": enriched, "sig": fn(enriched, params),
+            "df": enriched, "sig": None,  # 시그널은 루프 뒤에서 한 번에 붙인다
             "rate": fx if tickers.get(sym, {}).get("currency") == "USD" else 1.0,
             "cost": _cost_pct(tickers.get(sym, {}), clean, fx),
         }
+
+    # 시그널 계산 — 프리셋이 선언한 종류에 따라 갈린다. 횡단면은 유니버스
+    # 전체를 봐야 랭킹이 나오므로 종목 루프 안에서는 계산할 수 없다.
+    # 정리된 프레임(prepared[*]["df"])을 넘기는 것이 계약의 핵심이다 — 원본
+    # 프레임으로 계산하면 거래정지 행 하나마다 신호가 한 칸씩 밀리고, 그
+    # 오류는 예외 없이 조용히 틀린 자본곡선을 만든다.
+    meta = strategy.PRESETS[preset]
+    if meta["kind"] == strategy.CROSS_SECTIONAL:
+        sig_frames = {s: pr["df"] for s, pr in prepared.items()}
+        eligible = None
+        if membership is not None:
+            # 멤버십이 곧 랭킹 분모 자격이다. 아래 ②의 enter_mat 마스킹은
+            # 그대로 남긴다 — 멱등이고, 시계열 프리셋에는 그게 유일한 방어선이다.
+            eligible = {
+                s: (membership[s].reindex(df.index, fill_value=False)
+                    if s in membership
+                    else pd.Series(False, index=df.index))
+                for s, df in sig_frames.items()}
+        sigs = meta["universe_fn"](sig_frames, params, eligible)
+    else:
+        sigs = {s: meta["fn"](pr["df"], params) for s, pr in prepared.items()}
+    for s in list(prepared):
+        if sigs.get(s) is None:
+            # 신호를 못 만든 종목은 유니버스에서 뺀다 — sig가 None으로 남으면
+            # 아래 배열 준비에서 터진다
+            del prepared[s]
+        else:
+            prepared[s]["sig"] = sigs[s]
 
     # 실제로 돌린 종목(prepared)의 거래일만 합집합으로 모아 달력을 만든다 —
     # price_frames 기준으로 만들면 30봉 미만으로 걸러진 종목의 날짜까지

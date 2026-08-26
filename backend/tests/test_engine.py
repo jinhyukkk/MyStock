@@ -620,7 +620,7 @@ def test_delisted_symbol_exit_reason():
 def tiny_preset(monkeypatch):
     """조합 2개짜리 미니 그리드 — 실제 그리드(15조합)로 돌리면 테스트가 느리다."""
     monkeypatch.setitem(strategy.PRESETS, "tiny", {
-        "label": "미니", "fn": strategy.donchian,
+        "label": "미니", "kind": strategy.TIMESERIES, "fn": strategy.donchian,
         "params": {
             "entry_n": {"default": 20, "min": 5, "max": 200, "label": "진입",
                         "grid": [10, 20]},
@@ -729,3 +729,70 @@ def test_regime_filter_carries_last_value_on_bench_holiday():
     base = engine.run({"S": df}, tickers, "donchian", params,
                       initial_capital_krw=1e7, fx=1400.0)
     assert out["metrics"]["trade_count"] == base["metrics"]["trade_count"]
+
+
+# ── 횡단면 프리셋 통합 ──────────────────────────────────────────────────────
+
+def _xs_universe(n_symbols=10, n_days=400, seed=11):
+    """추세 세기가 종목마다 다른 합성 일봉 — 랭킹이 갈리도록."""
+    rng = np.random.default_rng(seed)
+    idx = pd.bdate_range("2022-01-03", periods=n_days)
+    frames, tickers = {}, {}
+    for k in range(n_symbols):
+        drift = 0.0002 + k * 0.0002
+        close = 10_000 * np.exp(np.cumsum(rng.normal(drift, 0.015, n_days)))
+        spread = np.abs(rng.normal(0, 0.01, n_days)) * close
+        frames[f"X{k:02d}"] = pd.DataFrame(
+            {"open": close, "high": close + spread, "low": close - spread,
+             "close": close, "volume": 1e6}, index=idx)
+        tickers[f"X{k:02d}"] = {"name": f"X{k:02d}", "market": "KR",
+                                "currency": "KRW", "is_etf": 0}
+    return frames, tickers
+
+
+def test_run_supports_a_cross_sectional_preset():
+    """횡단면 프리셋으로도 자본곡선과 거래가 나온다."""
+    frames, tickers = _xs_universe()
+    out = engine.run(frames, tickers, "xs_momentum",
+                     {"lookback": 126, "skip": 21, "enter_pct": 20, "exit_pct": 50},
+                     initial_capital_krw=10_000_000.0, fx=1300.0)
+    assert out["equity_curve"], "자본곡선이 비면 신호가 전혀 안 붙은 것이다"
+    assert out["trades"], "거래 0건 결과는 회귀를 못 잡는다"
+    assert out["metrics"]["cagr"] is not None
+    assert out["universe_size"] == 10
+
+
+def test_cross_sectional_signals_stay_aligned_with_suspended_bars():
+    """거래정지(NaN 행)가 섞여도 신호가 한 칸씩 밀리지 않는다.
+
+    밀리면 예외 없이 틀린 자본곡선이 나오므로, 여기서 잡지 못하면 어디서도
+    잡히지 않는다. NaN 행을 심은 종목의 진입가가 그 종목 실제 시가여야 한다.
+    """
+    frames, tickers = _xs_universe()
+    victim = "X09"  # 모멘텀 1위 — 반드시 매수 후보에 든다
+    f = frames[victim].copy()
+    f.iloc[200:205, :4] = float("nan")  # OHLC만 NaN (거래정지)
+    frames[victim] = f
+    out = engine.run(frames, tickers, "xs_momentum",
+                     {"lookback": 126, "skip": 21, "enter_pct": 30, "exit_pct": 60},
+                     initial_capital_krw=10_000_000.0, fx=1300.0)
+    valid_opens = set(f["open"].dropna().round(4))
+    for t in out["trades"]:
+        if t["symbol"] == victim:
+            assert t["entry_price"] in valid_opens, \
+                "진입가가 그 종목의 실제 시가가 아니면 신호가 밀린 것이다"
+
+
+def test_cross_sectional_membership_restricts_the_ranking_denominator():
+    """멤버십이 랭킹 분모에 반영된다 — 비멤버는 진입하지 않는다."""
+    frames, tickers = _xs_universe()
+    members = {"X00", "X01", "X02", "X03"}
+    membership = {s: pd.Series(s in members, index=df.index)
+                  for s, df in frames.items()}
+    out = engine.run(frames, tickers, "xs_momentum",
+                     {"lookback": 126, "skip": 21, "enter_pct": 30, "exit_pct": 60},
+                     initial_capital_krw=10_000_000.0, fx=1300.0,
+                     membership=membership)
+    traded = {t["symbol"] for t in out["trades"]}
+    assert traded, "멤버 안에서는 거래가 나와야 한다"
+    assert traded <= members, f"비멤버가 진입했다: {traded - members}"
