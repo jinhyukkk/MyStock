@@ -86,9 +86,76 @@ def donchian(df: pd.DataFrame, params: dict) -> pd.DataFrame:
                         index=df.index)
 
 
+TIMESERIES = "timeseries"          # fn(df, params) — 종목 하나로 계산된다
+CROSS_SECTIONAL = "cross_sectional"  # universe_fn(frames, params, eligible)
+
+
+def xs_momentum(frames: dict[str, pd.DataFrame], params: dict,
+                eligible: dict[str, pd.Series] | None = None
+                ) -> dict[str, pd.DataFrame]:
+    """유니버스 내 모멘텀 상대 랭킹 — 상위 enter_pct%에 들면 진입, exit_pct% 밖으로
+    밀리면 청산.
+
+    시계열 모멘텀(abs_momentum)이 "자기 과거보다 오르는가"를 묻는 반면 여기는
+    "지금 유니버스에서 상대적으로 강한가"를 묻는다. 실측에서 시계열 계열이
+    지수 급등 폴드에 -112%p로 뒤처진 이유가 절대 게이트라, 그 게이트를 상대
+    랭킹으로 바꾸는 것이 이 프리셋의 존재 이유다.
+
+    **모멘텀을 공통 달력에서 계산한다.** 종목마다 휴장일 수가 달라 자기
+    인덱스에서 재면 같은 252봉이 서로 다른 실제 기간이 되고, 비교 불가능한
+    값들을 줄 세우게 된다. 결측을 ffill하지 않는 것도 의도다 — 합성 가격으로
+    랭킹하면 거래정지 종목이 살아 있는 것처럼 순위에 남는다.
+
+    eligible={심볼: bool Series}는 그날 랭킹 분모에 넣을 자격이다(유니버스
+    멤버십). 비적격 칸을 NaN으로 지우면 rank(pct=True)의 분모가 자동으로
+    "그날 유효한 종목 수"가 된다. 최하위 순위로 채우면 분모가 부풀어
+    "상위 20%"가 실제로는 상위 30%가 된다.
+    """
+    enter_pct, exit_pct = params["enter_pct"], params["exit_pct"]
+    if enter_pct >= exit_pct:
+        raise ValueError(
+            f"enter_pct({enter_pct})는 exit_pct({exit_pct})보다 작아야 합니다 — "
+            "같거나 뒤집히면 히스테리시스가 없어 경계에서 매일 들락날락하며 "
+            "비용만 먹는다")
+    if not frames:
+        return {}
+
+    # 공통 달력(outer join). 그 종목에 봉이 없는 날은 NaN으로 남아 분모에서 빠진다
+    wide = pd.DataFrame({sym: df["close"] for sym, df in frames.items()}).sort_index()
+    mom = wide.apply(lambda col: momentum(col, params["lookback"], params["skip"]))
+
+    if eligible is not None:
+        elig = pd.DataFrame(
+            {sym: (eligible[sym].reindex(wide.index, fill_value=False)
+                   if sym in eligible
+                   else pd.Series(False, index=wide.index))
+             for sym in wide.columns})
+        mom = mom.where(elig)  # 비적격 = NaN = 분모에서 제외
+
+    # 같은 날 안에서만 줄 세운다 — axis=1이 그 사실을 보장한다
+    rank_pct = mom.rank(axis=1, pct=True, ascending=False)
+    enter = rank_pct <= enter_pct / 100
+    # NaN도 청산이다 — 랭킹을 계산할 수 없게 된 종목(거래정지·폐지 임박)을
+    # 계속 보유할 근거가 없다. 빼면 손절이나 데이터 끝까지 절대 안 팔린다.
+    exit_ = (rank_pct > exit_pct / 100) | rank_pct.isna()
+
+    out = {}
+    for sym, df in frames.items():
+        # 종목 자기 인덱스로 되돌린다 — engine이 이 길이·순서를 전제한다
+        out[sym] = pd.DataFrame(
+            {"enter": enter[sym].reindex(df.index).fillna(False).astype(bool),
+             "exit": exit_[sym].reindex(df.index).fillna(False).astype(bool),
+             # strength는 모멘텀 원값 — 같은 날 안에서 랭킹과 정렬 순서가
+             # 동일하고(단조 변환), 원값이면 다른 프리셋과 비교 가능하다
+             "strength": mom[sym].reindex(df.index).fillna(0.0).astype(float)},
+            index=df.index)
+    return out
+
+
 PRESETS = {
     "abs_momentum": {
         "label": "절대 모멘텀",
+        "kind": TIMESERIES,
         "fn": abs_momentum,
         "params": {
             # grid는 최적화(engine.optimize) 탐색 후보다. 조합 수를 12~15개로
@@ -105,12 +172,32 @@ PRESETS = {
     },
     "donchian": {
         "label": "돈치안 돌파",
+        "kind": TIMESERIES,
         "fn": donchian,
         "params": {
             "entry_n": {"default": 55, "min": 5, "max": 200, "label": "진입 채널(일)",
                         "grid": [20, 40, 55, 80, 120]},
             "exit_n": {"default": 20, "min": 5, "max": 200, "label": "청산 채널(일)",
                        "grid": [10, 20, 40]},
+        },
+    },
+    "xs_momentum": {
+        "label": "횡단면 모멘텀",
+        "kind": CROSS_SECTIONAL,
+        "universe_fn": xs_momentum,
+        "params": {
+            # 조합 12개 — 기존 프리셋과 같은 상한. 워크포워드는 폴드×(조합+1)회
+            # run()을 돌리므로 조합이 늘면 실행시간과 다중비교 오버피팅이 함께 오른다.
+            "lookback": {"default": 252, "min": 20, "max": 504, "label": "룩백(일)",
+                         "grid": [126, 252]},
+            # skip은 탐색하지 않는다 — 12-1 모멘텀의 표준값이라 이 구간에서
+            # 재탐색할 근거가 약한데, 그리드에 넣으면 조합이 2배가 된다.
+            "skip": {"default": 21, "min": 0, "max": 63, "label": "스킵(일)",
+                     "grid": [21]},
+            "enter_pct": {"default": 20, "min": 1, "max": 50, "label": "진입 상위(%)",
+                          "grid": [10, 20, 30]},
+            "exit_pct": {"default": 50, "min": 5, "max": 100, "label": "청산 상위(%)",
+                         "grid": [40, 60]},
         },
     },
 }

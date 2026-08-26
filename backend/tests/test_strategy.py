@@ -141,3 +141,118 @@ def test_regime_series_defaults_to_the_validated_200_day_window():
     default = strategy.regime_series(_series(closes))
     explicit = strategy.regime_series(_series(closes), ma=200)
     pd.testing.assert_series_equal(default, explicit)
+
+
+# ── 횡단면 모멘텀 ───────────────────────────────────────────────────────────
+# 랭킹 분모가 이 전략의 전부다. 비적격 종목이 분모에 남으면 "상위 20%"가
+# 실제로는 상위 30%가 되고, 그 오류는 예외 없이 조용히 틀린 결과를 만든다.
+
+def _xs_frames(specs: dict[str, list[float]]) -> dict:
+    """{심볼: 종가 리스트} → xs_momentum이 받는 frames. 전부 같은 달력."""
+    return {sym: _frame(closes) for sym, closes in specs.items()}
+
+
+def _rising(start: float, n: int = 30, step: float = 1.0) -> list[float]:
+    return [start + i * step for i in range(n)]
+
+
+def test_xs_momentum_enters_only_the_top_slice_of_the_universe():
+    """모멘텀 상위 enter_pct%만 진입. 10종목·상위 20% → 정확히 2종목."""
+    # step이 클수록 모멘텀이 크다 — 종목 순위를 결정적으로 만든다
+    frames = _xs_frames({f"S{i:02d}": _rising(100, 30, 0.5 + i) for i in range(10)})
+    sig = strategy.xs_momentum(
+        frames, {"lookback": 5, "skip": 1, "enter_pct": 20, "exit_pct": 50})
+    last = {sym: bool(s["enter"].iloc[-1]) for sym, s in sig.items()}
+    assert sum(last.values()) == 2
+    # step이 가장 큰 두 종목이 상위다
+    assert last["S09"] and last["S08"]
+
+
+def test_xs_momentum_drops_ineligible_symbols_from_the_denominator():
+    """비적격 종목은 분모에서 빠진다 — 10종목 중 5개 비적격이면 상위 20%는 1종목.
+
+    분모를 10으로 두면 2종목이 진입해 실제로는 유효 종목의 상위 40%를 산다.
+    """
+    frames = _xs_frames({f"S{i:02d}": _rising(100, 30, 0.5 + i) for i in range(10)})
+    # 강한 쪽 5종목(S05~S09)을 비적격으로 만든다 — 분모가 S00~S04로 줄어든다
+    eligible = {sym: pd.Series(int(sym[1:]) < 5, index=df.index)
+                for sym, df in frames.items()}
+    sig = strategy.xs_momentum(
+        frames, {"lookback": 5, "skip": 1, "enter_pct": 20, "exit_pct": 50},
+        eligible)
+    last = {sym: bool(s["enter"].iloc[-1]) for sym, s in sig.items()}
+    assert sum(last.values()) == 1, "분모가 5종목이어야 상위 20%가 1종목이다"
+    assert last["S04"], "적격 종목 중 모멘텀 1위"
+    assert not any(v for k, v in last.items() if int(k[1:]) >= 5)
+
+
+def test_xs_momentum_treats_an_unrankable_symbol_as_an_exit():
+    """랭킹을 계산할 수 없는 종목(모멘텀 NaN)은 진입 후보가 아니고 청산 신호다.
+
+    False로 두면 그 종목은 손절이나 데이터 끝까지 절대 안 팔린다.
+    """
+    frames = _xs_frames({"A": _rising(100, 30, 2.0), "B": _rising(100, 30, 1.0)})
+    sig = strategy.xs_momentum(
+        frames, {"lookback": 5, "skip": 1, "enter_pct": 50, "exit_pct": 80})
+    # 앞 6봉은 lookback+skip이 안 차 모멘텀이 NaN이다
+    assert not sig["A"]["enter"].iloc[0]
+    assert bool(sig["A"]["exit"].iloc[0]) is True
+
+
+def test_xs_momentum_requires_hysteresis():
+    """enter_pct >= exit_pct면 경계에서 매일 들락날락해 비용만 먹는다."""
+    frames = _xs_frames({"A": _rising(100), "B": _rising(100, 30, 2.0)})
+    with pytest.raises(ValueError):
+        strategy.xs_momentum(
+            frames, {"lookback": 5, "skip": 1, "enter_pct": 50, "exit_pct": 50})
+
+
+def test_xs_momentum_aligns_signals_to_each_symbols_own_index():
+    """engine이 신호를 종목 인덱스 위치로 색인하므로 길이·순서가 정확히 같아야 한다.
+
+    어긋나면 예외 없이 신호가 한 칸씩 밀린 자본곡선이 나온다.
+    """
+    frames = _xs_frames({"A": _rising(100, 30, 2.0), "B": _rising(100, 30, 1.0)})
+    # B에서 중간 5봉을 빼 달력을 어긋나게 한다(휴장·거래정지 재현)
+    frames["B"] = frames["B"].drop(frames["B"].index[10:15])
+    sig = strategy.xs_momentum(
+        frames, {"lookback": 5, "skip": 1, "enter_pct": 50, "exit_pct": 80})
+    for sym, df in frames.items():
+        assert len(sig[sym]) == len(df)
+        pd.testing.assert_index_equal(sig[sym].index, df.index)
+        assert sig[sym]["enter"].dtype == bool
+        assert sig[sym]["exit"].dtype == bool
+
+
+def test_xs_momentum_has_no_lookahead():
+    """뒤쪽 데이터를 잘라내도 마지막 남은 날의 신호가 같아야 한다."""
+    frames = _xs_frames({f"S{i}": _rising(100, 40, 0.5 + i) for i in range(6)})
+    params = {"lookback": 5, "skip": 1, "enter_pct": 30, "exit_pct": 60}
+    full = strategy.xs_momentum(frames, params)
+    cut_at = frames["S0"].index[25]
+    truncated = strategy.xs_momentum(
+        {s: df[df.index <= cut_at] for s, df in frames.items()}, params)
+    for sym in frames:
+        assert bool(full[sym]["enter"].at[cut_at]) == \
+               bool(truncated[sym]["enter"].at[cut_at])
+        assert bool(full[sym]["exit"].at[cut_at]) == \
+               bool(truncated[sym]["exit"].at[cut_at])
+
+
+def test_all_presets_declare_their_kind():
+    """태그를 기본값에 의존하면 새 프리셋에서 빼먹은 것이 조용히 지나간다."""
+    for key, meta in strategy.PRESETS.items():
+        assert meta["kind"] in (strategy.TIMESERIES, strategy.CROSS_SECTIONAL), key
+        if meta["kind"] == strategy.CROSS_SECTIONAL:
+            assert callable(meta["universe_fn"]) and "fn" not in meta
+        else:
+            assert callable(meta["fn"]) and "universe_fn" not in meta
+
+
+def test_xs_momentum_grid_never_violates_hysteresis():
+    """그리드가 만드는 모든 조합이 enter_pct < exit_pct를 만족해야 한다."""
+    import itertools
+    grids = {k: v["grid"] for k, v in strategy.PRESETS["xs_momentum"]["params"].items()}
+    for combo in itertools.product(*grids.values()):
+        p = dict(zip(grids.keys(), combo))
+        assert p["enter_pct"] < p["exit_pct"], p

@@ -535,7 +535,7 @@ def test_strategy_presets_lists_both_strategies(client):
     r = client.get("/api/strategy/presets")
     assert r.status_code == 200
     body = r.json()
-    assert {p["key"] for p in body} == {"abs_momentum", "donchian"}
+    assert {p["key"] for p in body} == {"abs_momentum", "donchian", "xs_momentum"}
     mom = next(p for p in body if p["key"] == "abs_momentum")
     assert mom["label"] == "절대 모멘텀"
     assert mom["params"]["lookback"]["default"] == 252
