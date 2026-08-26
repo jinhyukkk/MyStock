@@ -84,9 +84,11 @@ export default function Autotrade() {
           </span>
         </div>
         <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 4 }}>
-          전략 연구실에서 검증한 규칙 그대로 오늘의 주문을 만듭니다(국내 종목만).
-          장 시작 전에 계획을 확인하고 실행하세요. 진입은 시장가, 손절은 진입가
-          −2×ATR, 사이징은 1% 룰, 신규 진입은 KOSPI가 200일선 위일 때만입니다.
+          전략 연구실과 같은 진입·청산·사이징 규칙으로 오늘의 주문을 만듭니다
+          (국내 종목만). 장 시작 전에 계획을 확인하고 실행하세요. 진입은 시장가,
+          손절은 진입가 −2×ATR, 사이징은 1% 룰, 신규 진입은 KOSPI가 200일선 위일
+          때만입니다. 이 레짐 게이트는 자동매매와 워크포워드(레짐 ON)에만 걸립니다
+          — 연구실의 백테스트·최적화 표는 레짐 없이 계산되므로 수치가 다릅니다.
           수익을 보장하지 않습니다.
         </div>
         {!status.configured && (
@@ -129,7 +131,8 @@ export default function Autotrade() {
             {busy === 'save' ? '저장 중…' : '설정 저장'}</button>
         </div>
         <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
-          파라미터는 전략 연구실의 최적화에서 검증 성과가 좋았던 조합을 쓰세요.
+          최적화 표는 레짐 필터 없이 계산됩니다 — 파라미터는 전략 연구실의
+          워크포워드(레짐 ON)로 확인한 조합을 쓰세요.
         </div>
         {!regimeFilter && (
           <div className="warn" style={{ marginTop: 6, fontSize: 12 }}>
@@ -161,7 +164,7 @@ export default function Autotrade() {
               {Object.entries(plan.params).map(([k, v]) => `${k}=${v}`).join(' ')}
             </div>
             <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 2 }}>
-              스캔 {plan.universe.size}종목(관심종목) · 레짐{' '}
+              스캔 {plan.universe.size}종목(등록된 보유·관심 종목) · 레짐{' '}
               {!plan.regime.enabled ? 'OFF'
                 : plan.regime.ok === null ? <span className="neg">판정 불가 — 신규 진입 차단</span>
                 : plan.regime.ok
