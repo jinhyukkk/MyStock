@@ -29,9 +29,12 @@ REGIME_DAYS = 400  # 200일선을 채우고도 남을 이력
 # 계좌 평단과 이보다 더 벌어지면 진입가를 보정한다. 0으로 두면 부동소수 오차마다
 # 보정 경고가 뜨고, 크게 두면 손절선이 그만큼 어긋난 채로 남는다.
 FILL_TOLERANCE = 0.001
+# _signals는 db.list_tickers(watchlist_only 아님)를 돌아 등록된 KR 종목 전체를
+# 스캔한다 — 보유 종목도 포함된다. "관심종목"이라 쓰면 고지가 실제 모집단보다
+# 좁아진다. universe.kind 값 "watchlist"는 API 계약이라 그대로 둔다.
 UNIVERSE_MISMATCH = (
-    "신호 스캔 대상은 관심종목 {n}개입니다. 검증(krx300, 폐지 포함 964종목)과 "
-    "다른 모집단이며, 백테스트 성과의 큰 몫이 이 차이에서 나왔습니다.")
+    "신호 스캔 대상은 등록된 보유·관심 종목 {n}개입니다. 검증(krx300, 폐지 포함 "
+    "964종목)과 다른 모집단이며, 백테스트 성과의 큰 몫이 이 차이에서 나왔습니다.")
 REGIME_OFF_WARNING = (
     "레짐 필터 OFF — 이 구성은 krx300 워크포워드에서 5폴드 전패"
     "(초과수익 중앙값 -16.3%p)했습니다.")
@@ -90,7 +93,9 @@ def regime(conn, as_of: str | None) -> dict:
     if bench.empty or len(bench) < strategy.REGIME_MA:
         return out
     reg = strategy.regime_series(bench["close"])
-    ma = bench["close"].rolling(strategy.REGIME_MA).mean()
+    # 표시값 MA도 strategy의 식을 쓴다 — 여기서 따로 rolling을 돌리면 화면 숫자와
+    # 판정이 다른 창을 볼 수 있다(F6)
+    ma = strategy.regime_ma_series(bench["close"])
     idx = reg.index
     if as_of is not None:
         # 지수 휴장일은 직전 값을 이어받는다(engine의 ffill과 같은 규칙)
@@ -99,13 +104,22 @@ def regime(conn, as_of: str | None) -> dict:
             return out
         idx = usable
     day = idx[-1]
+    close_v, ma_v = float(bench["close"].at[day]), float(ma.at[day])
+    if close_v != close_v or ma_v != ma_v:  # NaN 가드
+        # 이력 총량은 200봉을 넘어도 as_of 기준으로는 창이 안 찰 수 있다(신호일이
+        # 지수 이력의 앞쪽일 때). NaN을 응답에 실으면 FastAPI 기본 인코더가 JSON에
+        # NaN 리터럴을 내보내 브라우저 JSON.parse가 실패하고, 그러면 오늘의 손절
+        # 매도 주문까지 화면에서 사라진다. 실제 상태는 "판정 불가"다.
+        out["as_of"] = day.strftime("%Y-%m-%d")
+        return out
     return {"ma": strategy.REGIME_MA, "ok": bool(reg.at[day]),
-            "bench_close": round(float(bench["close"].at[day]), 2),
-            "bench_ma": round(float(ma.at[day]), 2),
+            "bench_close": round(close_v, 2),
+            "bench_ma": round(ma_v, 2),
             "as_of": day.strftime("%Y-%m-%d")}
 
 
-def _reconcile_fills(conn, auto_pos: dict, kis_held: dict) -> list[str]:
+def _reconcile_fills(conn, auto_pos: dict, kis_held: dict,
+                     mode: str) -> list[str]:
     """진입가를 계좌 평단(실체결)으로 한 번 보정한다. 경고 문구 목록을 돌려준다.
 
     entry_price는 주문 시점엔 직전 종가 근사다 — 실제 체결은 시가라 몇 %
@@ -116,6 +130,11 @@ def _reconcile_fills(conn, auto_pos: dict, kis_held: dict) -> list[str]:
 
     auto_pos는 제자리에서 갱신한다 — 호출부의 청산 판정이 보정된 손절선을
     봐야 백테스트와 같은 손절이 된다.
+
+    평단 출처(client.balance())는 mode에 따라 다른 계좌다. 진입 시점 모드와
+    다르면 보정하지 않는다 — 같은 종목을 모의·실전 양쪽에서 들고 있을 때
+    모드를 바꿔 plan()을 한 번 부르면 다른 계좌 평단으로 손절선이 영구히
+    덮이고 fill_synced=1이 서서 되돌릴 수도 없다.
     """
     notes = []
     for sym, p in auto_pos.items():
@@ -127,6 +146,14 @@ def _reconcile_fills(conn, auto_pos: dict, kis_held: dict) -> list[str]:
         if avg <= 0 or old_entry <= 0:
             continue
         if abs(avg - old_entry) / old_entry <= FILL_TOLERANCE:
+            continue
+        if p.get("mode") != mode:
+            # NULL(마이그레이션 이전 행)도 여기로 온다 — 진입 계좌를 모르면
+            # 보정하지 않는 쪽이 손절선을 지킨다
+            notes.append(
+                f"{sym}: 진입 시점 계좌({p.get('mode') or '알 수 없음'})가 현재 "
+                f"모드({mode})와 달라 진입가 보정을 건너뜁니다. 다른 계좌의 평단으로 "
+                "손절선을 옮기면 되돌릴 수 없습니다.")
             continue
         new_stop = avg - (old_entry - float(p["stop"]))
         db.sync_auto_fill(conn, sym, avg, new_stop)
@@ -155,6 +182,8 @@ def _signals(conn, cfg: dict) -> dict:
         if len(clean) < 30:
             continue
         enriched = indicators.compute_indicators(clean)
+        # 왕복 비용(비율) — engine과 같은 함수. 현금 게이트에서 진입 편도분을 쓴다
+        cost = engine.cost_pct(t, clean, 1.0)
         sig = fn(enriched, cfg["params"])
         last = enriched.index[-1]
         atr = enriched["atr14"].iloc[-1]
@@ -164,6 +193,7 @@ def _signals(conn, cfg: dict) -> dict:
             "close": float(enriched["close"].iloc[-1]),
             "low": float(enriched["low"].iloc[-1]),
             "atr": None if atr != atr else float(atr),  # NaN 가드
+            "cost_pct": cost,
             "enter": bool(sig["enter"].iloc[-1]),
             "exit": bool(sig["exit"].iloc[-1]),
             "strength": float(sig["strength"].iloc[-1]),
@@ -200,7 +230,7 @@ def plan(conn, balance: dict) -> dict:
 
     # ⓪ 진입가 보정을 청산 판정보다 **먼저** — 보정된 손절선으로 low<=stop을
     # 봐야 백테스트와 같은 손절이 된다. 뒤에 두면 이 손절이 하루 늦게 나간다.
-    warnings.extend(_reconcile_fills(conn, auto_pos, kis_held))
+    warnings.extend(_reconcile_fills(conn, auto_pos, kis_held, kis.mode()))
 
     # ① 청산 먼저 — 백테스트와 같은 순서. 자리가 비어야 신규 진입이 들어간다
     for sym, p in list(auto_pos.items()):
@@ -264,14 +294,18 @@ def plan(conn, balance: dict) -> dict:
         if qty <= 0:
             continue
         notional = s["close"] * qty
-        if notional + committed > cash:
+        # 진입 편도 비용까지 예수금 안에서 감당돼야 한다. 비용을 빼고 재면
+        # 예수금을 거의 다 쓰는 주문에서 수수료만큼 미수가 난다
+        # (engine ②의 `notional + entry_cost > equity - committed`와 같은 규칙).
+        entry_cost = notional * s["cost_pct"] / 2
+        if notional + entry_cost + committed > cash:
             continue  # 현금 계좌 — 예수금을 넘는 매수는 미수가 된다
         add_risk = (s["close"] - stop) * qty
         if equity > 0 and \
                 (open_risk + add_risk) / equity * 100 > engine.MAX_ACCOUNT_RISK_PCT:
             continue
         open_risk += add_risk
-        committed += notional
+        committed += notional + entry_cost
         slots -= 1
         orders.append({"symbol": sym, "name": s["name"], "side": "BUY",
                        "qty": int(qty), "reason": "enter",
@@ -302,7 +336,8 @@ def execute(conn, client) -> dict:
                 # ponytail: 체결가 확정 조회(주문체결내역 TR)는 다음 단계, 손절선이
                 # 수 % 어긋나는 수준이라 v1에서는 근사로 둔다.
                 db.upsert_auto_position(conn, o["symbol"], o["qty"],
-                                        o["price_ref"], o["stop"], p["date"])
+                                        o["price_ref"], o["stop"], p["date"],
+                                        mode=p["mode"])
             else:
                 db.delete_auto_position(conn, o["symbol"])
         except kis.KisError as e:

@@ -91,7 +91,12 @@ CREATE TABLE IF NOT EXISTS auto_positions (
   entry_date TEXT NOT NULL,
   -- 실체결 평단으로 한 번 보정했는지. 재보정을 막는다 — 부분매도·추가매수 이후의
   -- 평단은 더 이상 진입 체결가가 아니라서, 그걸로 손절선을 옮기면 규칙이 흐트러진다.
-  fill_synced INTEGER NOT NULL DEFAULT 0
+  fill_synced INTEGER NOT NULL DEFAULT 0,
+  -- 진입 시점의 KIS 계좌(paper|live). 평단 출처인 잔고 조회가 모드마다 다른
+  -- 계좌라서, 이 값이 현재 모드와 다르면 보정을 건너뛴다 — 안 그러면 모드를
+  -- 바꿔 plan()을 한 번 부르는 것만으로 손절선이 다른 계좌 평단으로 덮인다.
+  -- NULL은 "알 수 없음"(마이그레이션 이전 행)이며 역시 보정 대상이 아니다.
+  mode TEXT
 );
 -- 자동매매 주문 원장. 계획(planned)→발송(sent)/실패(failed)가 전부 남아야
 -- "왜 샀는지/왜 안 샀는지"를 나중에 복기할 수 있다.

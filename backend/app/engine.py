@@ -133,8 +133,9 @@ def metrics(equity: list[float], trades: list[dict]) -> dict:
     }
 
 
-def _cost_pct(t: dict, df: pd.DataFrame, fx: float) -> float:
-    """이 종목의 **왕복** 비용(비율). 진입 노셔널(entry * qty * rate)에 곱해
+def cost_pct(t: dict, df: pd.DataFrame, fx: float) -> float:
+    """이 종목의 **왕복** 비용(비율). autotrade의 현금 게이트도 이것을 쓴다 —
+    비용 식이 두 곳에 있으면 검증과 실행의 게이트가 조용히 갈린다. 진입 노셔널(entry * qty * rate)에 곱해
     총 비용을 내고, 엔진이 그것을 진입분/청산분 절반씩으로 갈라 각 시점에
     차감한다(스펙 "진입·청산 각각 차감").
 
@@ -196,7 +197,7 @@ def run(price_frames: dict, tickers: dict, preset: str, params: dict, *,
         prepared[sym] = {
             "df": enriched, "sig": None,  # 시그널은 루프 뒤에서 한 번에 붙인다
             "rate": fx if tickers.get(sym, {}).get("currency") == "USD" else 1.0,
-            "cost": _cost_pct(tickers.get(sym, {}), clean, fx),
+            "cost": cost_pct(tickers.get(sym, {}), clean, fx),
         }
 
     # 시그널 계산 — 프리셋이 선언한 종류에 따라 갈린다. 횡단면은 유니버스

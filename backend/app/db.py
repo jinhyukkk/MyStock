@@ -23,10 +23,22 @@ def get_conn(db_path: str | None = None) -> sqlite3.Connection:
                       ("exclude_from_stats", "INTEGER NOT NULL DEFAULT 0")):
         if col not in cols:
             conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {decl}")
-    if "fill_synced" not in [r[1] for r in
-                             conn.execute("PRAGMA table_info(auto_positions)")]:
+    auto_cols = [r[1] for r in conn.execute("PRAGMA table_info(auto_positions)")]
+    if "fill_synced" not in auto_cols:
         conn.execute("ALTER TABLE auto_positions ADD COLUMN "
                      "fill_synced INTEGER NOT NULL DEFAULT 0")
+        # 컬럼을 **막 추가한 경우에만** 기존 행을 보정 완료로 잠근다.
+        # 이 기능 전에 열린 포지션의 계좌 평단은 수동 추가매수·부분매도가 섞인
+        # 값일 수 있어 진입 체결가가 아니다 — 그걸로 손절선을 옮기면 손절 폭은
+        # 보존되지만 손절 '위치'가 근거 없이 이동해 손절 시점이 달라진다.
+        # 조건 밖에서 매번 돌리면 이후 정상 포지션의 보정 대기 상태까지 지운다.
+        conn.execute("UPDATE auto_positions SET fill_synced=1")
+    if "mode" not in auto_cols:
+        # 평단 출처인 KIS 잔고는 모의/실전이 서로 다른 계좌다. 진입 시점 모드를
+        # 남기지 않으면 모드를 바꿔 plan()을 한 번 부르는 것만으로 다른 계좌의
+        # 평단이 entry_price·stop을 덮고 fill_synced=1이 서서 되돌려지지 않는다.
+        # 기존 행은 NULL — "알 수 없음"이라 보정 대상에서 제외된다.
+        conn.execute("ALTER TABLE auto_positions ADD COLUMN mode TEXT")
     if "ext_key" not in [r[1] for r in conn.execute("PRAGMA table_info(cash_flows)")]:
         conn.execute("ALTER TABLE cash_flows ADD COLUMN ext_key TEXT")
     # ALTER는 UNIQUE를 못 붙이므로 인덱스로 건다. schema.sql이 아니라 여기서 만드는 건
@@ -272,13 +284,19 @@ def get_meta(conn, key):
 
 # ── 자동매매 ─────────────────────────────────────────────────────────────────
 
-def upsert_auto_position(conn, symbol, qty, entry_price, stop, entry_date):
+def upsert_auto_position(conn, symbol, qty, entry_price, stop, entry_date,
+                        mode=None):
+    """mode는 진입 시점의 KIS 계좌(paper/live).
+
+    평단 보정이 다른 계좌의 잔고를 읽지 않게 하려면 진입한 계좌를 알아야 한다.
+    kis를 여기서 import하지 않는 이유 — kis가 db를 import한다(순환).
+    """
     conn.execute(
-        "INSERT INTO auto_positions (symbol, qty, entry_price, stop, entry_date) "
-        "VALUES (?,?,?,?,?) ON CONFLICT(symbol) DO UPDATE SET "
+        "INSERT INTO auto_positions (symbol, qty, entry_price, stop, entry_date, mode) "
+        "VALUES (?,?,?,?,?,?) ON CONFLICT(symbol) DO UPDATE SET "
         "qty=excluded.qty, entry_price=excluded.entry_price, "
-        "stop=excluded.stop, entry_date=excluded.entry_date",
-        (symbol, qty, entry_price, stop, entry_date))
+        "stop=excluded.stop, entry_date=excluded.entry_date, mode=excluded.mode",
+        (symbol, qty, entry_price, stop, entry_date, mode))
     conn.commit()
 
 

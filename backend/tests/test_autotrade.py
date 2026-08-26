@@ -32,8 +32,11 @@ def _seed_bench(conn, ohlcv):
     db.save_prices(conn, autotrade.BENCH_SYMBOL, ohlcv)
 
 
-def _balance(cash=10_000_000.0, holdings=()):
-    return {"cash_krw": cash, "total_eval_krw": cash, "holdings": list(holdings)}
+def _balance(cash=10_000_000.0, holdings=(), equity=None):
+    """equity를 따로 주면 사이징 기준(총평가)과 예수금을 분리할 수 있다 —
+    현금 게이트만 좁혀 보려면 수량이 그대로여야 한다."""
+    return {"cash_krw": cash, "holdings": list(holdings),
+            "total_eval_krw": cash if equity is None else equity}
 
 
 def test_plan_buys_on_enter_signal(conn, ohlcv_up):
@@ -252,7 +255,8 @@ def test_plan_always_discloses_the_universe_mismatch(conn, ohlcv_up):
 def test_plan_reconciles_entry_price_from_the_account_average(conn, ohlcv_up):
     """계좌 평단과 다르면 진입가를 평단으로 고치고 손절폭을 유지한 채 손절선을 옮긴다."""
     _seed(conn, ohlcv_up)
-    db.upsert_auto_position(conn, "005930", 10, 100.0, 90.0, "2026-01-05")
+    db.upsert_auto_position(conn, "005930", 10, 100.0, 90.0, "2026-01-05",
+                            mode=kis.mode())
     held = [{"symbol": "005930", "name": "삼성전자", "qty": 10, "avg_price": 104.0}]
     p = autotrade.plan(conn, _balance(holdings=held))
     pos = [dict(r) for r in db.list_auto_positions(conn)][0]
@@ -266,7 +270,8 @@ def test_plan_reconciles_entry_price_from_the_account_average(conn, ohlcv_up):
 def test_plan_reconciles_the_fill_only_once(conn, ohlcv_up):
     """부분매도·추가매수로 평단이 움직여도 재보정하지 않는다 — 그 평단은 진입 체결가가 아니다."""
     _seed(conn, ohlcv_up)
-    db.upsert_auto_position(conn, "005930", 10, 100.0, 90.0, "2026-01-05")
+    db.upsert_auto_position(conn, "005930", 10, 100.0, 90.0, "2026-01-05",
+                            mode=kis.mode())
     held = [{"symbol": "005930", "name": "삼성전자", "qty": 10, "avg_price": 104.0}]
     autotrade.plan(conn, _balance(holdings=held))
     held[0]["avg_price"] = 130.0
@@ -296,7 +301,7 @@ def test_stop_judgement_uses_the_reconciled_stop(conn, ohlcv_up):
     _seed(conn, ohlcv_up)
     last_low = float(ohlcv_up["low"].iloc[-1])
     db.upsert_auto_position(conn, "005930", 10, last_low * 0.5,
-                            last_low * 0.4, "2026-01-05")
+                            last_low * 0.4, "2026-01-05", mode=kis.mode())
     # 평단을 크게 올리면 손절폭(0.1×low)이 그대로 따라 올라가 저가를 넘어선다
     held = [{"symbol": "005930", "name": "삼성전자", "qty": 10,
              "avg_price": last_low * 1.2}]
@@ -319,3 +324,93 @@ def test_settings_falls_back_when_the_saved_preset_is_cross_sectional(conn):
     cfg = autotrade.settings(conn)
     assert cfg["preset"] == "abs_momentum"
     assert cfg["params"]["lookback"] == 252
+
+
+# ── 모의/실전 계좌 구분 ─────────────────────────────────────────────────────
+# 평단 출처인 KIS 잔고는 모드마다 다른 계좌다. 진입 시점 모드를 확인하지 않으면
+# 모드를 바꿔 plan()을 한 번 부르는 것만으로 다른 계좌 평단이 손절선을 영구히
+# 덮는다(fill_synced=1이 서서 되돌려지지도 않는다).
+
+def test_execute_records_the_account_mode_it_entered_in(conn, ohlcv_up):
+    _seed(conn, ohlcv_up)
+    autotrade.execute(conn, FakeClient(_balance()))
+    pos = [dict(r) for r in db.list_auto_positions(conn)][0]
+    assert pos["mode"] == kis.mode()
+
+
+def test_plan_skips_reconciliation_when_the_position_was_opened_in_another_mode(
+        conn, ohlcv_up, monkeypatch):
+    """다른 계좌에서 열린 포지션은 보정하지 않는다 — 손절선이 영구 변조된다."""
+    _seed(conn, ohlcv_up)
+    db.upsert_auto_position(conn, "005930", 10, 100.0, 90.0, "2026-01-05",
+                            mode="paper")
+    monkeypatch.setenv("KIS_MODE", "live")
+    held = [{"symbol": "005930", "name": "삼성전자", "qty": 10, "avg_price": 104.0}]
+    p = autotrade.plan(conn, _balance(holdings=held))
+    pos = [dict(r) for r in db.list_auto_positions(conn)][0]
+    assert pos["entry_price"] == pytest.approx(100.0)
+    assert pos["stop"] == pytest.approx(90.0)
+    assert pos["fill_synced"] == 0, "잠기면 올바른 모드로 돌아와도 보정이 안 된다"
+    assert any("모드" in w and "005930" in w for w in p["warnings"])
+
+
+def test_plan_skips_reconciliation_when_the_entry_mode_is_unknown(conn, ohlcv_up):
+    """mode가 NULL인 기존 행은 '알 수 없음'으로 보고 보정을 건너뛴다."""
+    _seed(conn, ohlcv_up)
+    db.upsert_auto_position(conn, "005930", 10, 100.0, 90.0, "2026-01-05")
+    held = [{"symbol": "005930", "name": "삼성전자", "qty": 10, "avg_price": 104.0}]
+    p = autotrade.plan(conn, _balance(holdings=held))
+    pos = [dict(r) for r in db.list_auto_positions(conn)][0]
+    assert pos["entry_price"] == pytest.approx(100.0)
+    assert any("005930" in w for w in p["warnings"])
+
+
+# ── 레짐 판정 불가 ─────────────────────────────────────────────────────────
+
+def test_regime_is_undecided_when_the_window_is_unfilled_at_as_of(conn, ohlcv_up):
+    """벤치 이력이 200봉을 넘어도 as_of 시점에 창이 안 차면 판정 불가다.
+
+    NaN을 응답에 실으면 FastAPI가 JSON에 NaN 리터럴을 내보내 브라우저
+    JSON.parse가 실패한다 — 그러면 오늘의 손절 매도 주문까지 화면에서 안 보인다.
+    """
+    _seed(conn, ohlcv_up)
+    early = ohlcv_up.index[150].strftime("%Y-%m-%d")
+    r = autotrade.regime(conn, early)
+    assert r["ok"] is None
+    assert r["bench_ma"] is None and r["bench_close"] is None
+
+
+def test_regime_response_carries_no_nan(conn, ohlcv_up):
+    """직렬화가 깨지지 않아야 한다 — json.dumps(allow_nan=False)로 확인."""
+    import json as _json
+    _seed(conn, ohlcv_up)
+    r = autotrade.regime(conn, ohlcv_up.index[150].strftime("%Y-%m-%d"))
+    _json.dumps(r, allow_nan=False)
+
+
+def test_plan_blocks_entries_when_the_regime_window_is_unfilled(conn, ohlcv_up):
+    """판정 불가면 신규 진입을 막는다 — 근거 없이 사는 쪽이 더 위험하다."""
+    _seed(conn, ohlcv_up)
+    # 종목 시세만 앞쪽으로 잘라 as_of를 200봉 미만 지점으로 만든다
+    db.save_prices(conn, autotrade.BENCH_SYMBOL, ohlcv_up)
+    db.save_prices(conn, "005930", ohlcv_up.iloc[:150])
+    conn.execute("DELETE FROM price_cache WHERE symbol=? AND date>?",
+                 ("005930", ohlcv_up.index[149].strftime("%Y-%m-%d")))
+    conn.commit()
+    p = autotrade.plan(conn, _balance())
+    assert p["regime"]["ok"] is None
+    assert [o for o in p["orders"] if o["side"] == "BUY"] == []
+
+
+# ── 현금 게이트에 진입 비용 포함 ─────────────────────────────────────────────
+
+def test_cash_gate_includes_the_entry_side_cost(conn, ohlcv_up):
+    """예수금이 노셔널과 정확히 같으면 수수료만큼 미수가 난다 — engine과 같은 게이트."""
+    _seed(conn, ohlcv_up)
+    o = [x for x in autotrade.plan(conn, _balance())["orders"]
+         if x["side"] == "BUY"][0]
+    notional = o["price_ref"] * o["qty"]
+    tight = autotrade.plan(conn, _balance(cash=notional, equity=10_000_000.0))
+    assert [x for x in tight["orders"] if x["side"] == "BUY"] == []
+    loose = autotrade.plan(conn, _balance(cash=notional * 1.02, equity=10_000_000.0))
+    assert len([x for x in loose["orders"] if x["side"] == "BUY"]) == 1

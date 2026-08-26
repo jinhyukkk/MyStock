@@ -24,6 +24,15 @@ def momentum(close: pd.Series, lookback: int, skip: int) -> pd.Series:
 REGIME_MA = 200  # 시장 레짐 판정 이동평균 — 워크포워드에서 검증한 창
 
 
+def regime_ma_series(bench_close: pd.Series, ma: int = REGIME_MA) -> pd.Series:
+    """레짐 판정에 쓰는 이동평균 그 자체 — 화면 표시값과 판정을 한 식에 묶는다.
+
+    호출부가 자기 rolling()을 따로 돌리면 창 하나만 어긋나도 "지수 X가 200일선
+    Y 아래"라는 문구와 실제 진입 차단 판정이 다른 근거를 쓰게 된다.
+    """
+    return bench_close.rolling(ma).mean()
+
+
 def regime_series(bench_close: pd.Series, ma: int = REGIME_MA) -> pd.Series:
     """벤치마크가 이동평균 위인 날만 True — 신규 진입을 허용하는 날.
 
@@ -35,7 +44,7 @@ def regime_series(bench_close: pd.Series, ma: int = REGIME_MA) -> pd.Series:
     판단 근거가 없을 때 막는 쪽이 보수적이다. bool로 확정해 돌려주는 이유는
     engine이 NaN을 참으로 읽을 여지를 남기지 않기 위해서다.
     """
-    return (bench_close > bench_close.rolling(ma).mean()).fillna(False).astype(bool)
+    return (bench_close > regime_ma_series(bench_close, ma)).fillna(False).astype(bool)
 
 
 def abs_momentum(df: pd.DataFrame, params: dict) -> pd.DataFrame:

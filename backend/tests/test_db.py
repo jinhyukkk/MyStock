@@ -77,3 +77,47 @@ def test_meta(conn):
     assert db.get_meta(conn, "last_refresh") is None
     db.set_meta(conn, "last_refresh", "2026-08-05T09:00:00")
     assert db.get_meta(conn, "last_refresh") == "2026-08-05T09:00:00"
+
+# ── auto_positions 마이그레이션 ─────────────────────────────────────────────
+# 업그레이드 전에 열린 포지션의 계좌 평단은 수동 추가매수·부분매도가 섞인 값일
+# 수 있다. 그걸 "실체결 평단"으로 보고 손절선을 옮기면 손절 위치가 근거 없이
+# 이동한다 — 이 기능 이전의 진입은 검증할 방법이 없으므로 잠근 채로 둔다.
+
+def _legacy_auto_positions_db(path):
+    """fill_synced·mode가 없던 시절의 auto_positions를 가진 DB를 만든다."""
+    import sqlite3
+    c = sqlite3.connect(path)
+    c.execute("""CREATE TABLE auto_positions (
+                   symbol TEXT PRIMARY KEY, qty REAL NOT NULL,
+                   entry_price REAL NOT NULL, stop REAL NOT NULL,
+                   entry_date TEXT NOT NULL)""")
+    c.execute("INSERT INTO auto_positions VALUES ('005930',10,100.0,90.0,'2026-01-05')")
+    c.commit()
+    c.close()
+
+
+def test_migration_locks_pre_existing_auto_positions(tmp_path):
+    path = str(tmp_path / "legacy.db")
+    _legacy_auto_positions_db(path)
+    conn = db.get_conn(path)
+    row = dict(db.list_auto_positions(conn)[0])
+    assert row["fill_synced"] == 1, "기존 행을 보정 대기로 두면 첫 plan()이 손절선을 옮긴다"
+    assert row["mode"] is None, "진입 계좌를 알 수 없다 — NULL이 그 사실이다"
+    assert row["entry_price"] == 100.0 and row["stop"] == 90.0
+    conn.close()
+
+
+def test_migration_does_not_relock_positions_on_later_opens(tmp_path):
+    """컬럼이 이미 있으면 UPDATE를 돌리지 않는다 — 정상 포지션의 보정 대기가 지워진다."""
+    path = str(tmp_path / "legacy.db")
+    _legacy_auto_positions_db(path)
+    db.get_conn(path).close()
+    conn = db.get_conn(path)
+    db.upsert_auto_position(conn, "000660", 5, 200.0, 180.0, "2026-02-01",
+                            mode="paper")
+    conn.close()
+    conn = db.get_conn(path)  # 서버 재시작 — 마이그레이션이 다시 돈다
+    rows = {r["symbol"]: dict(r) for r in db.list_auto_positions(conn)}
+    assert rows["000660"]["fill_synced"] == 0
+    assert rows["000660"]["mode"] == "paper"
+    conn.close()
