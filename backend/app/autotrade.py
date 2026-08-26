@@ -40,8 +40,12 @@ REGIME_OFF_WARNING = (
 def settings(conn) -> dict:
     """자동매매가 실행할 전략·파라미터 — 화면에서 저장, meta에 보관."""
     preset = db.get_meta(conn, "autotrade_preset") or "abs_momentum"
-    if preset not in strategy.PRESETS:
-        preset = "abs_momentum"  # 프리셋이 삭제·개명돼도 자동매매가 죽으면 안 된다
+    # 프리셋이 삭제·개명돼도, 횡단면 프리셋이 저장돼 있어도 자동매매가 죽으면 안 된다.
+    # 횡단면은 _signals가 쓰는 fn이 없고, 애초에 관심종목 모집단에서는 상대
+    # 랭킹의 의미가 달라져 실행 대상이 아니다.
+    if preset not in strategy.PRESETS or \
+            strategy.PRESETS[preset]["kind"] != strategy.TIMESERIES:
+        preset = "abs_momentum"
     defaults = {k: v["default"]
                 for k, v in strategy.PRESETS[preset]["params"].items()}
     try:
@@ -60,6 +64,12 @@ def save_settings(conn, preset: str, params: dict,
                   regime_filter: bool = True) -> None:
     if preset not in strategy.PRESETS:
         raise ValueError(f"알 수 없는 전략: {preset}")
+    if strategy.PRESETS[preset]["kind"] != strategy.TIMESERIES:
+        # 상대 랭킹은 모집단이 바뀌면 다른 지표다 — 관심종목 18종목 사이의
+        # 상위 20%(3.6종목)를 krx300 검증 결과의 근거로 쓸 수 없다
+        raise ValueError(
+            f"{strategy.PRESETS[preset]['label']}은 유니버스 상대 랭킹 전략이라 "
+            "자동매매에서 실행할 수 없습니다. 전략 연구실에서만 검증하세요.")
     db.set_meta(conn, "autotrade_preset", preset)
     db.set_meta(conn, "autotrade_params", json.dumps(params or {}))
     db.set_meta(conn, "autotrade_regime_filter", "1" if regime_filter else "0")

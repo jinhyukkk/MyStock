@@ -303,3 +303,19 @@ def test_stop_judgement_uses_the_reconciled_stop(conn, ohlcv_up):
     p = autotrade.plan(conn, _balance(holdings=held))
     sells = [o for o in p["orders"] if o["side"] == "SELL"]
     assert len(sells) == 1 and sells[0]["reason"] == "stop"
+
+
+# ── 횡단면 프리셋은 자동매매에서 실행하지 않는다 ─────────────────────────────
+
+def test_save_settings_rejects_a_cross_sectional_preset(conn):
+    """관심종목 사이의 상대 랭킹은 krx300 랭킹과 다른 지표다 — 검증/실행 정합성."""
+    with pytest.raises(ValueError):
+        autotrade.save_settings(conn, "xs_momentum", {})
+
+
+def test_settings_falls_back_when_the_saved_preset_is_cross_sectional(conn):
+    """meta에 횡단면이 남아 있어도(수동 편집·향후 kind 변경) 자동매매가 죽지 않는다."""
+    db.set_meta(conn, "autotrade_preset", "xs_momentum")
+    cfg = autotrade.settings(conn)
+    assert cfg["preset"] == "abs_momentum"
+    assert cfg["params"]["lookback"] == 252
